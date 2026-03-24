@@ -20,8 +20,8 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setup(
-    name='lsdo_project_template',
-    version=get_version('lsdo_project_template/__init__.py'),
+    name='bsm3',
+    version=get_version('bsm3/__init__.py'),
     author='Author name',
     author_email='author@gmail.com',
     license='LGPLv3+',
@@ -45,7 +45,7 @@ setup(
         'astroid==2.15.5',
         'numpydoc',
         'gitpython',
-        'sphinxcontrib-collections @ git+https://github.com/anugrahjo/sphinx-collections.git', # 'sphinx-collections',
+        # 'sphinxcontrib-collections @ git+https://github.com/anugrahjo/sphinx-collections.git', # 'sphinx-collections',
         'sphinxcontrib-bibtex',
         'setuptools',
         'wheel',
