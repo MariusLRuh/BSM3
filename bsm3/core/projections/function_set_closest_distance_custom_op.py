@@ -258,6 +258,7 @@ class FunctionSetProjectionModel:
         degenerate_edge_length_atol: float = 1e-10,
         degenerate_edge_length_rtol: float = 1e-8,
         degenerate_normal_tol: float = 1e-12,
+        debug: bool = False,
     ):
         if patch_indices is None:
             patch_indices = sorted(int(idx) for idx in function_set.functions.keys())
@@ -292,7 +293,7 @@ class FunctionSetProjectionModel:
         self.degenerate_edge_length_atol = float(degenerate_edge_length_atol)
         self.degenerate_edge_length_rtol = float(degenerate_edge_length_rtol)
         self.degenerate_normal_tol = float(degenerate_normal_tol)
-
+        self.debug = bool(debug)
         template_mesh = build_sampled_patches_mesh(
             function_set=function_set,
             patch_indices=self.patch_ids,
@@ -421,6 +422,280 @@ class FunctionSetProjectionModel:
             raise RuntimeError(f"Unsupported output mode {self.output_mode!r}.")
 
         return gradient
+
+    def _compute_output_hessian_wrt_residual(
+        self,
+        residual_vector: np.ndarray,
+        raw_distance: np.ndarray,
+        raw_dist2: np.ndarray,
+        zero_distance_mask: np.ndarray,
+        sign: np.ndarray,
+    ) -> np.ndarray:
+        hessian = np.zeros(
+            (residual_vector.shape[0], self.physical_dimension, self.physical_dimension),
+            dtype=float,
+        )
+        active = ~zero_distance_mask
+        eye = np.eye(self.physical_dimension, dtype=float)
+
+        if self.output_mode == "distance":
+            safe = active & (raw_distance > self.distance_eps)
+            if np.any(safe):
+                rr = residual_vector[safe]
+                denom = raw_distance[safe]
+                outer = rr[:, :, None] * rr[:, None, :]
+                hessian[safe] = (
+                    eye[None, :, :] / denom[:, None, None]
+                    - outer / (denom[:, None, None] ** 3)
+                )
+                if self.sdf:
+                    hessian[safe] *= sign[safe, None, None]
+        elif self.output_mode == "squared_distance":
+            if np.any(active):
+                scale = sign[active] if self.sdf else np.ones(np.sum(active), dtype=float)
+                hessian[active] = 2.0 * scale[:, None, None] * eye[None, :, :]
+        elif self.output_mode == "regularized_distance":
+            if np.any(active):
+                rr = residual_vector[active]
+                denom = np.sqrt(raw_dist2[active] + self.regularization_epsilon**2)
+                outer = rr[:, :, None] * rr[:, None, :]
+                hessian[active] = (
+                    eye[None, :, :] / denom[:, None, None]
+                    - outer / (denom[:, None, None] ** 3)
+                )
+                if self.sdf:
+                    hessian[active] *= sign[active, None, None]
+        else:  # pragma: no cover
+            raise RuntimeError(f"Unsupported output mode {self.output_mode!r}.")
+
+        return hessian
+
+    def _compute_free_mask(
+        self,
+        uv: np.ndarray,
+        residual: np.ndarray,
+        kind_batch: Sequence[str],
+    ) -> np.ndarray:
+        free_mask = np.ones_like(residual, dtype=bool)
+        for local_index, kind in enumerate(kind_batch):
+            fixed_axis = _parse_fixed_axis(kind)
+            if fixed_axis is not None:
+                free_mask[local_index, fixed_axis] = False
+            if _is_point_candidate(kind):
+                free_mask[local_index, :] = False
+
+        lower = uv <= self.params.bound_eps
+        upper = uv >= (1.0 - self.params.bound_eps)
+        block_lower = lower & (residual > 0.0)
+        block_upper = upper & (residual < 0.0)
+        zero_res = np.abs(residual) <= self.params.zero_residual_tol
+        free_mask &= ~(block_lower | block_upper | zero_res)
+        return free_mask
+
+    def _compute_patch_projection_data(
+        self,
+        info: PatchInfo,
+        coeffs: np.ndarray,
+        uv: np.ndarray,
+        point_batch: np.ndarray,
+        kind_batch: Sequence[str],
+        zero_distance_mask: np.ndarray,
+        sign: np.ndarray,
+        reference_normals: np.ndarray,
+        *,
+        include_third_order: bool = False,
+    ) -> Dict[str, np.ndarray]:
+        cols_0, w_0, _ = compute_basis_stencil_numpy(
+            uv,
+            info.degrees,
+            info.knot_vectors,
+            cache=info.space_cache,
+        )
+        cols_u, w_u, _ = compute_basis_stencil_numpy(
+            uv,
+            info.degrees,
+            info.knot_vectors,
+            der_orders=(1, 0),
+            cache=info.space_cache,
+        )
+        cols_v, w_v, _ = compute_basis_stencil_numpy(
+            uv,
+            info.degrees,
+            info.knot_vectors,
+            der_orders=(0, 1),
+            cache=info.space_cache,
+        )
+        cols_uu, w_uu, _ = compute_basis_stencil_numpy(
+            uv,
+            info.degrees,
+            info.knot_vectors,
+            der_orders=(2, 0),
+            cache=info.space_cache,
+        )
+        cols_uv, w_uv, _ = compute_basis_stencil_numpy(
+            uv,
+            info.degrees,
+            info.knot_vectors,
+            der_orders=(1, 1),
+            cache=info.space_cache,
+        )
+        cols_vv, w_vv, _ = compute_basis_stencil_numpy(
+            uv,
+            info.degrees,
+            info.knot_vectors,
+            der_orders=(0, 2),
+            cache=info.space_cache,
+        )
+
+        data: Dict[str, np.ndarray] = {
+            "cols_0": cols_0,
+            "w_0": w_0,
+            "cols_u": cols_u,
+            "w_u": w_u,
+            "cols_v": cols_v,
+            "w_v": w_v,
+            "cols_uu": cols_uu,
+            "w_uu": w_uu,
+            "cols_uv": cols_uv,
+            "w_uv": w_uv,
+            "cols_vv": cols_vv,
+            "w_vv": w_vv,
+        }
+
+        if include_third_order:
+            cols_uuu, w_uuu, _ = compute_basis_stencil_numpy(
+                uv,
+                info.degrees,
+                info.knot_vectors,
+                der_orders=(3, 0),
+                cache=info.space_cache,
+            )
+            cols_uuv, w_uuv, _ = compute_basis_stencil_numpy(
+                uv,
+                info.degrees,
+                info.knot_vectors,
+                der_orders=(2, 1),
+                cache=info.space_cache,
+            )
+            cols_uvv, w_uvv, _ = compute_basis_stencil_numpy(
+                uv,
+                info.degrees,
+                info.knot_vectors,
+                der_orders=(1, 2),
+                cache=info.space_cache,
+            )
+            cols_vvv, w_vvv, _ = compute_basis_stencil_numpy(
+                uv,
+                info.degrees,
+                info.knot_vectors,
+                der_orders=(0, 3),
+                cache=info.space_cache,
+            )
+            data.update(
+                {
+                    "cols_uuu": cols_uuu,
+                    "w_uuu": w_uuu,
+                    "cols_uuv": cols_uuv,
+                    "w_uuv": w_uuv,
+                    "cols_uvv": cols_uvv,
+                    "w_uvv": w_uvv,
+                    "cols_vvv": cols_vvv,
+                    "w_vvv": w_vvv,
+                }
+            )
+
+        S = apply_basis_stencil_numpy(cols_0, w_0, coeffs)
+        Su = apply_basis_stencil_numpy(cols_u, w_u, coeffs)
+        Sv = apply_basis_stencil_numpy(cols_v, w_v, coeffs)
+        Suu = apply_basis_stencil_numpy(cols_uu, w_uu, coeffs)
+        Suv = apply_basis_stencil_numpy(cols_uv, w_uv, coeffs)
+        Svv = apply_basis_stencil_numpy(cols_vv, w_vv, coeffs)
+
+        data.update(
+            {
+                "S": S,
+                "Su": Su,
+                "Sv": Sv,
+                "Suu": Suu,
+                "Suv": Suv,
+                "Svv": Svv,
+            }
+        )
+
+        if include_third_order:
+            data.update(
+                {
+                    "Suuu": apply_basis_stencil_numpy(data["cols_uuu"], data["w_uuu"], coeffs),
+                    "Suuv": apply_basis_stencil_numpy(data["cols_uuv"], data["w_uuv"], coeffs),
+                    "Suvv": apply_basis_stencil_numpy(data["cols_uvv"], data["w_uvv"], coeffs),
+                    "Svvv": apply_basis_stencil_numpy(data["cols_vvv"], data["w_vvv"], coeffs),
+                }
+            )
+
+        residual_vector = S - point_batch
+        raw_dist2 = np.maximum(np.einsum("ij,ij->i", residual_vector, residual_vector), 0.0)
+        raw_distance = np.sqrt(raw_dist2)
+        outward_normals = None
+        if self.sdf and self.output_mode == "distance":
+            outward_normals = self._compute_oriented_surface_normals(
+                Su,
+                Sv,
+                reference_normals,
+            )
+
+        output_gradient = self._compute_output_gradient_wrt_residual(
+            residual_vector,
+            raw_distance,
+            raw_dist2,
+            zero_distance_mask,
+            sign,
+            outward_normals=outward_normals,
+        )
+        output_hessian = self._compute_output_hessian_wrt_residual(
+            residual_vector,
+            raw_distance,
+            raw_dist2,
+            zero_distance_mask,
+            sign,
+        )
+
+        residual = np.empty((point_batch.shape[0], 2), dtype=float)
+        residual[:, 0] = np.einsum("ij,ij->i", residual_vector, Su)
+        residual[:, 1] = np.einsum("ij,ij->i", residual_vector, Sv)
+
+        jacobian = np.empty((point_batch.shape[0], 2, 2), dtype=float)
+        jacobian[:, 0, 0] = np.einsum("ij,ij->i", Su, Su) + np.einsum("ij,ij->i", residual_vector, Suu)
+        jacobian[:, 0, 1] = np.einsum("ij,ij->i", Su, Sv) + np.einsum("ij,ij->i", residual_vector, Suv)
+        jacobian[:, 1, 0] = jacobian[:, 0, 1]
+        jacobian[:, 1, 1] = np.einsum("ij,ij->i", Sv, Sv) + np.einsum("ij,ij->i", residual_vector, Svv)
+
+        free_mask = self._compute_free_mask(uv, residual, kind_batch)
+        dfdz = np.empty_like(residual)
+        dfdz[:, 0] = np.einsum("ij,ij->i", output_gradient, Su)
+        dfdz[:, 1] = np.einsum("ij,ij->i", output_gradient, Sv)
+        lambda_vec = _solve_reduced_linear_system(
+            jacobian,
+            dfdz * free_mask,
+            free_mask,
+            diag_eps=self.params.diag_eps,
+            det_eps=self.params.det_eps,
+        )
+
+        data.update(
+            {
+                "residual_vector": residual_vector,
+                "raw_dist2": raw_dist2,
+                "raw_distance": raw_distance,
+                "output_gradient": output_gradient,
+                "output_hessian": output_hessian,
+                "residual": residual,
+                "jacobian": jacobian,
+                "free_mask": free_mask,
+                "dfdz": dfdz,
+                "lambda_vec": lambda_vec,
+            }
+        )
+        return data
 
     def _build_sdf_surface(self, mesh: pv.PolyData) -> pv.PolyData:
         surface = mesh.clean(
@@ -555,6 +830,24 @@ class FunctionSetProjectionModel:
             sign,
         )
 
+        if self.debug:
+            # print debug info
+            # number of converged points
+            num_converged = np.sum(result.converged)
+            # number of non-converged points
+            num_non_converged = len(points) - num_converged
+            # max residual of all points
+            num_points = len(points)
+            max_residual = np.max(np.linalg.norm(result.residual.reshape(num_points, -1), axis=1))
+            # max number of iterations taken by any point
+            max_iterations = np.max(result.iterations)
+
+            print("Debug info for forward pass:")
+            print("    Num converged:", num_converged)
+            print("    Num non-converged:", num_non_converged)
+            print("    Max residual:", max_residual)
+            print("    Max iterations:", max_iterations)
+
         state = {
             "patch_id": np.asarray(result.patch_id, dtype=int),
             "uv": np.asarray(result.uv, dtype=float),
@@ -623,110 +916,28 @@ class FunctionSetProjectionModel:
             cotangent_batch = d_distances[point_indices]
             kind_batch = [candidate_kind[idx] for idx in point_indices]
 
-            cols_0, w_0, _ = compute_basis_stencil_numpy(
+            data = self._compute_patch_projection_data(
+                info,
+                coeffs,
                 uv,
-                info.degrees,
-                info.knot_vectors,
-                cache=info.space_cache,
-            )
-            cols_u, w_u, _ = compute_basis_stencil_numpy(
-                uv,
-                info.degrees,
-                info.knot_vectors,
-                der_orders=(1, 0),
-                cache=info.space_cache,
-            )
-            cols_v, w_v, _ = compute_basis_stencil_numpy(
-                uv,
-                info.degrees,
-                info.knot_vectors,
-                der_orders=(0, 1),
-                cache=info.space_cache,
-            )
-            cols_uu, w_uu, _ = compute_basis_stencil_numpy(
-                uv,
-                info.degrees,
-                info.knot_vectors,
-                der_orders=(2, 0),
-                cache=info.space_cache,
-            )
-            cols_uv, w_uv, _ = compute_basis_stencil_numpy(
-                uv,
-                info.degrees,
-                info.knot_vectors,
-                der_orders=(1, 1),
-                cache=info.space_cache,
-            )
-            cols_vv, w_vv, _ = compute_basis_stencil_numpy(
-                uv,
-                info.degrees,
-                info.knot_vectors,
-                der_orders=(0, 2),
-                cache=info.space_cache,
-            )
-
-            S = apply_basis_stencil_numpy(cols_0, w_0, coeffs)
-            Su = apply_basis_stencil_numpy(cols_u, w_u, coeffs)
-            Sv = apply_basis_stencil_numpy(cols_v, w_v, coeffs)
-            Suu = apply_basis_stencil_numpy(cols_uu, w_uu, coeffs)
-            Suv = apply_basis_stencil_numpy(cols_uv, w_uv, coeffs)
-            Svv = apply_basis_stencil_numpy(cols_vv, w_vv, coeffs)
-
-            residual_vector = S - point_batch
-            raw_dist2 = np.einsum("ij,ij->i", residual_vector, residual_vector)
-            raw_distance = np.sqrt(raw_dist2)
-            outward_normals = None
-            if self.sdf and self.output_mode == "distance":
-                outward_normals = self._compute_oriented_surface_normals(
-                    Su,
-                    Sv,
-                    reference_normals[point_indices],
-                )
-            output_gradient = self._compute_output_gradient_wrt_residual(
-                residual_vector,
-                raw_distance,
-                raw_dist2,
+                point_batch,
+                kind_batch,
                 zero_distance_mask[point_indices],
                 sign[point_indices],
-                outward_normals=outward_normals,
+                reference_normals[point_indices],
             )
 
-            residual = np.empty((point_indices.size, 2), dtype=float)
-            residual[:, 0] = np.einsum("ij,ij->i", residual_vector, Su)
-            residual[:, 1] = np.einsum("ij,ij->i", residual_vector, Sv)
-
-            jacobian = np.empty((point_indices.size, 2, 2), dtype=float)
-            jacobian[:, 0, 0] = np.einsum("ij,ij->i", Su, Su) + np.einsum("ij,ij->i", residual_vector, Suu)
-            jacobian[:, 0, 1] = np.einsum("ij,ij->i", Su, Sv) + np.einsum("ij,ij->i", residual_vector, Suv)
-            jacobian[:, 1, 0] = jacobian[:, 0, 1]
-            jacobian[:, 1, 1] = np.einsum("ij,ij->i", Sv, Sv) + np.einsum("ij,ij->i", residual_vector, Svv)
-
-            free_mask = np.ones_like(residual, dtype=bool)
-            for local_index, kind in enumerate(kind_batch):
-                fixed_axis = _parse_fixed_axis(kind)
-                if fixed_axis is not None:
-                    free_mask[local_index, fixed_axis] = False
-                if _is_point_candidate(kind):
-                    free_mask[local_index, :] = False
-
-            lower = uv <= self.params.bound_eps
-            upper = uv >= (1.0 - self.params.bound_eps)
-            block_lower = lower & (residual > 0.0)
-            block_upper = upper & (residual < 0.0)
-            zero_res = np.abs(residual) <= self.params.zero_residual_tol
-            free_mask &= ~(block_lower | block_upper | zero_res)
-
-            dfdz = np.empty_like(residual)
-            dfdz[:, 0] = np.einsum("ij,ij->i", output_gradient, Su)
-            dfdz[:, 1] = np.einsum("ij,ij->i", output_gradient, Sv)
-            adjoint_rhs = dfdz * free_mask
-            lambda_vec = _solve_reduced_linear_system(
-                jacobian,
-                adjoint_rhs,
-                free_mask,
-                diag_eps=self.params.diag_eps,
-                det_eps=self.params.det_eps,
-            )
+            cols_0 = data["cols_0"]
+            w_0 = data["w_0"]
+            cols_u = data["cols_u"]
+            w_u = data["w_u"]
+            cols_v = data["cols_v"]
+            w_v = data["w_v"]
+            Su = data["Su"]
+            Sv = data["Sv"]
+            residual_vector = data["residual_vector"]
+            output_gradient = data["output_gradient"]
+            lambda_vec = data["lambda_vec"]
 
             d_points[point_indices] = cotangent_batch[:, None] * (
                 -output_gradient + lambda_vec[:, 0, None] * Su + lambda_vec[:, 1, None] * Sv
@@ -765,6 +976,232 @@ class FunctionSetProjectionModel:
 
         return d_points, d_coefficients
 
+    def compute_vjp_vjp(
+        self,
+        stacked_coefficients: np.ndarray,
+        points: np.ndarray,
+        d_distances: np.ndarray,
+        d_points_cotangent: np.ndarray,
+        d_coefficients_cotangent: np.ndarray,
+        forward_state: Dict[str, object],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        stacked_coefficients = np.asarray(stacked_coefficients, dtype=float)
+        points = np.asarray(points, dtype=float).reshape(-1, self.physical_dimension)
+        d_distances = np.asarray(d_distances, dtype=float).reshape(-1)
+        d_points_cotangent = np.asarray(d_points_cotangent, dtype=float).reshape(-1, self.physical_dimension)
+        d_coefficients_cotangent = np.asarray(d_coefficients_cotangent, dtype=float)
+
+        dd_points = np.zeros_like(points)
+        dd_coefficients = np.zeros_like(stacked_coefficients)
+        dd_d_distances = np.zeros_like(d_distances)
+
+        if (not np.any(d_distances)) or (
+            (not np.any(d_points_cotangent)) and (not np.any(d_coefficients_cotangent))
+        ):
+            return dd_points, dd_coefficients, dd_d_distances
+
+        selected_patch_id = np.asarray(forward_state["patch_id"], dtype=int)
+        selected_uv = np.asarray(forward_state["uv"], dtype=float)
+        candidate_kind = list(forward_state["candidate_kind"])
+        zero_distance_mask = np.asarray(
+            forward_state.get("zero_distance_mask", np.zeros(points.shape[0], dtype=bool)),
+            dtype=bool,
+        )
+        sign = np.asarray(
+            forward_state.get("sign", np.ones(points.shape[0], dtype=float)),
+            dtype=float,
+        )
+        reference_normals = np.asarray(
+            forward_state.get(
+                "reference_normals",
+                np.zeros((points.shape[0], self.physical_dimension), dtype=float),
+            ),
+            dtype=float,
+        )
+
+        for patch_id in self.patch_ids:
+            point_indices = np.where(selected_patch_id == int(patch_id))[0]
+            if point_indices.size == 0:
+                continue
+
+            info = self.patch_infos[int(patch_id)]
+            coeffs = np.asarray(stacked_coefficients[info.start:info.stop], dtype=float).reshape(info.coefficient_shape)
+            direction_coeffs = np.asarray(
+                d_coefficients_cotangent[info.start:info.stop],
+                dtype=float,
+            ).reshape(info.coefficient_shape)
+
+            uv = selected_uv[point_indices]
+            point_batch = points[point_indices]
+            point_direction = d_points_cotangent[point_indices]
+            cotangent_batch = d_distances[point_indices]
+            kind_batch = [candidate_kind[idx] for idx in point_indices]
+
+            data = self._compute_patch_projection_data(
+                info,
+                coeffs,
+                uv,
+                point_batch,
+                kind_batch,
+                zero_distance_mask[point_indices],
+                sign[point_indices],
+                reference_normals[point_indices],
+                include_third_order=True,
+            )
+
+            cols_0 = data["cols_0"]
+            w_0 = data["w_0"]
+            cols_u = data["cols_u"]
+            w_u = data["w_u"]
+            cols_v = data["cols_v"]
+            w_v = data["w_v"]
+            w_uu = data["w_uu"]
+            w_uv = data["w_uv"]
+            w_vv = data["w_vv"]
+
+            residual_vector = data["residual_vector"]
+            output_gradient = data["output_gradient"]
+            output_hessian = data["output_hessian"]
+            jacobian = data["jacobian"]
+            free_mask = data["free_mask"]
+            lambda_vec = data["lambda_vec"]
+
+            Su = data["Su"]
+            Sv = data["Sv"]
+            Suu = data["Suu"]
+            Suv = data["Suv"]
+            Svv = data["Svv"]
+            Suuu = data["Suuu"]
+            Suuv = data["Suuv"]
+            Suvv = data["Suvv"]
+            Svvv = data["Svvv"]
+
+            direct_S = apply_basis_stencil_numpy(cols_0, w_0, direction_coeffs)
+            direct_Su = apply_basis_stencil_numpy(cols_u, w_u, direction_coeffs)
+            direct_Sv = apply_basis_stencil_numpy(cols_v, w_v, direction_coeffs)
+            direct_Suu = apply_basis_stencil_numpy(data["cols_uu"], w_uu, direction_coeffs)
+            direct_Suv = apply_basis_stencil_numpy(data["cols_uv"], w_uv, direction_coeffs)
+            direct_Svv = apply_basis_stencil_numpy(data["cols_vv"], w_vv, direction_coeffs)
+
+            direct_residual_vector = direct_S - point_direction
+            direct_state_rhs = np.empty((point_indices.size, 2), dtype=float)
+            direct_state_rhs[:, 0] = -(
+                np.einsum("ij,ij->i", direct_residual_vector, Su)
+                + np.einsum("ij,ij->i", residual_vector, direct_Su)
+            )
+            direct_state_rhs[:, 1] = -(
+                np.einsum("ij,ij->i", direct_residual_vector, Sv)
+                + np.einsum("ij,ij->i", residual_vector, direct_Sv)
+            )
+            delta_uv = _solve_reduced_linear_system(
+                jacobian,
+                direct_state_rhs,
+                free_mask,
+                diag_eps=self.params.diag_eps,
+                det_eps=self.params.det_eps,
+            )
+
+            delta_S = direct_S + delta_uv[:, 0, None] * Su + delta_uv[:, 1, None] * Sv
+            delta_Su = direct_Su + delta_uv[:, 0, None] * Suu + delta_uv[:, 1, None] * Suv
+            delta_Sv = direct_Sv + delta_uv[:, 0, None] * Suv + delta_uv[:, 1, None] * Svv
+            delta_Suu = direct_Suu + delta_uv[:, 0, None] * Suuu + delta_uv[:, 1, None] * Suuv
+            delta_Suv = direct_Suv + delta_uv[:, 0, None] * Suuv + delta_uv[:, 1, None] * Suvv
+            delta_Svv = direct_Svv + delta_uv[:, 0, None] * Suvv + delta_uv[:, 1, None] * Svvv
+            delta_residual_vector = delta_S - point_direction
+
+            delta_output_gradient = np.einsum("ijk,ik->ij", output_hessian, delta_residual_vector)
+            delta_dfdz = np.empty((point_indices.size, 2), dtype=float)
+            delta_dfdz[:, 0] = np.einsum("ij,ij->i", delta_output_gradient, Su) + np.einsum(
+                "ij,ij->i",
+                output_gradient,
+                delta_Su,
+            )
+            delta_dfdz[:, 1] = np.einsum("ij,ij->i", delta_output_gradient, Sv) + np.einsum(
+                "ij,ij->i",
+                output_gradient,
+                delta_Sv,
+            )
+
+            delta_jacobian = np.empty((point_indices.size, 2, 2), dtype=float)
+            delta_jacobian[:, 0, 0] = (
+                2.0 * np.einsum("ij,ij->i", Su, delta_Su)
+                + np.einsum("ij,ij->i", delta_residual_vector, Suu)
+                + np.einsum("ij,ij->i", residual_vector, delta_Suu)
+            )
+            delta_jacobian[:, 0, 1] = (
+                np.einsum("ij,ij->i", delta_Su, Sv)
+                + np.einsum("ij,ij->i", Su, delta_Sv)
+                + np.einsum("ij,ij->i", delta_residual_vector, Suv)
+                + np.einsum("ij,ij->i", residual_vector, delta_Suv)
+            )
+            delta_jacobian[:, 1, 0] = delta_jacobian[:, 0, 1]
+            delta_jacobian[:, 1, 1] = (
+                2.0 * np.einsum("ij,ij->i", Sv, delta_Sv)
+                + np.einsum("ij,ij->i", delta_residual_vector, Svv)
+                + np.einsum("ij,ij->i", residual_vector, delta_Svv)
+            )
+
+            delta_lambda_rhs = (delta_dfdz - np.einsum("ijk,ik->ij", delta_jacobian, lambda_vec)) * free_mask
+            delta_lambda = _solve_reduced_linear_system(
+                jacobian,
+                delta_lambda_rhs,
+                free_mask,
+                diag_eps=self.params.diag_eps,
+                det_eps=self.params.det_eps,
+            )
+
+            dd_points[point_indices] = cotangent_batch[:, None] * (
+                -delta_output_gradient
+                + delta_lambda[:, 0, None] * Su
+                + lambda_vec[:, 0, None] * delta_Su
+                + delta_lambda[:, 1, None] * Sv
+                + lambda_vec[:, 1, None] * delta_Sv
+            )
+
+            local_hvp = np.zeros((info.stop - info.start, self.physical_dimension), dtype=float)
+
+            base_alpha = (
+                output_gradient
+                - lambda_vec[:, 0, None] * Su
+                - lambda_vec[:, 1, None] * Sv
+            )
+            delta_alpha = (
+                delta_output_gradient
+                - delta_lambda[:, 0, None] * Su
+                - lambda_vec[:, 0, None] * delta_Su
+                - delta_lambda[:, 1, None] * Sv
+                - lambda_vec[:, 1, None] * delta_Sv
+            )
+            delta_w0 = delta_uv[:, 0, None] * w_u + delta_uv[:, 1, None] * w_v
+            term0 = cotangent_batch[:, None, None] * (
+                w_0[:, :, None] * delta_alpha[:, None, :]
+                + delta_w0[:, :, None] * base_alpha[:, None, :]
+            )
+            np.add.at(local_hvp, cols_0.ravel(), term0.reshape(-1, self.physical_dimension))
+
+            beta_u = lambda_vec[:, 0, None] * residual_vector
+            delta_beta_u = delta_lambda[:, 0, None] * residual_vector + lambda_vec[:, 0, None] * delta_residual_vector
+            delta_wu = delta_uv[:, 0, None] * w_uu + delta_uv[:, 1, None] * w_uv
+            term_u = -cotangent_batch[:, None, None] * (
+                w_u[:, :, None] * delta_beta_u[:, None, :]
+                + delta_wu[:, :, None] * beta_u[:, None, :]
+            )
+            np.add.at(local_hvp, cols_u.ravel(), term_u.reshape(-1, self.physical_dimension))
+
+            beta_v = lambda_vec[:, 1, None] * residual_vector
+            delta_beta_v = delta_lambda[:, 1, None] * residual_vector + lambda_vec[:, 1, None] * delta_residual_vector
+            delta_wv = delta_uv[:, 0, None] * w_uv + delta_uv[:, 1, None] * w_vv
+            term_v = -cotangent_batch[:, None, None] * (
+                w_v[:, :, None] * delta_beta_v[:, None, :]
+                + delta_wv[:, :, None] * beta_v[:, None, :]
+            )
+            np.add.at(local_hvp, cols_v.ravel(), term_v.reshape(-1, self.physical_dimension))
+
+            dd_coefficients[info.start:info.stop] += local_hvp
+            dd_d_distances[point_indices] = np.einsum("ij,ij->i", output_gradient, delta_residual_vector)
+
+        return dd_points, dd_coefficients, dd_d_distances
+
 
 class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBeta):
     def __init__(self, model: FunctionSetProjectionModel, shared_state: Dict[str, object]):
@@ -783,6 +1220,12 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
 
         d_coefficients = self.create_output("d_coefficients", coefficients.shape)
         d_points = self.create_output("d_points", points.shape)
+
+        self.declare_vjp_function(
+            FunctionSetClosestDistanceVJPVJP,
+            model=self.model,
+            shared_state=self.shared_state,
+        )
 
         return {
             "coefficients": d_coefficients,
@@ -805,6 +1248,58 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
         )
         outputs["d_points"] = d_points
         outputs["d_coefficients"] = d_coefficients
+
+
+class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperationBeta):
+    def __init__(self, model: FunctionSetProjectionModel, shared_state: Dict[str, object]):
+        super().__init__()
+        self.model = model
+        self.shared_state = shared_state
+
+    def evaluate(self, inputs, d_outputs):
+        coefficients = inputs["coefficients"]
+        points = inputs["points"].reshape(-1, self.model.physical_dimension)
+        d_closest_distance = inputs["d_closest_distance"].reshape(-1)
+        d_d_coefficients = d_outputs["d_coefficients"]
+        d_d_points = d_outputs["d_points"].reshape(-1, self.model.physical_dimension)
+
+        self.declare_input("coefficients", coefficients)
+        self.declare_input("points", points)
+        self.declare_input("d_closest_distance", d_closest_distance)
+        self.declare_input("d_d_coefficients", d_d_coefficients)
+        self.declare_input("d_d_points", d_d_points)
+
+        dd_coefficients = self.create_output("dd_coefficients", coefficients.shape)
+        dd_points = self.create_output("dd_points", points.shape)
+        dd_d_closest_distance = self.create_output("dd_d_closest_distance", d_closest_distance.shape)
+
+        return {
+            "coefficients": dd_coefficients,
+            "points": dd_points,
+            "d_closest_distance": dd_d_closest_distance,
+        }
+
+    def compute(self, inputs, outputs):
+        if "forward" not in self.shared_state:
+            raise RuntimeError("Forward projection state is unavailable for second-order VJP evaluation.")
+
+        coefficients = np.asarray(inputs["coefficients"], dtype=float)
+        points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
+        d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
+        d_d_coefficients = np.asarray(inputs["d_d_coefficients"], dtype=float)
+        d_d_points = np.asarray(inputs["d_d_points"], dtype=float).reshape(-1, self.model.physical_dimension)
+
+        dd_points, dd_coefficients, dd_d_closest_distance = self.model.compute_vjp_vjp(
+            coefficients,
+            points,
+            d_closest_distance,
+            d_d_points,
+            d_d_coefficients,
+            self.shared_state["forward"],
+        )
+        outputs["dd_points"] = dd_points
+        outputs["dd_coefficients"] = dd_coefficients
+        outputs["dd_d_closest_distance"] = dd_d_closest_distance
 
 
 class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperationBeta):
@@ -841,7 +1336,7 @@ class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperat
 def _build_demo_function_set():
     import lsdo_function_spaces as lfs
 
-    degree = (2, 2)
+    degree = (3, 3)
     coefficients_shape = (4, 4)
     knots = (
         np.concatenate([np.zeros(degree[0]), np.linspace(0.0, 1.0, coefficients_shape[0] - degree[0] + 1), np.ones(degree[0])]),
@@ -949,6 +1444,8 @@ if __name__ == "__main__":
             output_mode=output_mode,
             regularization_epsilon=regularization_epsilon,
             params=OrthogonalityNewtonParams(max_iter=30, tol_res=1e-12, tol_step=1e-12),
+            debug=True,
+            # sdf=True,
         )
 
         recorder = csdl.Recorder(inline=True)
@@ -964,7 +1461,8 @@ if __name__ == "__main__":
             coefficients=coefficients_csdl,
             points=points_csdl,
         )
-        objective = csdl.sum(closest_measure)
+        first_derivative = csdl.derivative(closest_measure, points_csdl)
+        objective = csdl.sum(first_derivative)
         objective.name = f"{output_mode}_sum"
         objective.set_as_objective()
         recorder.stop()
