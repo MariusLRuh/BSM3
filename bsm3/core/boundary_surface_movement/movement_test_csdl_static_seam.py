@@ -580,41 +580,67 @@ def _plot_surface_debug(
     seam_seed_indices: np.ndarray,
     protected_feature_indices: np.ndarray,
     mesh_label: str,
+    side_view: bool = True,
+    flip_side_view: bool = True,
+    screenshot_path: str | Path | None = None,
+    screenshot_window_size: tuple[int, int] = (3840, 2160),
 ) -> None:
     if pv is None:
         raise ImportError("PyVista is required for plotting.")
 
     surface_vertices = np.asarray(surface_vertices, dtype=float)
-    plotter = pv.Plotter()
+    plotter_kwargs = {}
+    if screenshot_path is not None:
+        plotter_kwargs["window_size"] = tuple(int(value) for value in screenshot_window_size)
+    plotter = pv.Plotter(**plotter_kwargs)
     plotter.add_mesh(
         pv.PolyData(surface_vertices, mesh_faces),
         opacity=1.0,
         show_edges=True,
         label=mesh_label,
     )
-    plotter.add_mesh(
-        pv.PolyData(surface_vertices[interpolation_indices]),
-        color="orange",
-        point_size=7,
-        render_points_as_spheres=True,
-        label="Interpolation vertices",
-    )
-    plotter.add_mesh(
-        pv.PolyData(surface_vertices[seam_seed_indices]),
-        color="red",
-        point_size=9,
-        render_points_as_spheres=True,
-        label="Exact seam seeds",
-    )
-    if protected_feature_indices.size > 0:
-        plotter.add_mesh(
-            pv.PolyData(surface_vertices[protected_feature_indices]),
-            color="royalblue",
-            point_size=8,
-            render_points_as_spheres=True,
-            label="Protected wing features",
-        )
-    plotter.add_legend()
+    # plotter.add_mesh(
+    #     pv.PolyData(surface_vertices[interpolation_indices]),
+    #     color="orange",
+    #     point_size=7,
+    #     render_points_as_spheres=True,
+    #     label="Interpolation vertices",
+    # )
+    # plotter.add_mesh(
+    #     pv.PolyData(surface_vertices[seam_seed_indices]),
+    #     color="red",
+    #     point_size=9,
+    #     render_points_as_spheres=True,
+    #     label="Exact seam seeds",
+    # )
+    # if protected_feature_indices.size > 0:
+    #     plotter.add_mesh(
+    #         pv.PolyData(surface_vertices[protected_feature_indices]),
+    #         color="royalblue",
+    #         point_size=8,
+    #         render_points_as_spheres=True,
+    #         label="Protected wing features",
+    #     )
+    # plotter.add_legend()
+    if side_view:
+        try:
+            plotter.view_xz(negative=flip_side_view)
+        except TypeError:
+            plotter.view_xz()
+            if flip_side_view:
+                plotter.camera.Azimuth(180.0)
+        plotter.camera.parallel_projection = True
+        plotter.reset_camera()
+    if screenshot_path is not None:
+        screenshot_path = Path(screenshot_path)
+        screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            plotter.show(screenshot=str(screenshot_path))
+        except TypeError:
+            plotter.show(auto_close=False)
+            plotter.screenshot(str(screenshot_path))
+            plotter.close()
+        return
     plotter.show()
 
 
