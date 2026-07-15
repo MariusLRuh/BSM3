@@ -546,6 +546,50 @@ def _build_retry_candidate_specs(
     return specs
 
 
+def _build_local_retry_candidate_specs(
+    selected_patch_id: np.ndarray,
+    selected_uv: np.ndarray,
+    point_indices: np.ndarray,
+    *,
+    uv_step: float,
+) -> List[_CandidateSpec]:
+    specs: List[_CandidateSpec] = []
+    step = max(float(uv_step), 1e-12)
+    offsets = np.array(
+        [
+            [0.0, 0.0],
+            [-step, 0.0],
+            [step, 0.0],
+            [0.0, -step],
+            [0.0, step],
+            [-step, -step],
+            [-step, step],
+            [step, -step],
+            [step, step],
+        ],
+        dtype=float,
+    )
+
+    for point_index in np.asarray(point_indices, dtype=int):
+        pid = int(selected_patch_id[point_index])
+        uv_seed = np.asarray(selected_uv[point_index], dtype=float)
+        seen = set()
+        for offset in offsets:
+            candidate_uv = np.clip(uv_seed + offset, 0.0, 1.0)
+            _append_candidate_spec(
+                specs,
+                seen,
+                point_index=point_index,
+                candidate_patch=pid,
+                candidate_uv=candidate_uv,
+                fixed_axis=-1,
+                fixed_value=0.0,
+                kind="retry_local_patch",
+            )
+
+    return specs
+
+
 def _run_candidate_projections(
     function_set,
     points: np.ndarray,
@@ -677,6 +721,84 @@ def _is_candidate_better(
     return dist2 < best_dist2
 
 
+def _compute_candidate_normal(
+    function_set,
+    patch_id: int,
+    uv: np.ndarray,
+) -> np.ndarray:
+    _require_numpy_bspline_factory()
+    coeffs, degrees, knot_vectors = _get_patch_metadata(function_set, int(patch_id))
+    uv = np.asarray(uv, dtype=float).reshape(1, 2)
+    evaluator_u = make_bspline_evaluator_numpy(
+        degrees=degrees,
+        knot_vectors=knot_vectors,
+        der_orders=(1, 0),
+    )
+    evaluator_v = make_bspline_evaluator_numpy(
+        degrees=degrees,
+        knot_vectors=knot_vectors,
+        der_orders=(0, 1),
+    )
+    tangent_u = np.asarray(evaluator_u(uv, coeffs), dtype=float).reshape(1, -1)[0]
+    tangent_v = np.asarray(evaluator_v(uv, coeffs), dtype=float).reshape(1, -1)[0]
+    if tangent_u.size != 3 or tangent_v.size != 3:
+        return np.zeros(3, dtype=float)
+    normal = np.cross(tangent_u, tangent_v)
+    norm = np.linalg.norm(normal)
+    if norm <= 1e-14:
+        return np.zeros(3, dtype=float)
+    return normal / norm
+
+
+def _is_retry_candidate_compatible(
+    function_set,
+    *,
+    selected_patch_id: int,
+    selected_uv: np.ndarray,
+    selected_dist2: float,
+    retry_patch_id: int,
+    retry_uv: np.ndarray,
+    retry_dist2: float,
+    retry_accept_distance_factor: float,
+    retry_accept_distance_atol: float,
+    retry_normal_dot_min: float,
+) -> bool:
+    if not np.isfinite(retry_dist2):
+        return False
+    if not np.isfinite(selected_dist2):
+        return True
+
+    selected_distance = float(np.sqrt(max(float(selected_dist2), 0.0)))
+    retry_distance = float(np.sqrt(max(float(retry_dist2), 0.0)))
+    distance_limit = (
+        max(float(retry_accept_distance_factor), 1.0) * selected_distance
+        + max(float(retry_accept_distance_atol), 0.0)
+    )
+    if retry_distance > distance_limit:
+        return False
+
+    if int(selected_patch_id) == int(retry_patch_id):
+        return True
+
+    if retry_normal_dot_min <= -1.0:
+        return True
+
+    selected_normal = _compute_candidate_normal(
+        function_set,
+        int(selected_patch_id),
+        selected_uv,
+    )
+    retry_normal = _compute_candidate_normal(
+        function_set,
+        int(retry_patch_id),
+        retry_uv,
+    )
+    if np.linalg.norm(selected_normal) <= 0.0 or np.linalg.norm(retry_normal) <= 0.0:
+        return True
+
+    return float(np.dot(selected_normal, retry_normal)) >= float(retry_normal_dot_min)
+
+
 def _select_best_candidates(candidate_results: Dict[str, object], num_points: int) -> np.ndarray:
     point_index = candidate_results["point_index"]
     dist2 = candidate_results["dist2"]
@@ -741,6 +863,11 @@ def project_points_with_warm_start_candidates_numpy(
     include_neighbor_boundary: bool = True,
     retry_on_failure: bool = True,
     retry_num_closest_edges: int = 2,
+    retry_local_search: bool = True,
+    retry_local_step_factor: float = 2.0,
+    retry_accept_distance_factor: float = 4.0,
+    retry_accept_distance_atol: float = 1e-3,
+    retry_normal_dot_min: float = -0.25,
     params: OrthogonalityNewtonParams = OrthogonalityNewtonParams(),
 ) -> WarmStartCandidateProjectionResult:
     points = np.asarray(points, dtype=float)
@@ -801,16 +928,28 @@ def project_points_with_warm_start_candidates_numpy(
 
     failed_points = np.where(~selected_converged)[0]
     if retry_on_failure and failed_points.size > 0:
-        retry_specs = _build_retry_candidate_specs(
-            warm_patch_id=warm.patch_id,
-            warm_uv0=warm.uv0,
-            point_indices=failed_points,
-            edge_map=edge_map,
-            degenerate_edge_map=degenerate_edge_map,
-            retry_num_closest_edges=retry_num_closest_edges,
-            include_current_patch_boundary=include_current_patch_boundary,
-            include_neighbor_patch=include_neighbor_patch,
-            include_neighbor_boundary=include_neighbor_boundary,
+        retry_specs: List[_CandidateSpec] = []
+        if retry_local_search:
+            retry_specs.extend(
+                _build_local_retry_candidate_specs(
+                    selected_patch_id,
+                    selected_uv,
+                    failed_points,
+                    uv_step=max(float(retry_local_step_factor), 0.0) * max(float(eps_edge), 1e-12),
+                )
+            )
+        retry_specs.extend(
+            _build_retry_candidate_specs(
+                warm_patch_id=warm.patch_id,
+                warm_uv0=warm.uv0,
+                point_indices=failed_points,
+                edge_map=edge_map,
+                degenerate_edge_map=degenerate_edge_map,
+                retry_num_closest_edges=retry_num_closest_edges,
+                include_current_patch_boundary=include_current_patch_boundary,
+                include_neighbor_patch=include_neighbor_patch,
+                include_neighbor_boundary=include_neighbor_boundary,
+            )
         )
 
         if retry_specs:
@@ -834,6 +973,17 @@ def project_points_with_warm_start_candidates_numpy(
                     best_converged=bool(selected_converged[point_index]),
                     best_residual=float(selected_residual[point_index]),
                     best_dist2=float(selected_dist2[point_index]),
+                ) and _is_retry_candidate_compatible(
+                    function_set,
+                    selected_patch_id=int(selected_patch_id[point_index]),
+                    selected_uv=selected_uv[point_index],
+                    selected_dist2=float(selected_dist2[point_index]),
+                    retry_patch_id=int(retry_results["patch_id"][retry_index]),
+                    retry_uv=retry_results["uv"][retry_index],
+                    retry_dist2=float(retry_results["dist2"][retry_index]),
+                    retry_accept_distance_factor=retry_accept_distance_factor,
+                    retry_accept_distance_atol=retry_accept_distance_atol,
+                    retry_normal_dot_min=retry_normal_dot_min,
                 ):
                     selected_patch_id[point_index] = retry_results["patch_id"][retry_index]
                     selected_uv[point_index] = retry_results["uv"][retry_index]

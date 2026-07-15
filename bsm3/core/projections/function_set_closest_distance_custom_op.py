@@ -57,6 +57,7 @@ try:
     from .warm_start_candidate_projection_numpy import (
         NeighborEdgeMap,
         build_edge_neighbor_map,
+        _map_uv_across_edge,
         project_points_with_warm_start_candidates_numpy,
     )
     from .warm_start_projections import build_sampled_patches_mesh
@@ -65,6 +66,7 @@ except ImportError:
     from bsm3.core.projections.warm_start_candidate_projection_numpy import (
         NeighborEdgeMap,
         build_edge_neighbor_map,
+        _map_uv_across_edge,
         project_points_with_warm_start_candidates_numpy,
     )
     from bsm3.core.projections.warm_start_projections import build_sampled_patches_mesh
@@ -126,6 +128,80 @@ def _parse_fixed_axis(candidate_kind: str) -> Optional[int]:
 
 def _is_point_candidate(candidate_kind: str) -> bool:
     return "degenerate_point" in candidate_kind
+
+
+def _normalize_vectors(vectors: np.ndarray, tol: float) -> np.ndarray:
+    normalized = np.asarray(vectors, dtype=float).copy()
+    norm = np.linalg.norm(normalized, axis=1)
+    safe = norm > tol
+    normalized[safe] /= norm[safe, None]
+    normalized[~safe] = 0.0
+    return normalized
+
+
+def _normalized_cross_product_direction(
+    tangent_u: np.ndarray,
+    tangent_v: np.ndarray,
+    tangent_u_direction: np.ndarray,
+    tangent_v_direction: np.ndarray,
+    tol: float,
+) -> np.ndarray:
+    normal_unnormalized = np.cross(tangent_u, tangent_v)
+    normal_norm = np.linalg.norm(normal_unnormalized, axis=1)
+    normal_direction_unnormalized = (
+        np.cross(tangent_u_direction, tangent_v)
+        + np.cross(tangent_u, tangent_v_direction)
+    )
+
+    normal_direction = np.zeros_like(normal_unnormalized)
+    safe = normal_norm > tol
+    if not np.any(safe):
+        return normal_direction
+
+    normal = normal_unnormalized[safe] / normal_norm[safe, None]
+    projected_direction = normal_direction_unnormalized[safe] - normal * np.einsum(
+        "ij,ij->i",
+        normal,
+        normal_direction_unnormalized[safe],
+    )[:, None]
+    normal_direction[safe] = projected_direction / normal_norm[safe, None]
+    return normal_direction
+
+
+def _store_forward_state(
+    shared_state: Dict[str, object],
+    coefficients: np.ndarray,
+    points: np.ndarray,
+    forward_state: Dict[str, object],
+) -> None:
+    shared_state["forward"] = forward_state
+    shared_state["forward_coefficients"] = np.asarray(coefficients, dtype=float).copy()
+    shared_state["forward_points"] = np.asarray(points, dtype=float).copy()
+
+
+def _get_current_forward_state(
+    model: "FunctionSetProjectionModel",
+    shared_state: Dict[str, object],
+    coefficients: np.ndarray,
+    points: np.ndarray,
+) -> Dict[str, object]:
+    coefficients = np.asarray(coefficients, dtype=float)
+    points = np.asarray(points, dtype=float).reshape(-1, model.physical_dimension)
+
+    cached_coefficients = shared_state.get("forward_coefficients")
+    cached_points = shared_state.get("forward_points")
+    if (
+        "forward" in shared_state
+        and cached_coefficients is not None
+        and cached_points is not None
+        and np.array_equal(cached_coefficients, coefficients)
+        and np.array_equal(cached_points, points)
+    ):
+        return shared_state["forward"]
+
+    _, forward_state = model.project(coefficients, points)
+    _store_forward_state(shared_state, coefficients, points, forward_state)
+    return forward_state
 
 
 def _solve_2x2_batch(A: np.ndarray, b: np.ndarray, det_eps: float) -> np.ndarray:
@@ -237,8 +313,8 @@ class FunctionSetProjectionModel:
         function_set,
         *,
         patch_indices: Optional[Iterable[int]] = None,
-        warm_start_nu: int = 150,
-        warm_start_nv: int = 150,
+        warm_start_nu: int = 100,
+        warm_start_nv: int = 100,
         edge_map_num_samples: int = 41,
         edge_map_atol: float = 1e-6,
         edge_map_rtol: float = 1e-6,
@@ -248,8 +324,15 @@ class FunctionSetProjectionModel:
         include_neighbor_boundary: bool = True,
         retry_on_failure: bool = True,
         retry_num_closest_edges: int = 2,
+        retry_local_search: bool = True,
+        retry_local_step_factor: float = 2.0,
+        retry_accept_distance_factor: float = 4.0,
+        retry_accept_distance_atol: float = 1e-3,
+        retry_normal_dot_min: float = -0.25,
         output_mode: str = "distance",
         sdf: bool = False,
+        sdf_sign_mode: str = "normal", #"enclosed",
+        sdf_normal_edge_tolerance: Optional[float] = None,
         regularization_epsilon: float = 1e-8,
         params: OrthogonalityNewtonParams = OrthogonalityNewtonParams(),
         distance_eps: float = 1e-14,
@@ -273,12 +356,23 @@ class FunctionSetProjectionModel:
         self.include_neighbor_boundary = bool(include_neighbor_boundary)
         self.retry_on_failure = bool(retry_on_failure)
         self.retry_num_closest_edges = int(retry_num_closest_edges)
+        self.retry_local_search = bool(retry_local_search)
+        self.retry_local_step_factor = float(retry_local_step_factor)
+        self.retry_accept_distance_factor = float(retry_accept_distance_factor)
+        self.retry_accept_distance_atol = float(retry_accept_distance_atol)
+        self.retry_normal_dot_min = float(retry_normal_dot_min)
         self.output_mode = str(output_mode)
         self.sdf = bool(sdf)
         if self.output_mode not in ("distance", "squared_distance", "regularized_distance"):
             raise ValueError(
                 "output_mode must be one of 'distance', 'squared_distance', or "
                 f"'regularized_distance'; got {self.output_mode!r}."
+            )
+        self.sdf_sign_mode = str(sdf_sign_mode)
+        if self.sdf_sign_mode not in ("enclosed", "normal"):
+            raise ValueError(
+                "sdf_sign_mode must be one of 'enclosed' or 'normal'; "
+                f"got {self.sdf_sign_mode!r}."
             )
         self.regularization_epsilon = float(regularization_epsilon)
         if self.regularization_epsilon <= 0.0 and self.output_mode == "regularized_distance":
@@ -288,6 +382,9 @@ class FunctionSetProjectionModel:
             dv = 1.0 / max(1, warm_start_nv - 1)
             eps_edge = 0.5 * max(du, dv)
         self.eps_edge = float(eps_edge)
+        if sdf_normal_edge_tolerance is None:
+            sdf_normal_edge_tolerance = max(float(params.bound_eps), 1e-10)
+        self.sdf_normal_edge_tolerance = float(sdf_normal_edge_tolerance)
         self.sdf_clean_tolerance = float(sdf_clean_tolerance)
         self.sdf_enclosed_tolerance = float(sdf_enclosed_tolerance)
         self.degenerate_edge_length_atol = float(degenerate_edge_length_atol)
@@ -408,7 +505,7 @@ class FunctionSetProjectionModel:
             if self.sdf:
                 gradient[safe] *= sign[safe, None]
                 if outward_normals is not None and np.any(zero_distance_mask):
-                    gradient[zero_distance_mask] = -outward_normals[zero_distance_mask]
+                    gradient[zero_distance_mask] = outward_normals[zero_distance_mask]
         elif self.output_mode == "squared_distance":
             gradient[active] = 2.0 * residual_vector[active]
             if self.sdf:
@@ -488,8 +585,7 @@ class FunctionSetProjectionModel:
         upper = uv >= (1.0 - self.params.bound_eps)
         block_lower = lower & (residual > 0.0)
         block_upper = upper & (residual < 0.0)
-        zero_res = np.abs(residual) <= self.params.zero_residual_tol
-        free_mask &= ~(block_lower | block_upper | zero_res)
+        free_mask &= ~(block_lower | block_upper)
         return free_mask
 
     def _compute_patch_projection_data(
@@ -637,11 +733,14 @@ class FunctionSetProjectionModel:
         raw_distance = np.sqrt(raw_dist2)
         outward_normals = None
         if self.sdf and self.output_mode == "distance":
-            outward_normals = self._compute_oriented_surface_normals(
-                Su,
-                Sv,
-                reference_normals,
-            )
+            if self.sdf_sign_mode == "normal":
+                outward_normals = _normalize_vectors(reference_normals, self.degenerate_normal_tol)
+            else:
+                outward_normals = self._compute_oriented_surface_normals(
+                    Su,
+                    Sv,
+                    reference_normals,
+                )
 
         output_gradient = self._compute_output_gradient_wrt_residual(
             residual_vector,
@@ -734,6 +833,143 @@ class FunctionSetProjectionModel:
         reference_normals = np.asarray(sdf_surface.cell_data["Normals"], dtype=float)[closest_cells]
         return sign, inside_mask, reference_normals
 
+    def _compute_patch_normals(
+        self,
+        info: PatchInfo,
+        coeffs: np.ndarray,
+        uv: np.ndarray,
+    ) -> np.ndarray:
+        cols_u, w_u, _ = compute_basis_stencil_numpy(
+            uv,
+            info.degrees,
+            info.knot_vectors,
+            der_orders=(1, 0),
+            cache=info.space_cache,
+        )
+        cols_v, w_v, _ = compute_basis_stencil_numpy(
+            uv,
+            info.degrees,
+            info.knot_vectors,
+            der_orders=(0, 1),
+            cache=info.space_cache,
+        )
+        Su = apply_basis_stencil_numpy(cols_u, w_u, coeffs)
+        Sv = apply_basis_stencil_numpy(cols_v, w_v, coeffs)
+        return _normalize_vectors(np.cross(Su, Sv), self.degenerate_normal_tol)
+
+    def _candidate_edges_for_normal_sign(self, candidate_kind: str, uv: np.ndarray) -> List[str]:
+        edge_names = ("u0", "u1", "v0", "v1")
+        edges: List[str] = []
+
+        if "boundary" in candidate_kind or "degenerate_point" in candidate_kind:
+            tokens = candidate_kind.split("_")
+            edges.extend(edge for edge in edge_names if edge in tokens)
+
+        tol = self.sdf_normal_edge_tolerance
+        u, v = float(uv[0]), float(uv[1])
+        if u <= tol:
+            edges.append("u0")
+        if u >= 1.0 - tol:
+            edges.append("u1")
+        if v <= tol:
+            edges.append("v0")
+        if v >= 1.0 - tol:
+            edges.append("v1")
+
+        unique_edges: List[str] = []
+        for edge in edges:
+            if edge not in unique_edges:
+                unique_edges.append(edge)
+        return unique_edges
+
+    def _compute_normal_sign_metadata(
+        self,
+        stacked_coefficients: np.ndarray,
+        points: np.ndarray,
+        projected_points: np.ndarray,
+        selected_patch_id: np.ndarray,
+        selected_uv: np.ndarray,
+        candidate_kind: Sequence[str],
+        zero_distance_mask: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        normals = np.zeros((points.shape[0], self.physical_dimension), dtype=float)
+        sign_score_all = np.zeros((points.shape[0],), dtype=float)
+
+        for patch_id in self.patch_ids:
+            point_indices = np.where(selected_patch_id == int(patch_id))[0]
+            if point_indices.size == 0:
+                continue
+
+            info = self.patch_infos[int(patch_id)]
+            coeffs = np.asarray(
+                stacked_coefficients[info.start:info.stop],
+                dtype=float,
+            ).reshape(info.coefficient_shape)
+            uv = selected_uv[point_indices]
+            normal_sum = self._compute_patch_normals(info, coeffs, uv)
+            normal_count = np.ones((point_indices.size,), dtype=float)
+            sign_score = np.einsum(
+                "ij,ij->i",
+                projected_points[point_indices] - points[point_indices],
+                normal_sum,
+            )
+
+            for local_index, point_index in enumerate(point_indices):
+                edges = self._candidate_edges_for_normal_sign(
+                    candidate_kind[point_index],
+                    selected_uv[point_index],
+                )
+                for edge in edges:
+                    neighbor = self.edge_map.get((int(patch_id), edge))
+                    if neighbor is None:
+                        continue
+
+                    neighbor_info = self.patch_infos.get(int(neighbor.neighbor_patch))
+                    if neighbor_info is None:
+                        continue
+
+                    neighbor_coeffs = np.asarray(
+                        stacked_coefficients[neighbor_info.start:neighbor_info.stop],
+                        dtype=float,
+                    ).reshape(neighbor_info.coefficient_shape)
+                    neighbor_uv = _map_uv_across_edge(
+                        uv=selected_uv[point_index],
+                        from_edge=edge,
+                        to_edge=neighbor.neighbor_edge,
+                        reverse_along_edge=neighbor.reverse_along_edge,
+                    ).reshape(1, 2)
+                    neighbor_normal = self._compute_patch_normals(
+                        neighbor_info,
+                        neighbor_coeffs,
+                        neighbor_uv,
+                    )[0]
+                    if np.linalg.norm(neighbor_normal) > self.degenerate_normal_tol:
+                        normal_sum[local_index] += neighbor_normal
+                        normal_count[local_index] += 1.0
+                        neighbor_score = float(
+                            np.dot(
+                                projected_points[point_index] - points[point_index],
+                                neighbor_normal,
+                            )
+                        )
+                        sign_score[local_index] = max(sign_score[local_index], neighbor_score)
+
+            averaged_normals = normal_sum / normal_count[:, None]
+            normalized = _normalize_vectors(averaged_normals, self.degenerate_normal_tol)
+            fallback = np.linalg.norm(normalized, axis=1) <= self.degenerate_normal_tol
+            if np.any(fallback):
+                normalized[fallback] = self._compute_patch_normals(
+                    info,
+                    coeffs,
+                    uv[fallback],
+                )
+            normals[point_indices] = normalized
+            sign_score_all[point_indices] = sign_score
+
+        sign = np.where((sign_score_all < 0.0) & ~zero_distance_mask, -1.0, 1.0)
+        inside_mask = sign < 0.0
+        return sign, inside_mask, normals
+
     def _compute_oriented_surface_normals(
         self,
         Su: np.ndarray,
@@ -808,6 +1044,11 @@ class FunctionSetProjectionModel:
             include_neighbor_boundary=self.include_neighbor_boundary,
             retry_on_failure=self.retry_on_failure,
             retry_num_closest_edges=self.retry_num_closest_edges,
+            retry_local_search=self.retry_local_search,
+            retry_local_step_factor=self.retry_local_step_factor,
+            retry_accept_distance_factor=self.retry_accept_distance_factor,
+            retry_accept_distance_atol=self.retry_accept_distance_atol,
+            retry_normal_dot_min=self.retry_normal_dot_min,
             params=self.params,
         )
         raw_dist2 = np.maximum(result.dist2, 0.0)
@@ -817,12 +1058,23 @@ class FunctionSetProjectionModel:
         inside_mask = np.zeros_like(zero_distance_mask)
         reference_normals = np.zeros((points.shape[0], self.physical_dimension), dtype=float)
         if self.sdf:
-            sign, inside_mask, reference_normals = self._compute_sdf_metadata(
-                mesh,
-                points,
-                np.asarray(result.projected_points, dtype=float),
-                zero_distance_mask,
-            )
+            if self.sdf_sign_mode == "normal":
+                sign, inside_mask, reference_normals = self._compute_normal_sign_metadata(
+                    stacked_coefficients,
+                    points,
+                    np.asarray(result.projected_points, dtype=float),
+                    np.asarray(result.patch_id, dtype=int),
+                    np.asarray(result.uv, dtype=float),
+                    result.candidate_kind,
+                    zero_distance_mask,
+                )
+            else:
+                sign, inside_mask, reference_normals = self._compute_sdf_metadata(
+                    mesh,
+                    points,
+                    np.asarray(result.projected_points, dtype=float),
+                    zero_distance_mask,
+                )
         output_measure = self._compute_output_measure(
             raw_distance,
             raw_dist2,
@@ -860,6 +1112,7 @@ class FunctionSetProjectionModel:
             "output_measure": output_measure,
             "zero_distance_mask": zero_distance_mask,
             "sign": sign,
+            "sdf_sign_mode": self.sdf_sign_mode,
             "inside_mask": inside_mask,
             "reference_normals": reference_normals,
             "residual": np.asarray(result.residual, dtype=float),
@@ -1110,6 +1363,34 @@ class FunctionSetProjectionModel:
             delta_residual_vector = delta_S - point_direction
 
             delta_output_gradient = np.einsum("ijk,ik->ij", output_hessian, delta_residual_vector)
+            if self.sdf and self.output_mode == "distance" and self.sdf_sign_mode == "normal":
+                interior_zero_mask = (
+                    zero_distance_mask[point_indices]
+                    & free_mask[:, 0]
+                    & free_mask[:, 1]
+                )
+                if np.any(interior_zero_mask):
+                    delta_normal = _normalized_cross_product_direction(
+                        Su[interior_zero_mask],
+                        Sv[interior_zero_mask],
+                        delta_Su[interior_zero_mask],
+                        delta_Sv[interior_zero_mask],
+                        self.degenerate_normal_tol,
+                    )
+                    base_normal = _normalize_vectors(
+                        np.cross(Su[interior_zero_mask], Sv[interior_zero_mask]),
+                        self.degenerate_normal_tol,
+                    )
+                    flip = (
+                        np.einsum(
+                            "ij,ij->i",
+                            base_normal,
+                            output_gradient[interior_zero_mask],
+                        )
+                        < 0.0
+                    )
+                    delta_normal[flip] *= -1.0
+                    delta_output_gradient[interior_zero_mask] = delta_normal
             delta_dfdz = np.empty((point_indices.size, 2), dtype=float)
             delta_dfdz[:, 0] = np.einsum("ij,ij->i", delta_output_gradient, Su) + np.einsum(
                 "ij,ij->i",
@@ -1233,18 +1514,16 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
         }
 
     def compute(self, inputs, outputs):
-        if "forward" not in self.shared_state:
-            raise RuntimeError("Forward projection state is unavailable for VJP evaluation.")
-
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
+        forward_state = _get_current_forward_state(self.model, self.shared_state, coefficients, points)
 
         d_points, d_coefficients = self.model.compute_vjp(
             coefficients,
             points,
             d_closest_distance,
-            self.shared_state["forward"],
+            forward_state,
         )
         outputs["d_points"] = d_points
         outputs["d_coefficients"] = d_coefficients
@@ -1280,14 +1559,12 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
         }
 
     def compute(self, inputs, outputs):
-        if "forward" not in self.shared_state:
-            raise RuntimeError("Forward projection state is unavailable for second-order VJP evaluation.")
-
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
         d_d_coefficients = np.asarray(inputs["d_d_coefficients"], dtype=float)
         d_d_points = np.asarray(inputs["d_d_points"], dtype=float).reshape(-1, self.model.physical_dimension)
+        forward_state = _get_current_forward_state(self.model, self.shared_state, coefficients, points)
 
         dd_points, dd_coefficients, dd_d_closest_distance = self.model.compute_vjp_vjp(
             coefficients,
@@ -1295,7 +1572,7 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
             d_closest_distance,
             d_d_points,
             d_d_coefficients,
-            self.shared_state["forward"],
+            forward_state,
         )
         outputs["dd_points"] = dd_points
         outputs["dd_coefficients"] = dd_coefficients
@@ -1329,7 +1606,7 @@ class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperat
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
 
         closest_distance, forward_state = self.model.project(coefficients, points)
-        self.shared_state["forward"] = forward_state
+        _store_forward_state(self.shared_state, coefficients, points, forward_state)
         outputs["closest_distance"] = closest_distance
 
 

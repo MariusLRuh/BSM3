@@ -51,15 +51,19 @@ from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_n
 try:
     from .function_set_closest_distance_custom_op import (
         FunctionSetProjectionModel,
+        _get_current_forward_state,
         _is_point_candidate,
         _parse_fixed_axis,
+        _store_forward_state,
         _solve_reduced_linear_system,
     )
 except ImportError:
     from bsm3.core.projections.function_set_closest_distance_custom_op import (
         FunctionSetProjectionModel,
+        _get_current_forward_state,
         _is_point_candidate,
         _parse_fixed_axis,
+        _store_forward_state,
         _solve_reduced_linear_system,
     )
 
@@ -191,8 +195,7 @@ def _compute_projection_vjp(
         upper = uv >= (1.0 - model.params.bound_eps)
         block_lower = lower & (residual > 0.0)
         block_upper = upper & (residual < 0.0)
-        zero_res = np.abs(residual) <= model.params.zero_residual_tol
-        free_mask &= ~(block_lower | block_upper | zero_res)
+        free_mask &= ~(block_lower | block_upper)
 
         if return_parametric:
             adjoint_rhs = np.asarray(d_outputs[point_indices, 1:3], dtype=float) * free_mask
@@ -276,19 +279,17 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
         }
 
     def compute(self, inputs, outputs):
-        if "forward" not in self.shared_state:
-            raise RuntimeError("Forward projection state is unavailable for VJP evaluation.")
-
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_output = np.asarray(inputs["d_output"], dtype=float)
+        forward_state = _get_current_forward_state(self.model, self.shared_state, coefficients, points)
 
         d_points, d_coefficients = _compute_projection_vjp(
             self.model,
             coefficients,
             points,
             d_output,
-            self.shared_state["forward"],
+            forward_state,
             return_parametric=self.return_parametric,
         )
         outputs["d_points"] = d_points
@@ -332,7 +333,7 @@ class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBe
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
 
         _, forward_state = self.model.project(coefficients, points)
-        self.shared_state["forward"] = forward_state
+        _store_forward_state(self.shared_state, coefficients, points, forward_state)
         outputs[self.output_name] = _build_projection_output(
             forward_state,
             return_parametric=self.return_parametric,

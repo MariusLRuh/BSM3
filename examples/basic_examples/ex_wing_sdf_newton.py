@@ -91,10 +91,19 @@ if __name__ == "__main__":
     rec.start()
 
     check_derivatives = True
-    plot_sdf_slices = True
+    plot_sdf_slices = False
 
     wing_fun_set = lfs.import_file_patched(file_name=str(DEFAULT_STEP_PATH), parallelize=False)
     
+    # Keep derivative-check points off repeated internal knot lines, where
+    # surface-normal second derivatives are not unique.
+    # u_coords = np.array([0.125, 0.25, 0.5, 0.75, 0.875], dtype=float)
+    # v_coords = np.array([0.015625, 0.171875, 0.328125, 0.671875, 0.890625], dtype=float)
+    u_coords = np.linspace(0.01, 0.99, 5, dtype=float)
+    v_coords = np.linspace(0.01, 0.99, 5, dtype=float)
+    U, V = np.meshgrid(u_coords, v_coords, indexing="xy")
+    parametric_coordinates = [(0, np.array([u, v])) for u, v in zip(U.ravel(), V.ravel())]
+
     reshaped_coeffs = []
     for fun_ind, fun in wing_fun_set.functions.items():
         coeffs = fun.coefficients
@@ -102,65 +111,73 @@ if __name__ == "__main__":
 
     reshaped_stacked_coeffs = csdl.vstack(reshaped_coeffs)
 
+    # create random points in bounding box of wing
+    num_points = 100
+    reshape_coeffs_np = reshaped_stacked_coeffs.value
+    x_min = np.min(reshape_coeffs_np[:, 0])
+    x_max = np.max(reshape_coeffs_np[:, 0])
+    y_min = np.min(reshape_coeffs_np[:, 1])
+    y_max = np.max(reshape_coeffs_np[:, 1])
+    z_min = np.min(reshape_coeffs_np[:, 2])
+    z_max = np.max(reshape_coeffs_np[:, 2])
+
     if check_derivatives:
-        # pick 10 coefficients randomly as design variables
+        # Pick a deterministic subset of coefficients as design variables.
         num_coeffs = reshaped_stacked_coeffs.shape[0]
         num_design_vars = 20
-        design_var_indices = np.random.choice(num_coeffs, size=num_design_vars, replace=False)
-        reshape_coeffs_np = reshaped_stacked_coeffs.value
+        design_var_indices = np.arange(num_design_vars) + 40
+        # np.random.choice(num_coeffs, size=num_design_vars, replace=False)
 
         for i in range(num_design_vars):
             index = design_var_indices[i]
             coeff_csdl = csdl.Variable(name=f"coeff_{i}", shape=(3, ), value=reshape_coeffs_np[index, :])
             coeff_csdl.set_as_design_variable()
             reshaped_stacked_coeffs = reshaped_stacked_coeffs.set(slices=csdl.slice[index, :], value=coeff_csdl)
-        
 
-        # create random points in bounding box of wing
-        num_points = 20
-        x_min = np.min(reshape_coeffs_np[:, 0])
-        x_max = np.max(reshape_coeffs_np[:, 0])
-        y_min = np.min(reshape_coeffs_np[:, 1])
-        y_max = np.max(reshape_coeffs_np[:, 1])
-        z_min = np.min(reshape_coeffs_np[:, 2])
-        z_max = np.max(reshape_coeffs_np[:, 2])
-
-        points = np.random.rand(num_points, 3)
-        points[:, 0] = x_min + points[:, 0] * (x_max - x_min)
-        points[:, 1] = y_min + points[:, 1] * (y_max - y_min)
-        points[:, 2] = z_min + points[:, 2] * (z_max - z_min)
+        # points = np.random.rand(num_points, 3)
+        # points[:, 0] = x_min + points[:, 0] * (x_max - x_min)
+        # points[:, 1] = y_min + points[:, 1] * (y_max - y_min)
+        # points[:, 2] = z_min + points[:, 2] * (z_max - z_min)
+        points = wing_fun_set.evaluate(parametric_coordinates=parametric_coordinates, plot=False).value
 
         points_csdl = csdl.Variable(name="points", value=points)
         points_csdl.set_as_design_variable()
 
-
     # 'project' and 'compute_vjp' of instance below are called in the custom op
     projection_model = bsm3.FunctionSetProjectionModel(
         function_set=wing_fun_set,
-        warm_start_nu=50, # controls per-patch triangulation resolution
-        warm_start_nv=50,
+        warm_start_nu=25, # controls per-patch triangulation resolution
+        warm_start_nv=25,
         sdf=True,
+        sdf_sign_mode="normal",
+        debug=True,
     )
 
     if check_derivatives:
         sdf_op = bsm3.FunctionSetClosestDistanceOperation(model=projection_model)
         sdf_values = sdf_op.evaluate(coefficients=reshaped_stacked_coeffs, points=points_csdl)
 
-        objective = csdl.sum(sdf_values**2)
+        first_der = csdl.derivative(sdf_values, points_csdl)
+
+        objective = csdl.sum(first_der)
         objective.set_as_objective()
 
         jax_sim = csdl.experimental.JaxSimulator(recorder=rec, gpu=False)
-        jax_sim.check_optimization_derivatives(step_size=1e-8, raise_on_error=False)
+        jax_sim.check_optimization_derivatives(step_size=1e-5, raise_on_error=False)
     
     if plot_sdf_slices:
         # create 3 slices of points in the x-z plane (structured grid) at different y values
-        nx = 100
-        nz = 100
-        num_slices = 3
-        y_values = np.linspace(y_min+0.1, y_max-0.1, num_slices)
+        nx = 200
+        nz = 200
+        num_slices = 10
+        y_values = np.linspace(y_min, y_max, num_slices)
         points_list = []
+        # x_min = 5.2
+        # x_max = 6.2
+        # z_min = -0.1
+        # z_max = 0.1
         for y in y_values:
-            x_coords = np.linspace(x_min-0.5, x_max+0.5, nx, dtype=float)
+            x_coords = np.linspace(x_min-1., x_max+1., nx, dtype=float)
             z_coords = np.linspace(z_min-0.5, z_max+0.5, nz, dtype=float)
             X, Z = np.meshgrid(x_coords, z_coords, indexing="xy")
             Y = np.full_like(X, y)
@@ -183,7 +200,7 @@ if __name__ == "__main__":
             y_stations=y_values,
             field_slices=field_slices,
             output=output_path,
-            contour_levels=30,
+            contour_levels=100,
             dpi=300,
         )
 
