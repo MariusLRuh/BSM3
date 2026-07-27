@@ -1,70 +1,59 @@
-from setuptools import setup, find_packages
+"""Setuptools configuration for BSM3.
 
-import codecs
-import os.path
+BSM3 is normally installed into externally managed multidisciplinary-analysis
+environments. In particular, DAFoam supplies a tightly coupled MPI/PETSc/Python
+stack that pip must not replace. Consequently this package deliberately has no
+automatic ``install_requires`` dependencies. See ``requirements.txt`` and
+``HPC_DAFOAM_INSTALL.md`` for the prerequisite audit and safe install command.
+"""
 
-def read(rel_path):
-    here = os.path.abspath(os.path.dirname(__file__))
-    with codecs.open(os.path.join(here, rel_path), 'r') as fp:
-        return fp.read()
+from pathlib import Path
 
-def get_version(rel_path):
-    for line in read(rel_path).splitlines():
-        if line.startswith('__version__'):
-            delim = '"' if '"' in line else "'"
-            return line.split(delim)[1]
-    else:
-        raise RuntimeError("Unable to find version string.")
+from setuptools import find_packages, setup
 
-with open("README.md", "r") as fh:
-    long_description = fh.read()
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent
+
+
+def get_version() -> str:
+    for line in (REPOSITORY_ROOT / "bsm3" / "__init__.py").read_text().splitlines():
+        if line.startswith("__version__"):
+            delimiter = '"' if '"' in line else "'"
+            return line.split(delimiter)[1]
+    raise RuntimeError("Unable to find the BSM3 version string.")
+
 
 setup(
-    name='bsm3',
-    version=get_version('bsm3/__init__.py'),
-    author='Author name',
-    author_email='author@gmail.com',
-    license='LGPLv3+',
-    keywords='python project template repository package',
-    url='http://github.com/LSDOlab/lsdo_project_template',
-    download_url='http://pypi.python.org/pypi/lsdo_project_template',
-    description='A template repository/package for LSDOlab projects',
-    long_description=long_description,
-    long_description_content_type='text/markdown',
+    name="bsm3",
+    version=get_version(),
+    author="Marius Ruh",
+    license="LGPLv3+",
+    url="https://github.com/MariusLRuh/BSM3",
+    description="Differentiable geometry and CFD mesh-motion tools",
+    long_description=(REPOSITORY_ROOT / "README.md").read_text(),
+    long_description_content_type="text/markdown",
     packages=find_packages(),
-    python_requires='>=3.7',
-    platforms=['any'],
-    install_requires=[
-        'numpy',
-        'pytest',
-        'myst-nb',
-        'sphinx==5.3.0',
-        'sphinx_rtd_theme',
-        'sphinx-copybutton',
-        'sphinx-autoapi==2.1.0',
-        'astroid==2.15.5',
-        'numpydoc',
-        'gitpython',
-        # 'sphinxcontrib-collections @ git+https://github.com/anugrahjo/sphinx-collections.git', # 'sphinx-collections',
-        'sphinxcontrib-bibtex',
-        'setuptools',
-        'wheel',
-        'twine',
-    ],
+    include_package_data=True,
+    package_data={
+        "bsm3.core.boundary_surface_movement": [
+            "embraer_175_no_winglets.stp",
+            "openvsp_euler_volume_mesh/e175_euler_volume.msh",
+            "openvsp_euler_volume_mesh/e175_openvsp_aircraft_wall.msh",
+            "openvsp_euler_volume_mesh/e175_openvsp_aircraft_wall.volume_map.npz",
+        ],
+    },
+    python_requires=">=3.9",
+    platforms=["any"],
+    # Deliberately empty: do not let installing BSM3 modify a DAFoam stack.
+    install_requires=[],
     classifiers=[
-        'Programming Language :: Python',
-        'Programming Language :: Python :: 3.7',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
-        'License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)',
-        'Operating System :: OS Independent',
-        'Intended Audience :: Developers',
-        'Natural Language :: English',
-        'Topic :: Documentation',
-        'Topic :: Documentation :: Sphinx',
-        'Topic :: Software Development',
-        'Topic :: Software Development :: Documentation',
-        'Topic :: Software Development :: Testing',
-        'Topic :: Software Development :: Libraries',
+        "Programming Language :: Python",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+        "Operating System :: OS Independent",
+        "Intended Audience :: Science/Research",
+        "Topic :: Scientific/Engineering",
     ],
 )

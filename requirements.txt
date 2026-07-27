@@ -1,18 +1,28 @@
-# Includes the list of all dependencies required to run setup() and 
-# use the package in some new environment.
-# E.g., for creating a conda environement, or to be used in testing workflow, 
-# or to host the documentation on Read the Docs
-
-numpy==1.24.3
-pytest==7.3.1
-sphinx==5.3.0
-myst-nb==0.17.2
-sphinx_rtd_theme==1.1.1 
-sphinx-copybutton==0.5.2
-sphinx-autoapi==1.9.0   # Defining exact versions to ensure things don't break
-numpydoc==1.5.0
-gitpython==3.1.31
-git+https://github.com/anugrahjo/sphinx-collections.git
-sphinxcontrib-bibtex==2.5.0
-
-
+# BSM3 intentionally has no pip-managed mandatory dependencies.
+#
+# It is designed to run inside an existing geometry/DAFoam environment, whose
+# MPI, PETSc, NumPy, SciPy, CSDL, and DAFoam versions must remain under the
+# environment administrator's control. Do not add active requirements here
+# without verifying compatibility with that complete stack.
+#
+# Prerequisites used by the current mesh-motion drivers:
+#   numpy
+#   scipy
+#   csdl_alpha
+#   lsdo_function_spaces
+#   jax
+#   gmsh
+#
+# Additional prerequisites for cfd_mesh_dafoam_analysis.py are supplied by the
+# sourced DAFoam environment:
+#   dafoam
+#   mpi4py
+#   petsc4py
+#
+# Optional development/visualization tools:
+#   pytest
+#   meshio
+#   pyvista
+#
+# Safe TSCC install (does not resolve or install dependencies):
+#   python -m pip install --no-deps --no-build-isolation -e .

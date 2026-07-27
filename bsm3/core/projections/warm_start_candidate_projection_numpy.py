@@ -9,6 +9,7 @@ import numpy as np
 from .orthogonality_projection_numpy import (
     OrthogonalityNewtonParams,
     SurfaceProjectionResult,
+    make_surface_orthogonality_evaluator_numpy,
     project_points_on_surface_edge_newton_numpy,
     project_points_orthogonality_newton_numpy,
 )
@@ -435,6 +436,81 @@ def build_edge_neighbor_map(
     return edge_map
 
 
+def _compute_geometric_near_edges(
+    function_set,
+    patch_id: np.ndarray,
+    uv0: np.ndarray,
+    points: np.ndarray,
+    *,
+    eps_edge: float,
+    gap_atol: float,
+    cell_factor: float,
+) -> List[List[EdgeName]]:
+    """Decide, per warm-start seed, which patch edges are close enough that the
+    neighbouring patch across them could hold the true closest point.
+
+    Unlike the parametric ``_which_edge`` band (``u <= eps_edge``), the test is
+    *physical* and grid-independent: an edge is "near" when the seed's physical
+    distance to it (``|S_u| * du_to_edge``) is within a band dominated by the
+    projection gap ``g = ||point - S(seed)||``. Rationale: the neighbour patch
+    touches the shared edge, so the nearest point it can offer is at least the
+    seed's physical distance to that edge; if that already exceeds the current
+    gap, the neighbour cannot win and can be skipped. When the warm start lands
+    in the *wrong* patch, ``g`` is inflated precisely because ``S(seed)`` is far
+    from the true closest point, which automatically widens the band enough to
+    admit the correct neighbour — without any dependence on ``nu``/``nv``.
+
+    A small floor tied to one sampling cell (``2*eps_edge ~ max(du, dv)``, times
+    the local tangent magnitude) keeps coverage at least as generous as the old
+    parametric band even when ``g -> 0`` (a node sitting essentially on a seam).
+    """
+    num_points = int(patch_id.shape[0])
+    near_edges: List[List[EdgeName]] = [[] for _ in range(num_points)]
+    if num_points == 0:
+        return near_edges
+
+    cell_scale = max(float(cell_factor), 0.0) * (2.0 * max(float(eps_edge), 0.0))
+    atol = max(float(gap_atol), 0.0)
+
+    groups: Dict[int, List[int]] = {}
+    for i in range(num_points):
+        groups.setdefault(int(patch_id[i]), []).append(i)
+
+    for pid, index_list in groups.items():
+        idx = np.asarray(index_list, dtype=int)
+        coeffs, degrees, knot_vectors = _get_patch_metadata(function_set, pid)
+        evaluate = make_surface_orthogonality_evaluator_numpy(degrees, knot_vectors)
+        uv = np.clip(np.asarray(uv0[idx], dtype=float), 0.0, 1.0)
+        S, Su, Sv, _, _, _ = evaluate(uv, coeffs)
+
+        a = np.linalg.norm(Su, axis=1)  # |S_u|: physical length per unit u
+        b = np.linalg.norm(Sv, axis=1)  # |S_v|: physical length per unit v
+        gap = np.linalg.norm(np.asarray(points[idx], dtype=float) - S, axis=1)
+
+        band_u = gap + atol + cell_scale * a
+        band_v = gap + atol + cell_scale * b
+        u = uv[:, 0]
+        v = uv[:, 1]
+        near_u0 = (a * u) <= band_u
+        near_u1 = (a * (1.0 - u)) <= band_u
+        near_v0 = (b * v) <= band_v
+        near_v1 = (b * (1.0 - v)) <= band_v
+
+        for local_index, global_index in enumerate(idx):
+            edges: List[EdgeName] = []
+            if near_u0[local_index]:
+                edges.append("u0")
+            if near_u1[local_index]:
+                edges.append("u1")
+            if near_v0[local_index]:
+                edges.append("v0")
+            if near_v1[local_index]:
+                edges.append("v1")
+            near_edges[int(global_index)] = edges
+
+    return near_edges
+
+
 def _build_candidate_specs(
     patch_id: np.ndarray,
     uv0: np.ndarray,
@@ -445,6 +521,7 @@ def _build_candidate_specs(
     include_current_patch_boundary: bool,
     include_neighbor_patch: bool,
     include_neighbor_boundary: bool,
+    near_edges: Optional[List[List[EdgeName]]] = None,
 ) -> List[_CandidateSpec]:
     specs: List[_CandidateSpec] = []
 
@@ -465,7 +542,11 @@ def _build_candidate_specs(
             kind="warm_start_patch",
         )
 
-        for edge in _which_edge(float(uv_seed[0]), float(uv_seed[1]), eps_edge):
+        if near_edges is not None:
+            seed_edges = near_edges[point_index]
+        else:
+            seed_edges = _which_edge(float(uv_seed[0]), float(uv_seed[1]), eps_edge)
+        for edge in seed_edges:
             edges_added.add(edge)
             _add_edge_candidate_specs(
                 specs,
@@ -518,6 +599,7 @@ def _build_retry_candidate_specs(
     include_current_patch_boundary: bool,
     include_neighbor_patch: bool,
     include_neighbor_boundary: bool,
+    near_edges: Optional[List[List[EdgeName]]] = None,
 ) -> List[_CandidateSpec]:
     specs: List[_CandidateSpec] = []
     num_edges = max(1, int(retry_num_closest_edges))
@@ -527,7 +609,17 @@ def _build_retry_candidate_specs(
         uv_seed = np.asarray(warm_uv0[point_index], dtype=float)
         seen = set()
 
-        for edge in _edges_by_distance(float(uv_seed[0]), float(uv_seed[1]))[:num_edges]:
+        # The nearest few edges (parametric) are always tried. When a geometric
+        # near-edge set is supplied it is unioned in: this is the retry-scoped
+        # form of the cross-patch fix, safe here because every candidate is
+        # vetted by the normal/distance gates before it can replace a selection.
+        edges_to_try = list(_edges_by_distance(float(uv_seed[0]), float(uv_seed[1]))[:num_edges])
+        if near_edges is not None:
+            for edge in near_edges[point_index]:
+                if edge not in edges_to_try:
+                    edges_to_try.append(edge)
+
+        for edge in edges_to_try:
             _add_edge_candidate_specs(
                 specs,
                 seen,
@@ -546,46 +638,70 @@ def _build_retry_candidate_specs(
     return specs
 
 
+_LOCAL_RETRY_DIRECTIONS = np.array(
+    [
+        [-1.0, 0.0],
+        [1.0, 0.0],
+        [0.0, -1.0],
+        [0.0, 1.0],
+        [-1.0, -1.0],
+        [-1.0, 1.0],
+        [1.0, -1.0],
+        [1.0, 1.0],
+    ],
+    dtype=float,
+)
+
+
 def _build_local_retry_candidate_specs(
     selected_patch_id: np.ndarray,
     selected_uv: np.ndarray,
     point_indices: np.ndarray,
     *,
     uv_step: float,
+    scale_factors: Sequence[float] = (1.0, 4.0, 16.0),
 ) -> List[_CandidateSpec]:
+    """Re-seed the same patch Newton around the current guess at *several*
+    length scales, not just one sampling cell.
+
+    The old builder probed a single ``±uv_step`` stencil (~one cell) and even
+    re-ran the identical seed via a ``[0, 0]`` offset. That cannot rescue a point
+    whose Newton parked on a spurious boundary minimum while the true closest
+    point sits well inside the patch: e.g. a node near a high-curvature skin
+    junction whose warm start lands at ``v = 1`` but whose real projection is at
+    ``v ~ 0.85`` (a full 0.15 away). Sweeping progressively coarser scales gives
+    the Newton seeds deep enough in the interior to fall into that basin, while
+    the min-``dist2`` selection keeps the genuinely closest result. This is the
+    "make the local retry an actual refinement" fix; it stays on-patch, so it
+    adds no cross-patch behaviour and cannot flip a node to another skin.
+    """
     specs: List[_CandidateSpec] = []
-    step = max(float(uv_step), 1e-12)
-    offsets = np.array(
-        [
-            [0.0, 0.0],
-            [-step, 0.0],
-            [step, 0.0],
-            [0.0, -step],
-            [0.0, step],
-            [-step, -step],
-            [-step, step],
-            [step, -step],
-            [step, step],
-        ],
-        dtype=float,
-    )
+    base = max(float(uv_step), 1e-12)
+    scales = [s for s in scale_factors if float(s) > 0.0] or [1.0]
 
     for point_index in np.asarray(point_indices, dtype=int):
         pid = int(selected_patch_id[point_index])
         uv_seed = np.asarray(selected_uv[point_index], dtype=float)
-        seen = set()
-        for offset in offsets:
-            candidate_uv = np.clip(uv_seed + offset, 0.0, 1.0)
-            _append_candidate_spec(
-                specs,
-                seen,
-                point_index=point_index,
-                candidate_patch=pid,
-                candidate_uv=candidate_uv,
-                fixed_axis=-1,
-                fixed_value=0.0,
-                kind="retry_local_patch",
-            )
+        # Pre-mark the seed so offsets that clip back onto it (e.g. an outward
+        # step at a patch bound) are skipped: re-running the seed that just
+        # failed is exactly the wasted work the old [0, 0] offset caused.
+        seen = {
+            (pid, -1, None, round(float(uv_seed[0]), 12), round(float(uv_seed[1]), 12))
+        }
+        for scale in scales:
+            step = base * float(scale)
+            for direction in _LOCAL_RETRY_DIRECTIONS:
+                candidate_uv = np.clip(uv_seed + step * direction, 0.0, 1.0)
+                _append_candidate_spec(
+                    specs,
+                    seen,
+                    point_index=point_index,
+                    candidate_patch=pid,
+                    candidate_uv=candidate_uv,
+                    fixed_axis=-1,
+                    fixed_value=0.0,
+                    kind="retry_local_patch",
+                )
 
     return specs
 
@@ -613,6 +729,7 @@ def _run_candidate_projections(
     residual = np.full((num_candidates,), np.inf, dtype=float)
     converged = np.zeros((num_candidates,), dtype=bool)
     iterations = np.zeros((num_candidates,), dtype=int)
+    boundary_clamped = np.zeros((num_candidates,), dtype=bool)
 
     groups: Dict[Tuple[int, int, float], List[int]] = {}
     for candidate_index in range(num_candidates):
@@ -679,6 +796,8 @@ def _run_candidate_projections(
         residual[group_indices] = result.residual
         converged[group_indices] = result.converged
         iterations[group_indices] = result.iterations
+        if result.boundary_clamped is not None:
+            boundary_clamped[group_indices] = result.boundary_clamped
 
     return {
         "point_index": point_index,
@@ -689,6 +808,7 @@ def _run_candidate_projections(
         "residual": residual,
         "converged": converged,
         "iterations": iterations,
+        "boundary_clamped": boundary_clamped,
         "candidate_kind": candidate_kind,
     }
 
@@ -858,6 +978,13 @@ def project_points_with_warm_start_candidates_numpy(
     edge_map_atol: float = 1e-6,
     edge_map_rtol: float = 1e-6,
     eps_edge: float = 0.005,
+    use_geometric_near_edges: bool = False,
+    use_geometric_retry_edges: bool = True,
+    near_edge_gap_atol: float = 1e-9,
+    near_edge_cell_factor: float = 1.0,
+    retry_dist_outlier_ratio: float = 2.0,
+    retry_dist_outlier_atol: float = 1e-4,
+    local_search_all_points: bool = False,
     include_current_patch_boundary: bool = True,
     include_neighbor_patch: bool = True,
     include_neighbor_boundary: bool = True,
@@ -898,6 +1025,18 @@ def project_points_with_warm_start_candidates_numpy(
             rtol=edge_map_rtol,
         )
 
+    near_edges = None
+    if use_geometric_near_edges or use_geometric_retry_edges:
+        near_edges = _compute_geometric_near_edges(
+            function_set,
+            warm.patch_id,
+            warm.uv0,
+            points,
+            eps_edge=eps_edge,
+            gap_atol=near_edge_gap_atol,
+            cell_factor=near_edge_cell_factor,
+        )
+
     specs = _build_candidate_specs(
         patch_id=warm.patch_id,
         uv0=warm.uv0,
@@ -907,6 +1046,10 @@ def project_points_with_warm_start_candidates_numpy(
         include_current_patch_boundary=include_current_patch_boundary,
         include_neighbor_patch=include_neighbor_patch,
         include_neighbor_boundary=include_neighbor_boundary,
+        # First pass stays conservative unless explicitly opted in: aggressive
+        # cross-patch inclusion here floods the *ungated* min-dist2 selection and
+        # can fold cells. The geometric edges are instead fed to the vetted retry.
+        near_edges=near_edges if use_geometric_near_edges else None,
     )
 
     candidate_results = _run_candidate_projections(
@@ -924,33 +1067,78 @@ def project_points_with_warm_start_candidates_numpy(
     selected_residual = candidate_results["residual"][best_candidate]
     selected_converged = candidate_results["converged"][best_candidate]
     selected_iterations = candidate_results["iterations"][best_candidate]
+    selected_boundary_clamped = candidate_results["boundary_clamped"][best_candidate]
     selected_kind = [candidate_results["candidate_kind"][idx] for idx in best_candidate]
 
-    failed_points = np.where(~selected_converged)[0]
-    if retry_on_failure and failed_points.size > 0:
+    # Retry not only on genuine non-convergence but also on boundary clamping: a
+    # point reported converged solely because the active set masked an outward
+    # residual at a patch edge wanted to slide across that edge. Feeding it into
+    # the retry path lets the neighbour-patch candidates compete. The retry only
+    # *replaces* the current selection when a candidate is strictly better and
+    # normal-compatible (_is_candidate_better / _is_retry_candidate_compatible),
+    # so over-flagging clamped points that truly belong on the edge is harmless.
+    # Distance-outlier detector (cheap, O(N), no extra projection): the warm
+    # start already found the closest *triangle* distance for every point. If the
+    # Newton converged to a point substantially farther than that, it fell into a
+    # wrong basin (a spurious interior minimum) even though it "converged" and is
+    # not boundary-clamped — these are the residual junction folds. Flagging them
+    # by the distance ratio means the (comparatively expensive) multi-scale local
+    # retry runs only on the handful of genuinely-suspect nodes, not on all of
+    # them, so the triangulation-accelerated projection stays fast on large
+    # meshes. The ratio is scale-invariant, so legitimately far-from-surface
+    # nodes (where warm and Newton distances are both large) are not flagged.
+    selected_dist = np.sqrt(np.maximum(selected_dist2, 0.0))
+    warm_dist = np.sqrt(np.maximum(np.asarray(warm.dist2, dtype=float), 0.0))
+    if retry_dist_outlier_ratio > 0.0:
+        dist_outlier = selected_dist > (
+            float(retry_dist_outlier_ratio) * warm_dist + float(retry_dist_outlier_atol)
+        )
+    else:
+        dist_outlier = np.zeros(points.shape[0], dtype=bool)
+
+    needs_retry = (~selected_converged) | selected_boundary_clamped | dist_outlier
+    failed_points = np.where(needs_retry)[0]
+
+    # The on-patch multi-scale local retry and the cross-patch edge candidates
+    # both run on `failed_points` (non-converged, boundary-clamped, or a distance
+    # outlier). `local_search_all_points` is an opt-in escape hatch that widens
+    # the local retry to *every* point; it is off by default because it costs an
+    # extra multi-scale Newton sweep over the whole mesh and the outlier detector
+    # already catches the wrong-basin nodes for a tiny fraction of the work.
+    if local_search_all_points:
+        local_points = np.arange(points.shape[0], dtype=int)
+    else:
+        local_points = failed_points
+
+    run_retry = retry_on_failure and (
+        failed_points.size > 0 or (retry_local_search and local_points.size > 0)
+    )
+    if run_retry:
         retry_specs: List[_CandidateSpec] = []
-        if retry_local_search:
+        if retry_local_search and local_points.size > 0:
             retry_specs.extend(
                 _build_local_retry_candidate_specs(
                     selected_patch_id,
                     selected_uv,
-                    failed_points,
+                    local_points,
                     uv_step=max(float(retry_local_step_factor), 0.0) * max(float(eps_edge), 1e-12),
                 )
             )
-        retry_specs.extend(
-            _build_retry_candidate_specs(
-                warm_patch_id=warm.patch_id,
-                warm_uv0=warm.uv0,
-                point_indices=failed_points,
-                edge_map=edge_map,
-                degenerate_edge_map=degenerate_edge_map,
-                retry_num_closest_edges=retry_num_closest_edges,
-                include_current_patch_boundary=include_current_patch_boundary,
-                include_neighbor_patch=include_neighbor_patch,
-                include_neighbor_boundary=include_neighbor_boundary,
+        if failed_points.size > 0:
+            retry_specs.extend(
+                _build_retry_candidate_specs(
+                    warm_patch_id=warm.patch_id,
+                    warm_uv0=warm.uv0,
+                    point_indices=failed_points,
+                    edge_map=edge_map,
+                    degenerate_edge_map=degenerate_edge_map,
+                    retry_num_closest_edges=retry_num_closest_edges,
+                    include_current_patch_boundary=include_current_patch_boundary,
+                    include_neighbor_patch=include_neighbor_patch,
+                    include_neighbor_boundary=include_neighbor_boundary,
+                    near_edges=near_edges if use_geometric_retry_edges else None,
+                )
             )
-        )
 
         if retry_specs:
             retry_results = _run_candidate_projections(
@@ -961,7 +1149,12 @@ def project_points_with_warm_start_candidates_numpy(
             )
             retry_best = _select_best_candidates(retry_results, num_points=points.shape[0])
 
-            for point_index in failed_points:
+            retry_points = (
+                np.union1d(failed_points, local_points)
+                if local_search_all_points
+                else failed_points
+            )
+            for point_index in retry_points:
                 retry_index = retry_best[point_index]
                 if retry_index < 0:
                     continue

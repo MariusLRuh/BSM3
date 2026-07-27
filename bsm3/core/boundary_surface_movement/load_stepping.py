@@ -1,0 +1,518 @@
+"""Fixed-count graph continuation with an OML projection at every load step.
+
+The topology stays fixed, but inverse-area graph weights and the factorization
+are rebuilt from the previously projected mesh.  Together with the nonlinear
+closest-point projection, this makes the increments genuinely path-dependent:
+
+``geometry(t_k) -> exact seams -> L(x_(k-1)) increment -> project to OML(t_k)``.
+
+The number of steps is deliberately fixed while a CSDL graph is being built.
+Adaptive step acceptance would make both the graph structure and its derivative
+discontinuous across design iterations.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Mapping, Sequence
+
+import csdl_alpha as csdl
+import numpy as np
+
+from bsm3.preprocessing import ProjectionMetadata, VertexEvaluationMetadata
+
+from .current_graph_solve import (
+    CurrentGraphModel,
+    CurrentGraphSolveOperation,
+)
+from .constraints import enforce_symmetry_plane
+from .elasticity import GraphLaplacianAssembler
+from .motion import ElasticityMotionSolver
+from .quadratic_distortion import (
+    CurrentGraphDistortionModel,
+    CurrentGraphDistortionSolveOperation,
+    QuadraticDistortionAssembler,
+    QuadraticDistortionConfig,
+)
+from .projection import (
+    ParameterizedProjection,
+    VertexBatch,
+    combine_vertices,
+    project_onto_oml,
+    project_onto_oml_parameterized,
+    reevaluate_vertices,
+)
+from .tangential_smoothing import FixedProjectedTangentialSmoother
+
+
+@dataclass(frozen=True)
+class GraphLoadStepResult:
+    """Outputs from a fixed graph-continuation path."""
+
+    final_mesh_vertices: csdl.Variable
+    final_preprojected_mesh_vertices: csdl.Variable
+    final_deformation_vertices: csdl.Variable
+    load_fractions: tuple[float, ...]
+    preprojected_mesh_history: tuple[csdl.Variable, ...]
+    projected_mesh_history: tuple[csdl.Variable, ...]
+    final_parameterized_projection: ParameterizedProjection | None = None
+    distortion_normalization_scale: float | None = None
+    distortion_redundancy: float | None = None
+    distortion_num_ear_clipped: int = 0
+    distortion_maximum_warp_ratio: float = 0.0
+
+
+def linear_load_fractions(num_steps: int) -> tuple[float, ...]:
+    """Return ``(1/N, ..., 1)`` for a positive, fixed load-step count."""
+
+    count = int(num_steps)
+    if count < 1 or count != num_steps:
+        raise ValueError("num_steps must be a positive integer.")
+    return tuple(float(item) / count for item in range(1, count + 1))
+
+
+def run_graph_load_steps(
+    *,
+    motion: ElasticityMotionSolver,
+    mesh,
+    initial_deformation_vertices,
+    deformation_vertex_ids,
+    component_coefficient_steps: Sequence[Mapping[object, object]],
+    projection_metadata: Sequence[ProjectionMetadata],
+    reevaluation_metadata: Sequence[VertexEvaluationMetadata],
+    projection_options: Mapping[str, object] | None = None,
+    load_fractions: Sequence[float] | None = None,
+    parameterize_final_projection: bool = False,
+    distortion_config: QuadraticDistortionConfig | None = None,
+    tangential_smoother: FixedProjectedTangentialSmoother | None = None,
+    symmetry_plane_vertex_ids: np.ndarray | None = None,
+    symmetry_plane_axis: int = 1,
+) -> GraphLoadStepResult:
+    """Unroll a fixed number of graph/projection continuation increments.
+
+    Each entry of ``component_coefficient_steps`` is the complete component
+    coefficient map at one monotonically increasing load fraction.  The motion
+    geometry state is evaluated repeatedly.  Consecutive component-reference
+    and seam-departure states are differenced, while the graph weights and
+    factorization are rebuilt from the *previously projected* mesh.  This is
+    the nonlinear continuation state.
+
+    With one coefficient entry this is algebraically identical to the existing
+    one-shot graph path.  Seam rows are overwritten by the current exact
+    intersection before every projection so projection roundoff from the prior
+    step cannot accumulate at a component junction.
+    """
+
+    if not isinstance(motion, ElasticityMotionSolver):
+        raise TypeError("motion must be an ElasticityMotionSolver.")
+    if not isinstance(motion.assembler, GraphLaplacianAssembler):
+        raise TypeError(
+            "run_graph_load_steps requires a GraphLaplacianAssembler."
+        )
+    coefficient_steps = tuple(component_coefficient_steps)
+    if not coefficient_steps:
+        raise ValueError("component_coefficient_steps must not be empty.")
+
+    if load_fractions is None:
+        fractions = linear_load_fractions(len(coefficient_steps))
+    else:
+        fractions = tuple(float(item) for item in load_fractions)
+        if len(fractions) != len(coefficient_steps):
+            raise ValueError(
+                "load_fractions must align with component_coefficient_steps."
+            )
+        if (
+            any(not np.isfinite(item) for item in fractions)
+            or any(item <= 0.0 or item > 1.0 for item in fractions)
+            or any(right <= left for left, right in zip(fractions, fractions[1:]))
+            or abs(fractions[-1] - 1.0) > 1e-12
+        ):
+            raise ValueError(
+                "load_fractions must be strictly increasing in (0, 1] and end at 1."
+            )
+
+    ids = np.asarray(deformation_vertex_ids, dtype=np.int64).reshape(-1)
+    initial = np.asarray(
+        getattr(initial_deformation_vertices, "value", initial_deformation_vertices),
+        dtype=float,
+    ).reshape((-1, 3))
+    if initial.shape[0] != ids.size:
+        raise ValueError(
+            "initial_deformation_vertices and deformation_vertex_ids must align."
+        )
+    if np.unique(ids).size != ids.size:
+        raise ValueError("deformation_vertex_ids must be unique.")
+    plane_ids = np.asarray(
+        (
+            np.empty(0, dtype=np.int64)
+            if symmetry_plane_vertex_ids is None
+            else symmetry_plane_vertex_ids
+        ),
+        dtype=np.int64,
+    ).reshape(-1)
+    if np.any(plane_ids < 0) or np.any(
+        plane_ids >= motion.initial_vertices.shape[0]
+    ):
+        raise ValueError(
+            "symmetry_plane_vertex_ids contains an out-of-range vertex."
+        )
+
+    initial_variable = (
+        initial_deformation_vertices
+        if hasattr(initial_deformation_vertices, "value")
+        else csdl.Variable(value=initial)
+    )
+    current_deformation = initial_variable * 1.0
+    current_mesh = csdl.Variable(value=motion.initial_vertices)
+    current_mesh = current_mesh.set(_row_slice(ids), current_deformation)
+    previous_state = None
+
+    deformation_row_by_id = {
+        int(vertex_id): row for row, vertex_id in enumerate(ids)
+    }
+    try:
+        free_deformation_rows = np.asarray(
+            [deformation_row_by_id[int(vertex)] for vertex in motion.free_ids],
+            dtype=np.int64,
+        )
+    except KeyError as error:
+        raise ValueError(
+            "deformation_vertex_ids must contain every graph free vertex."
+        ) from error
+
+    distance_weighting = getattr(
+        motion.assembler, "distance_weighting", None
+    )
+    graph_model = CurrentGraphModel(
+        mesh,
+        free_ids=motion.free_ids,
+        prescribed_ids=motion.prescribed_ids,
+        stiffening_exponent=motion.assembler.stiffening_exponent,
+        area_floor=motion.assembler.area_floor,
+        distance_weighting=distance_weighting,
+    )
+    distortion_model = None
+    distortion_system = None
+    if (
+        distortion_config is not None
+        and distortion_config.lambda_dist > 0.0
+    ):
+        distortion_system = QuadraticDistortionAssembler(
+            distortion_config
+        ).assemble(
+            mesh,
+            free_ids=motion.free_ids,
+            prescribed_ids=motion.prescribed_ids,
+        )
+        constrained_free_dofs = np.empty(0, dtype=np.int64)
+        if motion.symmetry_plane_ids is not None:
+            constrained_free_dofs = np.asarray(
+                [
+                    3 * motion._free_local[int(vertex)] + 1
+                    for vertex in motion.symmetry_plane_ids
+                ],
+                dtype=np.int64,
+            )
+        distortion_model = CurrentGraphDistortionModel(
+            graph_model,
+            distortion_system,
+            lambda_dist=distortion_config.lambda_dist,
+            constrained_free_dofs=constrained_free_dofs,
+            baseline_vertices=motion.initial_vertices,
+        )
+    graph_model_y = None
+    if motion.symmetry_plane_ids is not None and distortion_model is None:
+        graph_model_y = CurrentGraphModel(
+            mesh,
+            free_ids=motion.free_ids_y,
+            prescribed_ids=motion.prescribed_ids_y,
+            stiffening_exponent=motion.assembler.stiffening_exponent,
+            area_floor=motion.assembler.area_floor,
+            distance_weighting=distance_weighting,
+        )
+
+    preprojected_history: list[csdl.Variable] = []
+    projected_history: list[csdl.Variable] = []
+    final_parameterized_projection = None
+
+    for step_index, coefficient_map in enumerate(coefficient_steps):
+        state = motion.build_load_step_state(
+            component_coeffs=coefficient_map,
+            query_component_coeffs=coefficient_map,
+        )
+        reference_increment = (
+            state.free_reference
+            if previous_state is None
+            else state.free_reference - previous_state.free_reference
+        )
+        prescribed_increments = (
+            state.prescribed_deviations
+            if previous_state is None
+            else tuple(
+                current - previous
+                for current, previous in zip(
+                    state.prescribed_deviations,
+                    previous_state.prescribed_deviations,
+                )
+            )
+        )
+        prescribed_matrix = _stack_columns(prescribed_increments)
+        if distortion_model is None:
+            solved_blocks = CurrentGraphSolveOperation(graph_model).evaluate(
+                current_mesh,
+                prescribed_matrix,
+            )
+        else:
+            previous_reference = (
+                csdl.Variable(
+                    value=np.zeros((motion.free_ids.size, 3), dtype=float)
+                )
+                if previous_state is None
+                else previous_state.free_reference
+            )
+            accumulated_correction = (
+                current_mesh[_row_slice(motion.free_ids)]
+                - motion.initial_vertices[motion.free_ids]
+                - previous_reference
+            )
+            current_free_matrix = _stack_block_rows(
+                accumulated_correction,
+                motion._free_reference_groups,
+            )
+            total_prescribed_matrix = _stack_columns(
+                state.prescribed_deviations
+            )
+            solved_blocks = CurrentGraphDistortionSolveOperation(
+                distortion_model
+            ).evaluate(
+                current_mesh,
+                prescribed_matrix,
+                current_free_matrix,
+                total_prescribed_matrix,
+            )
+        correction_xz = csdl.Variable(
+            value=np.zeros((motion.free_ids.size, 3), dtype=float)
+        )
+        for block_index, group in enumerate(motion._free_reference_groups):
+            columns = csdl.slice[
+                :,
+                3 * block_index : 3 * (block_index + 1),
+            ]
+            correction_xz = correction_xz.set(
+                _row_slice(group.free_rows),
+                solved_blocks[_row_slice(group.free_rows)][columns],
+            )
+
+        if graph_model_y is None:
+            correction = correction_xz
+        else:
+            prescribed_increments_y = (
+                state.prescribed_deviations_y
+                if previous_state is None
+                else tuple(
+                    current - previous
+                    for current, previous in zip(
+                        state.prescribed_deviations_y,
+                        previous_state.prescribed_deviations_y,
+                    )
+                )
+            )
+            prescribed_y = _stack_columns(
+                tuple(
+                    item[csdl.slice[:, 1:2]]
+                    for item in prescribed_increments_y
+                )
+            )
+            solved_y_blocks = CurrentGraphSolveOperation(graph_model_y).evaluate(
+                current_mesh,
+                prescribed_y,
+            )
+            correction_y_free = csdl.Variable(
+                value=np.zeros((motion.free_ids_y.size, 1), dtype=float)
+            )
+            for block_index, group in enumerate(
+                motion._free_reference_groups_y
+            ):
+                correction_y_free = correction_y_free.set(
+                    _row_slice(group.free_rows),
+                    solved_y_blocks[
+                        _row_slice(group.free_rows)
+                    ][csdl.slice[:, block_index : block_index + 1]],
+                )
+            correction_y = csdl.sparse.matmat(
+                motion._scatter_y,
+                correction_y_free,
+            )
+            correction = csdl.concatenate(
+                (
+                    correction_xz[csdl.slice[:, 0:1]],
+                    correction_y,
+                    correction_xz[csdl.slice[:, 2:3]],
+                ),
+                axis=1,
+            )
+
+        free_preprojected = (
+            current_mesh[_row_slice(motion.free_ids)]
+            + reference_increment
+            + correction
+        )
+        preprojected_deformation = current_deformation.set(
+            _row_slice(free_deformation_rows),
+            free_preprojected,
+        )
+        preprojected_deformation = _set_exact_seams(
+            preprojected_deformation,
+            state.solutions,
+            deformation_row_by_id,
+        )
+
+        reevaluated_batch = reevaluate_vertices(
+            mesh=mesh,
+            metadata=reevaluation_metadata,
+            component_coefficients=coefficient_map,
+        )
+        preprojected_mesh = combine_vertices(
+            oml_projected_vertices=VertexBatch(
+                values=preprojected_deformation,
+                vertex_ids=ids,
+                num_mesh_vertices=motion.initial_vertices.shape[0],
+            ),
+            reevaluated_mesh_vertices=reevaluated_batch,
+        )
+        preprojected_mesh = enforce_symmetry_plane(
+            preprojected_mesh,
+            vertex_ids=plane_ids,
+            axis=symmetry_plane_axis,
+        )
+        if tangential_smoother is not None:
+            preprojected_mesh = tangential_smoother.evaluate(
+                preprojected_mesh,
+                component_coefficients=coefficient_map,
+                projection_options=projection_options,
+            )
+            preprojected_mesh = enforce_symmetry_plane(
+                preprojected_mesh,
+                vertex_ids=plane_ids,
+                axis=symmetry_plane_axis,
+            )
+            preprojected_deformation = preprojected_mesh[_row_slice(ids)]
+
+        is_last = step_index == len(coefficient_steps) - 1
+        if is_last and parameterize_final_projection:
+            final_parameterized_projection = project_onto_oml_parameterized(
+                deformed_mesh_vertices=preprojected_deformation,
+                deformed_mesh_vertex_ids=ids,
+                projection_metadata=projection_metadata,
+                component_coefficients=coefficient_map,
+                projection_options=dict(projection_options or {}),
+            )
+            projected_batch = final_parameterized_projection.vertices
+        else:
+            projected_batch = project_onto_oml(
+                deformed_mesh_vertices=preprojected_deformation,
+                deformed_mesh_vertex_ids=ids,
+                projection_metadata=projection_metadata,
+                component_coefficients=coefficient_map,
+                projection_options=dict(projection_options or {}),
+            )
+
+        projected_mesh = combine_vertices(
+            oml_projected_vertices=projected_batch,
+            reevaluated_mesh_vertices=reevaluated_batch,
+        )
+        projected_mesh = enforce_symmetry_plane(
+            projected_mesh,
+            vertex_ids=plane_ids,
+            axis=symmetry_plane_axis,
+        )
+        preprojected_history.append(preprojected_mesh)
+        projected_history.append(projected_mesh)
+        current_deformation = projected_mesh[_row_slice(ids)]
+        current_mesh = projected_mesh
+        previous_state = state
+
+    return GraphLoadStepResult(
+        final_mesh_vertices=projected_history[-1],
+        final_preprojected_mesh_vertices=preprojected_history[-1],
+        final_deformation_vertices=current_deformation,
+        load_fractions=fractions,
+        preprojected_mesh_history=tuple(preprojected_history),
+        projected_mesh_history=tuple(projected_history),
+        final_parameterized_projection=final_parameterized_projection,
+        distortion_normalization_scale=(
+            None
+            if distortion_model is None
+            else distortion_model.normalization_scale
+        ),
+        distortion_redundancy=(
+            None if distortion_model is None else distortion_model.redundancy
+        ),
+        distortion_num_ear_clipped=(
+            0 if distortion_system is None else distortion_system.num_ear_clipped
+        ),
+        distortion_maximum_warp_ratio=(
+            0.0
+            if distortion_system is None
+            else distortion_system.maximum_warp_ratio
+        ),
+    )
+
+
+def _stack_columns(values):
+    if not values:
+        raise ValueError("At least one component block is required.")
+    return values[0] if len(values) == 1 else csdl.concatenate(values, axis=1)
+
+
+def _stack_block_rows(values, groups):
+    """Place each component's free correction in its own 3-column block."""
+
+    blocks = []
+    for group in groups:
+        block = csdl.Variable(value=np.zeros(values.shape, dtype=float))
+        block = block.set(
+            _row_slice(group.free_rows),
+            values[_row_slice(group.free_rows)],
+        )
+        blocks.append(block)
+    return _stack_columns(tuple(blocks))
+
+
+def _set_exact_seams(values, solutions, row_by_id):
+    output = values
+    for solution in solutions:
+        if solution.vertex_ids is None:
+            continue
+        selected_solution_rows = []
+        output_rows = []
+        for solution_row, vertex_id in enumerate(solution.vertex_ids):
+            output_row = row_by_id.get(int(vertex_id))
+            if output_row is not None:
+                selected_solution_rows.append(solution_row)
+                output_rows.append(output_row)
+        if output_rows:
+            output = output.set(
+                _row_slice(np.asarray(output_rows, dtype=np.int64)),
+                solution.deformed_vertices[
+                    _row_slice(
+                        np.asarray(selected_solution_rows, dtype=np.int64)
+                    )
+                ],
+            )
+    return output
+
+
+def _row_slice(rows):
+    rows = np.asarray(rows, dtype=np.int64).reshape(-1)
+    if rows.size == 1:
+        row = int(rows[0])
+        return csdl.slice[row : row + 1, :]
+    return csdl.slice[rows.tolist(), :]
+
+
+__all__ = [
+    "GraphLoadStepResult",
+    "linear_load_fractions",
+    "run_graph_load_steps",
+]

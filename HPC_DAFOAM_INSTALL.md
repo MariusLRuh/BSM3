@@ -1,0 +1,58 @@
+# Installing BSM3 beside DAFoam on TSCC
+
+BSM3 must be installed from the same sourced environment used to run DAFoam.
+It deliberately declares no automatic pip dependencies so that installing it
+cannot replace the MPI, PETSc, NumPy, SciPy, or DAFoam packages selected by the
+cluster environment.
+
+## Safe editable installation
+
+```bash
+source /path/to/DAFoam/loadDAFoam.sh
+git clone --branch dev https://github.com/MariusLRuh/BSM3.git
+cd BSM3
+python -m pip install --no-deps --no-build-isolation -e .
+```
+
+Both flags are intentional:
+
+- `--no-deps` prevents dependency resolution, installation, and upgrades.
+- `--no-build-isolation` prevents pip from creating a build environment and
+  downloading build requirements.
+
+Do not run `pip install -r requirements.txt`; that file is an inactive
+prerequisite checklist rather than an environment specification.
+
+## Preflight check
+
+Before installation, verify that the active Python belongs to the intended
+DAFoam environment and that all imports resolve there:
+
+```bash
+which python
+python - <<'PY'
+import dafoam
+import mpi4py
+import petsc4py
+import numpy
+import scipy
+import csdl_alpha
+import lsdo_function_spaces
+import gmsh
+print("DAFoam/BSM3 prerequisite imports passed")
+PY
+```
+
+After installation:
+
+```bash
+python -c "import bsm3; print(bsm3.__version__, bsm3.__file__)"
+python -m pytest tests -q
+```
+
+The DAFoam analysis driver additionally requires a configured OpenFOAM case in
+`cfd_mesh_dafoam_analysis.py`. The deformation-only driver can be tested first:
+
+```bash
+python -m bsm3.core.boundary_surface_movement.cfd_mesh_movement_test
+```

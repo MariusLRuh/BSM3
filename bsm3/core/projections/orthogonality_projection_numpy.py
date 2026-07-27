@@ -16,9 +16,9 @@ except Exception:  # pragma: no cover
 
 @dataclass(frozen=True)
 class OrthogonalityNewtonParams:
-    max_iter: int = 100
-    tol_res: float = 1e-12
-    tol_step: float = 1e-12
+    max_iter: int = 40
+    tol_res: float = 1e-9
+    tol_step: float = 1e-9
     use_active_set: bool = True
     bound_eps: float = 1e-8
     snap_eps: float = 1e-8
@@ -36,6 +36,12 @@ class SurfaceProjectionResult:
     dist2: np.ndarray
     converged: np.ndarray
     iterations: np.ndarray
+    # True for points that "converged" only because the active set masked an
+    # outward-pointing residual at a patch boundary (u or v pinned at 0/1). Such
+    # points sit on a patch edge but may want to slide across it onto a
+    # neighbouring patch; the warm-start driver routes them into the retry path.
+    # None for edge/point candidates that are on a boundary by construction.
+    boundary_clamped: Optional[np.ndarray] = None
 
 
 def _require_numpy_bspline_factory() -> None:
@@ -262,19 +268,26 @@ def project_points_orthogonality_newton_numpy(
             break
 
     S, Su, Sv, Suu, Suv, Svv = evaluate(u, coeffs)
-    residual, _, dist2 = _compute_residual_and_jacobian(points, S, Su, Sv, Suu, Suv, Svv)
-    if params.use_active_set:
-        active = _active_mask_numpy(u, residual, params)
-        residual = np.linalg.norm(residual * active, axis=1)
-    else:
-        residual = np.linalg.norm(residual, axis=1)
+    residual_vec, _, dist2 = _compute_residual_and_jacobian(points, S, Su, Sv, Suu, Suv, Svv)
 
-    # number of (u,v) that lie on an edge (i.e., u=0, u=1, v=0, or v=1)
-    on_edge = (u[:, 0] == 0) | (u[:, 0] == 1) | (u[:, 1] == 0) | (u[:, 1] == 1)
-    edge_count = np.sum(on_edge)
-    # print(f"Orthogonality Newton: {edge_count}/{points.shape[0]} points projected onto edges.")
-    # print(f"                      {points.shape[0] - edge_count}/{points.shape[0]} points projected onto interior.")
-    # print("uv on edge:", u[on_edge])
+    # Detect boundary clamping: a point pinned at a parametric bound (u or v at
+    # 0/1) whose *unmasked* residual still points outward past that bound. The
+    # active set (below) zeros that component, so the point reports converged
+    # with a near-zero masked residual even though its true closest point may
+    # lie across the edge on a neighbouring patch. Surfacing this is what lets
+    # the warm-start driver retry such points instead of silently pinning them.
+    # This mirrors the block_lower/block_upper logic in _active_mask_numpy.
+    lower_on_bound = u <= params.bound_eps
+    upper_on_bound = u >= (1.0 - params.bound_eps)
+    outward_lower = lower_on_bound & (residual_vec > 0.0)
+    outward_upper = upper_on_bound & (residual_vec < 0.0)
+    boundary_clamped = np.any(outward_lower | outward_upper, axis=1)
+
+    if params.use_active_set:
+        active = _active_mask_numpy(u, residual_vec, params)
+        residual = np.linalg.norm(residual_vec * active, axis=1)
+    else:
+        residual = np.linalg.norm(residual_vec, axis=1)
 
     return SurfaceProjectionResult(
         uv=u,
@@ -284,6 +297,7 @@ def project_points_orthogonality_newton_numpy(
         dist2=dist2,
         converged=converged,
         iterations=iterations,
+        boundary_clamped=boundary_clamped,
     )
 
 

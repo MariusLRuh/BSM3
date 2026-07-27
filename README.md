@@ -1,51 +1,49 @@
-# lsdo_project_template
+# BSM3
 
-<!---
-[![Python](https://img.shields.io/pypi/pyversions/lsdo_project_template)](https://img.shields.io/pypi/pyversions/lsdo_project_template)
-[![Pypi](https://img.shields.io/pypi/v/lsdo_project_template)](https://pypi.org/project/lsdo_project_template/)
-[![Coveralls Badge][13]][14]
-[![PyPI version][10]][11]
-[![PyPI Monthly Downloads][12]][11]
--->
+BSM3 contains differentiable geometry, boundary-surface mesh motion,
+tetrahedral volume mesh motion, and an experimental CSDL/DAFoam coupling.
 
-[![GitHub Actions Test Badge](https://github.com/LSDOlab/lsdo_project_template/actions/workflows/actions.yml/badge.svg)](https://github.com/lsdo_project_template/lsdo_project_template/actions)
-[![Forks](https://img.shields.io/github/forks/LSDOlab/lsdo_project_template.svg)](https://github.com/LSDOlab/lsdo_project_template/network)
-[![Issues](https://img.shields.io/github/issues/LSDOlab/lsdo_project_template.svg)](https://github.com/LSDOlab/lsdo_project_template/issues)
+The current E175 workflows are:
 
+- `bsm3.core.boundary_surface_movement.cfd_mesh_movement_test`: geometry,
+  surface motion, volume motion, quality diagnostics, and visualization.
+- `bsm3.core.boundary_surface_movement.cfd_mesh_dafoam_analysis`: the same
+  geometry/mesh pipeline followed by DAFoam outputs such as CL and CD.
 
-A template repository for LSDOlab projects
+Both drivers expose explicit Python configuration blocks for the STEP geometry,
+surface mesh, volume mesh, geometry variables, mesh-motion settings, and flow
+configuration. There is no command-line or environment-variable configuration
+inside these drivers.
 
-This repository serves as a template for all LSDOlab projects with regard to documentation, testing and hosting of open-source code.
-Note that template users need to edit the README badge definitions for their respective packages.
+## Installation in an existing solver environment
 
-*README.md file contains high-level information about your package: it's purpose, high-level instructions for installation and usage.*
+BSM3 deliberately installs no dependencies automatically. This prevents a pip
+installation from changing an externally managed DAFoam, MPI, or PETSc stack.
 
-# Installation
-
-## Installation instructions for users
-For direct installation with all dependencies, run on the terminal or command line
-```sh
-pip install git+https://github.com/LSDOlab/lsdo_project_template.git
-```
-If you want users to install a specific branch, run
-```sh
-pip install git+https://github.com/LSDOlab/lsdo_project_template.git@branch
+```bash
+python -m pip install --no-deps --no-build-isolation -e .
 ```
 
-<!-- **Enabled by**: `packages=find_packages()` in the `setup.py` file. -->
+For the TSCC/DAFoam prerequisite audit and installation procedure, see
+[HPC_DAFOAM_INSTALL.md](HPC_DAFOAM_INSTALL.md).
 
-## Installation instructions for developers
-To install `lsdo_project_template`, first clone the repository and install using pip.
-On the terminal or command line, run
-```sh
-git clone https://github.com/LSDOlab/lsdo_project_template.git
-pip install -e ./lsdo_project_template
+## Running
+
+Run the deformation pipeline:
+
+```bash
+python -m bsm3.core.boundary_surface_movement.cfd_mesh_movement_test
 ```
 
-# For Developers
-For details on documentation, refer to the README in `docs` directory.
+Run the tests:
 
-For details on testing/pull requests, refer to the README in `tests` directory.
+```bash
+python -m pytest tests -q
+```
 
-# License
-This project is licensed under the terms of the **GNU Lesser General Public License v3.0**.
+The DAFoam driver requires a sourced DAFoam environment and an OpenFOAM case
+directory configured in `cfd_mesh_dafoam_analysis.py`.
+
+## License
+
+BSM3 is licensed under the GNU Lesser General Public License v3.0 or later.

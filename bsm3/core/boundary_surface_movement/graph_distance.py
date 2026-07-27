@@ -1,0 +1,234 @@
+"""Fixed reference-geodesic distance weighting for the surface graph solve.
+
+Even after all surface inversions are removed, the largest fuselage strain stays
+localized immediately aft of the wing trailing edge.  The inverse-area exponent
+alone cannot control the *blending length* of that transition.  This module adds
+an optional, purely setup-time secondary edge weight based on the reference-mesh
+geodesic (physical-edge-length) graph distance from the moving intersection
+seams:
+
+    w_ij = w_ij^A * [1 + beta * g(d_ij)] ,   d_ij = (d_i + d_j) / 2 ,
+
+with ``g(d) = exp(-d / L)`` (default) or a bounded rational ``(1 + d/L)^(-p)``.
+``d_i`` is the multi-source shortest-path distance from the enabled seam seeds.
+
+The distance field, the decay parameters, and therefore every edge multiplier
+are *reference/setup constants*: they never depend on the current displacement,
+so there is no design-dependent branch and the multiplier carries no derivative.
+``beta = 0`` yields a multiplier of exactly ``1`` on every edge and reproduces
+the plain inverse-area weighting bit-for-bit.
+
+The multiplier is bounded and symmetric by construction:
+
+* ``g`` decays monotonically from ``g(0) = 1`` to ``g(inf) = 0`` so the
+  far-field multiplier is exactly ``1`` (already normalized);
+* ``1 + beta*g`` is capped at ``cap >= 1``;
+* endpoints enter symmetrically through ``(d_i + d_j) / 2``.
+
+Unreachable vertices (outside the restricted band) have distance ``+inf``, so
+``g`` is ``0`` and their edges keep multiplier ``1`` -- no stiffness leak and the
+graph matrix stays SPD.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import scipy.sparse as sp
+from scipy.sparse.csgraph import dijkstra
+
+from bsm3.preprocessing.mesh_io import _as_mesh_data
+
+
+@dataclass(frozen=True)
+class GraphDistanceWeighting:
+    """Immutable per-vertex geodesic distance and its bounded edge multiplier.
+
+    ``vertex_distance`` is ``+inf`` where a vertex is unreachable from the seeds
+    over the restricted band graph.  ``edge_multipliers`` maps any array of
+    ordered/unordered vertex-index pairs to the fixed, positive, symmetric
+    multiplier ``min(1 + beta*g((d_a + d_b)/2), cap)``.
+    """
+
+    vertex_distance: np.ndarray
+    beta: float
+    length: float
+    cap: float
+    decay: str = "exp"
+    rational_power: float = 1.0
+    seed_ids: np.ndarray | None = None
+
+    def __post_init__(self):
+        if float(self.beta) < 0.0:
+            raise ValueError("beta must be non-negative.")
+        if float(self.length) <= 0.0:
+            raise ValueError("length must be positive.")
+        if float(self.cap) < 1.0:
+            raise ValueError("cap must be at least 1 (multipliers never fall below 1).")
+        if self.decay not in ("exp", "rational"):
+            raise ValueError("decay must be 'exp' or 'rational'.")
+        if self.decay == "rational" and float(self.rational_power) <= 0.0:
+            raise ValueError("rational_power must be positive.")
+
+    def _decay(self, distance: np.ndarray) -> np.ndarray:
+        distance = np.asarray(distance, dtype=float)
+        if self.decay == "exp":
+            # exp(-inf) == 0, so unreachable vertices decay to the far-field 1.
+            return np.exp(-distance / float(self.length))
+        # (1 + d/L)^(-p); (1 + inf)^(-p) == 0 with the same far-field limit.
+        return np.power(1.0 + distance / float(self.length), -float(self.rational_power))
+
+    def edge_multipliers(self, edge_vertices: np.ndarray) -> np.ndarray:
+        """Fixed multiplier per edge for a ``(num_edges, 2)`` index array."""
+        edges = np.asarray(edge_vertices, dtype=np.int64).reshape((-1, 2))
+        endpoint_distance = 0.5 * (
+            self.vertex_distance[edges[:, 0]] + self.vertex_distance[edges[:, 1]]
+        )
+        multiplier = 1.0 + float(self.beta) * self._decay(endpoint_distance)
+        capped = np.minimum(multiplier, float(self.cap))
+        # A defensive floor keeps the SPD guarantee even under rounding.
+        return np.maximum(capped, 1.0)
+
+    def edge_multiplier_map(self, edge_keys) -> dict[tuple[int, int], float]:
+        """Return ``{(a, b): multiplier}`` for a sequence of vertex-pair keys."""
+        keys = list(edge_keys)
+        if not keys:
+            return {}
+        multipliers = self.edge_multipliers(np.asarray(keys, dtype=np.int64))
+        return {tuple(int(v) for v in key): float(m) for key, m in zip(keys, multipliers)}
+
+    def summary(self, edge_vertices: np.ndarray) -> dict[str, float]:
+        """Distance-multiplier diagnostics over a set of edges."""
+        multipliers = self.edge_multipliers(edge_vertices)
+        finite = self.vertex_distance[np.isfinite(self.vertex_distance)]
+        return {
+            "beta": float(self.beta),
+            "length": float(self.length),
+            "cap": float(self.cap),
+            "decay": self.decay,
+            "num_reachable_vertices": int(finite.size),
+            "max_finite_distance": float(np.max(finite)) if finite.size else 0.0,
+            "multiplier_min": float(np.min(multipliers)),
+            "multiplier_median": float(np.median(multipliers)),
+            "multiplier_max": float(np.max(multipliers)),
+        }
+
+
+def compute_multisource_geodesic_distance(
+    mesh,
+    seed_ids: np.ndarray,
+    *,
+    restrict_vertex_ids: np.ndarray | None = None,
+    edge_length_floor: float = 1e-12,
+) -> np.ndarray:
+    """Physical-edge-length multi-source Dijkstra on the reference mesh graph.
+
+    Edges are the ring segments of every triangle/quad cell (the same graph the
+    stiffness assembler uses).  When ``restrict_vertex_ids`` is given, only edges
+    with *both* endpoints inside that band are kept, so shortest paths cannot
+    shortcut through unrelated components; vertices outside the band remain at
+    ``+inf``.  Distances use physical edge lengths because the CFD mesh is
+    strongly graded.
+    """
+
+    mesh_data = _as_mesh_data(mesh)
+    points = np.asarray(mesh_data.vertices, dtype=float).reshape((-1, 3))
+    num_vertices = points.shape[0]
+
+    seeds = np.unique(np.asarray(seed_ids, dtype=np.int64).reshape(-1))
+    if seeds.size == 0:
+        raise ValueError("At least one distance seed is required.")
+    if np.any(seeds < 0) or np.any(seeds >= num_vertices):
+        raise ValueError("seed_ids contains an out-of-range vertex.")
+
+    if restrict_vertex_ids is None:
+        allowed = None
+    else:
+        allowed = np.zeros(num_vertices, dtype=bool)
+        band = np.asarray(restrict_vertex_ids, dtype=np.int64).reshape(-1)
+        if band.size and (np.any(band < 0) or np.any(band >= num_vertices)):
+            raise ValueError("restrict_vertex_ids contains an out-of-range vertex.")
+        allowed[band] = True
+
+    length_floor = float(edge_length_floor)
+    if not np.isfinite(length_floor) or length_floor <= 0.0:
+        raise ValueError("edge_length_floor must be positive.")
+
+    edge_length: dict[tuple[int, int], float] = {}
+    for block in mesh_data.cell_blocks.values():
+        cells = np.asarray(block, dtype=np.int64)
+        if cells.ndim != 2 or cells.shape[1] < 2:
+            continue
+        for cell in cells:
+            count = cell.size
+            for local_index in range(count):
+                vertex_a = int(cell[local_index])
+                vertex_b = int(cell[(local_index + 1) % count])
+                if vertex_a == vertex_b:
+                    continue
+                if allowed is not None and not (allowed[vertex_a] and allowed[vertex_b]):
+                    continue
+                key = (vertex_a, vertex_b) if vertex_a < vertex_b else (vertex_b, vertex_a)
+                if key in edge_length:
+                    continue
+                edge_length[key] = max(
+                    float(np.linalg.norm(points[vertex_a] - points[vertex_b])),
+                    length_floor,
+                )
+
+    if not edge_length:
+        return np.full(num_vertices, np.inf, dtype=float)
+
+    keys = np.asarray(list(edge_length.keys()), dtype=np.int64)
+    values = np.asarray(list(edge_length.values()), dtype=float)
+    graph = sp.csr_matrix(
+        (
+            np.concatenate((values, values)),
+            (
+                np.concatenate((keys[:, 0], keys[:, 1])),
+                np.concatenate((keys[:, 1], keys[:, 0])),
+            ),
+        ),
+        shape=(num_vertices, num_vertices),
+    )
+    # ``min_only`` returns the per-vertex minimum over all seeds directly, which
+    # avoids materializing a dense ``(num_seeds, num_vertices)`` distance matrix
+    # on the strongly graded CFD mesh.
+    return dijkstra(graph, directed=False, indices=seeds, min_only=True)
+
+
+def build_graph_distance_weighting(
+    mesh,
+    seed_ids: np.ndarray,
+    *,
+    beta: float,
+    length: float,
+    cap: float = np.inf,
+    decay: str = "exp",
+    rational_power: float = 1.0,
+    restrict_vertex_ids: np.ndarray | None = None,
+) -> GraphDistanceWeighting:
+    """Assemble the fixed reference-geodesic distance weighting in one call."""
+
+    distance = compute_multisource_geodesic_distance(
+        mesh,
+        seed_ids,
+        restrict_vertex_ids=restrict_vertex_ids,
+    )
+    return GraphDistanceWeighting(
+        vertex_distance=distance,
+        beta=float(beta),
+        length=float(length),
+        cap=float(cap),
+        decay=decay,
+        rational_power=float(rational_power),
+        seed_ids=np.unique(np.asarray(seed_ids, dtype=np.int64).reshape(-1)),
+    )
+
+
+__all__ = [
+    "GraphDistanceWeighting",
+    "build_graph_distance_weighting",
+    "compute_multisource_geodesic_distance",
+]
