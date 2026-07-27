@@ -12,6 +12,59 @@ from bsm3.core.boundary_surface_movement.dafoam_csdl import (
     add_csdl_inputs_to_da_options,
     build_local_volume_coordinate_map,
 )
+from bsm3.core.boundary_surface_movement.run_dafoam_gmsh import (
+    FlowConfig,
+    build_da_options,
+    set_control_dict_max_iterations,
+)
+
+
+def test_flow_solver_controls_propagate_to_dafoam_options():
+    config = FlowConfig(
+        primal_min_res_tol=2.0e-10,
+        primal_min_iterations=7,
+        primal_max_iterations=4321,
+        adjoint_gmres_relative_tolerance=3.0e-9,
+        adjoint_gmres_absolute_tolerance=4.0e-15,
+        adjoint_gmres_max_iterations=567,
+        adjoint_gmres_restart=89,
+    )
+
+    options = build_da_options(config, ["aircraft"], ["farfield"])
+
+    assert options["primalMinResTol"] == pytest.approx(2.0e-10)
+    assert options["primalMinIters"] == 7
+    assert options["adjEqnOption"]["gmresRelTol"] == pytest.approx(3.0e-9)
+    assert options["adjEqnOption"]["gmresAbsTol"] == pytest.approx(4.0e-15)
+    assert options["adjEqnOption"]["gmresMaxIters"] == 567
+    assert options["adjEqnOption"]["gmresRestart"] == 89
+
+
+def test_primal_max_iterations_updates_control_dict(tmp_path):
+    system_directory = tmp_path / "system"
+    system_directory.mkdir()
+    control_dict = system_directory / "controlDict"
+    control_dict.write_text(
+        "// endTime 999;\n"
+        "startTime       0;\n"
+        "endTime         1000;\n",
+        encoding="utf-8",
+    )
+
+    set_control_dict_max_iterations(tmp_path, 4321)
+
+    assert control_dict.read_text(encoding="utf-8") == (
+        "// endTime 999;\n"
+        "startTime       0;\n"
+        "endTime         4321;\n"
+    )
+
+
+def test_flow_solver_controls_reject_invalid_values():
+    with pytest.raises(ValueError, match="primal_max_iterations"):
+        FlowConfig(primal_min_iterations=10, primal_max_iterations=9)
+    with pytest.raises(ValueError, match="relative_tolerance"):
+        FlowConfig(adjoint_gmres_relative_tolerance=0.0)
 
 
 class _AnalyticBackend:

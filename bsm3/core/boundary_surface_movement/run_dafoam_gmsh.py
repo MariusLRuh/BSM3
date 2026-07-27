@@ -88,6 +88,37 @@ class FlowConfig:
     normal_axis: str = "z"
     use_wall_functions: bool = False
     primal_min_res_tol: float = 1.0e-7
+    primal_min_iterations: int = 1
+    primal_max_iterations: int = 10_000
+    adjoint_gmres_relative_tolerance: float = 1.0e-4
+    adjoint_gmres_absolute_tolerance: float = 1.0e-14
+    adjoint_gmres_max_iterations: int = 1_000
+    adjoint_gmres_restart: int = 1_000
+
+    def __post_init__(self) -> None:
+        if self.primal_min_res_tol <= 0.0:
+            raise ValueError("primal_min_res_tol must be positive")
+        if self.primal_min_iterations < 1:
+            raise ValueError("primal_min_iterations must be at least one")
+        if self.primal_max_iterations < self.primal_min_iterations:
+            raise ValueError(
+                "primal_max_iterations must be greater than or equal to "
+                "primal_min_iterations"
+            )
+        if self.adjoint_gmres_relative_tolerance <= 0.0:
+            raise ValueError(
+                "adjoint_gmres_relative_tolerance must be positive"
+            )
+        if self.adjoint_gmres_absolute_tolerance <= 0.0:
+            raise ValueError(
+                "adjoint_gmres_absolute_tolerance must be positive"
+            )
+        if self.adjoint_gmres_max_iterations < 1:
+            raise ValueError(
+                "adjoint_gmres_max_iterations must be at least one"
+            )
+        if self.adjoint_gmres_restart < 1:
+            raise ValueError("adjoint_gmres_restart must be at least one")
 
 
 # Add case-specific DAFoam options here without changing build_da_options().
@@ -168,6 +199,33 @@ def validate_case_template(case_dir: Path) -> None:
             "The Gmsh file supplies the mesh only; DAFoam still requires the "
             "OpenFOAM 0/, constant/, and system/ case files."
         )
+
+
+def set_control_dict_max_iterations(
+    case_dir: Path,
+    maximum_iterations: int,
+) -> None:
+    """Set the steady primal iteration ceiling through controlDict endTime."""
+
+    if maximum_iterations < 1:
+        raise ValueError("maximum_iterations must be at least one")
+
+    control_dict = case_dir / "system" / "controlDict"
+    text = control_dict.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"(?m)^([ \t]*endTime[ \t]+)([^;\n]+)([ \t]*;)"
+    )
+    updated, count = pattern.subn(
+        rf"\g<1>{int(maximum_iterations)}\g<3>",
+        text,
+        count=1,
+    )
+    if count != 1:
+        raise ValueError(
+            f"Expected one active 'endTime ...;' entry in {control_dict}"
+        )
+    if updated != text:
+        control_dict.write_text(updated, encoding="utf-8")
 
 
 def read_gmsh_mesh_format(mesh_file: Path) -> tuple[str, int]:
@@ -458,6 +516,7 @@ def build_da_options(
         "designSurfaces": wall_patches,
         "solverName": config.solver_name,
         "primalMinResTol": config.primal_min_res_tol,
+        "primalMinIters": config.primal_min_iterations,
         "primalBC": {
             "U0": {
                 "variable": "U",
@@ -506,7 +565,10 @@ def build_da_options(
         },
         "adjStateOrdering": "cell",
         "adjEqnOption": {
-            "gmresRelTol": 1.0e-4,
+            "gmresRelTol": config.adjoint_gmres_relative_tolerance,
+            "gmresAbsTol": config.adjoint_gmres_absolute_tolerance,
+            "gmresMaxIters": config.adjoint_gmres_max_iterations,
+            "gmresRestart": config.adjoint_gmres_restart,
             "pcFillLevel": 1,
             "jacMatReOrdering": "natural",
         },
@@ -718,6 +780,60 @@ def make_parser() -> argparse.ArgumentParser:
         help=f"DAFoam primalMinResTol (default: {defaults.primal_min_res_tol})",
     )
     parser.add_argument(
+        "--primal-min-iterations",
+        type=int,
+        default=defaults.primal_min_iterations,
+        help=(
+            "DAFoam primalMinIters "
+            f"(default: {defaults.primal_min_iterations})"
+        ),
+    )
+    parser.add_argument(
+        "--primal-max-iterations",
+        type=int,
+        default=defaults.primal_max_iterations,
+        help=(
+            "Steady primal iteration ceiling written to controlDict endTime "
+            f"(default: {defaults.primal_max_iterations})"
+        ),
+    )
+    parser.add_argument(
+        "--adjoint-relative-tolerance",
+        type=float,
+        default=defaults.adjoint_gmres_relative_tolerance,
+        help=(
+            "Adjoint GMRES relative tolerance "
+            f"(default: {defaults.adjoint_gmres_relative_tolerance})"
+        ),
+    )
+    parser.add_argument(
+        "--adjoint-absolute-tolerance",
+        type=float,
+        default=defaults.adjoint_gmres_absolute_tolerance,
+        help=(
+            "Adjoint GMRES absolute tolerance "
+            f"(default: {defaults.adjoint_gmres_absolute_tolerance})"
+        ),
+    )
+    parser.add_argument(
+        "--adjoint-max-iterations",
+        type=int,
+        default=defaults.adjoint_gmres_max_iterations,
+        help=(
+            "Adjoint GMRES iteration ceiling "
+            f"(default: {defaults.adjoint_gmres_max_iterations})"
+        ),
+    )
+    parser.add_argument(
+        "--adjoint-restart",
+        type=int,
+        default=defaults.adjoint_gmres_restart,
+        help=(
+            "Adjoint GMRES restart interval "
+            f"(default: {defaults.adjoint_gmres_restart})"
+        ),
+    )
+    parser.add_argument(
         "--results-file",
         type=Path,
         default=Path("dafoam_results.json"),
@@ -797,8 +913,34 @@ def main() -> int:
         normal_axis=args.normal_axis,
         use_wall_functions=not args.no_wall_functions,
         primal_min_res_tol=args.primal_tolerance,
+        primal_min_iterations=args.primal_min_iterations,
+        primal_max_iterations=args.primal_max_iterations,
+        adjoint_gmres_relative_tolerance=args.adjoint_relative_tolerance,
+        adjoint_gmres_absolute_tolerance=args.adjoint_absolute_tolerance,
+        adjoint_gmres_max_iterations=args.adjoint_max_iterations,
+        adjoint_gmres_restart=args.adjoint_restart,
     )
 
+    configuration_error: str | None = None
+    if comm.rank == 0:
+        try:
+            set_control_dict_max_iterations(
+                case_dir,
+                config.primal_max_iterations,
+            )
+        except Exception as error:
+            configuration_error = f"{type(error).__name__}: {error}"
+    configuration_error = comm.bcast(configuration_error, root=0)
+    if configuration_error is not None:
+        if comm.rank == 0:
+            print(
+                "\nERROR while configuring the primal iteration limit:\n"
+                f"{configuration_error}",
+                file=sys.stderr,
+            )
+        return 2
+
+    comm.Barrier()
     try:
         functions = run_dafoam(
             case_dir=case_dir,

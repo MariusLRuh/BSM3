@@ -48,6 +48,7 @@ from bsm3.core.boundary_surface_movement.run_dafoam_gmsh import (
     FlowConfig,
     build_da_options,
     convert_and_check_mesh,
+    set_control_dict_max_iterations,
     validate_case_template,
     validate_reused_mesh,
 )
@@ -183,6 +184,12 @@ FLOW = FlowConfig(
     normal_axis="z",
     use_wall_functions=False,
     primal_min_res_tol=1.0e-7,
+    primal_min_iterations=1,
+    primal_max_iterations=10_000,
+    adjoint_gmres_relative_tolerance=1.0e-4,
+    adjoint_gmres_absolute_tolerance=1.0e-14,
+    adjoint_gmres_max_iterations=1_000,
+    adjoint_gmres_restart=1_000,
 )
 
 
@@ -245,6 +252,7 @@ def _require_case_directory(config: OpenFOAMCaseConfig) -> Path:
 def prepare_openfoam_case(
     config: OpenFOAMCaseConfig,
     model_files: E175ModelFiles,
+    flow: FlowConfig,
     comm,
 ) -> Path:
     """Convert/validate the mesh on rank zero and synchronize all ranks."""
@@ -259,6 +267,10 @@ def prepare_openfoam_case(
     if comm.rank == 0:
         try:
             validate_case_template(case_directory)
+            set_control_dict_max_iterations(
+                case_directory,
+                flow.primal_max_iterations,
+            )
             if config.reuse_openfoam_mesh:
                 validate_reused_mesh(
                     case_directory,
@@ -292,7 +304,7 @@ def create_dafoam_backend(
     model_files: E175ModelFiles,
     comm,
 ) -> PYDAFoamBackend:
-    case_directory = prepare_openfoam_case(case, model_files, comm)
+    case_directory = prepare_openfoam_case(case, model_files, flow, comm)
     da_options = add_csdl_inputs_to_da_options(
         build_da_options(
             flow,
