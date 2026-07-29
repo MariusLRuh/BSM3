@@ -263,6 +263,29 @@ def reduce_gradient(
     return np.zeros_like(contribution)
 
 
+def _raise_if_any_rank_failed(
+    comm: Any,
+    message: Optional[str],
+    *,
+    context: str,
+) -> None:
+    """Collectively raise on every rank if *any* rank reports a message.
+
+    Each rank contributes ``message`` (``None`` on success); an ``allgather``
+    makes the combined outcome known to everyone, so validation never raises on
+    a single rank while the others block in a later collective.
+    """
+
+    if comm_size(comm) == 1:
+        if message is not None:
+            raise RuntimeError(f"{context}: {message}")
+        return
+    messages = comm.allgather(message)
+    offenders = [m for m in messages if m is not None]
+    if offenders:
+        raise RuntimeError(f"{context}: " + "; ".join(offenders))
+
+
 def verify_replicated_values(
     comm: Any,
     array: np.ndarray,
@@ -270,10 +293,13 @@ def verify_replicated_values(
     name: str,
     absolute_tolerance: float = 0.0,
 ) -> None:
-    """Assert that ``array`` is identical on every rank.
+    """Assert, collectively, that ``array`` is identical on every rank.
 
     Used in debug mode to catch silent divergence of the replicated design
-    variables before rank 0 uses its own copy.  A no-op in a one-rank world.
+    variables before rank 0 uses its own copy.  Every rank computes its own
+    mismatch against the rank-0 reference and the outcome is reduced with
+    :func:`_raise_if_any_rank_failed`, so the error is raised synchronously on
+    all ranks.  A no-op in a one-rank world with matching values.
     """
 
     if comm_size(comm) == 1:
@@ -283,17 +309,57 @@ def verify_replicated_values(
         root=0,
     )
     local = np.asarray(array, dtype=np.float64)
+    message: Optional[str] = None
     if local.shape != reference.shape:
-        raise RuntimeError(
-            f"Replicated array {name!r} has shape {local.shape} on rank "
-            f"{comm_rank(comm)} but {reference.shape} on rank 0."
+        message = (
+            f"rank {comm_rank(comm)} shape {local.shape} != {reference.shape}"
         )
-    worst = float(np.max(np.abs(local - reference))) if local.size else 0.0
-    if worst > absolute_tolerance:
-        raise RuntimeError(
-            f"Replicated array {name!r} differs across ranks by {worst:.3e} "
-            f"on rank {comm_rank(comm)} (tolerance {absolute_tolerance:.3e})."
+    else:
+        worst = float(np.max(np.abs(local - reference))) if local.size else 0.0
+        if worst > absolute_tolerance:
+            message = (
+                f"rank {comm_rank(comm)} differs by {worst:.3e} "
+                f"(tolerance {absolute_tolerance:.3e})"
+            )
+    _raise_if_any_rank_failed(
+        comm, message, context=f"Replicated array {name!r} is not identical across ranks"
+    )
+
+
+def verify_seed_ownership(
+    comm: Any,
+    seed: np.ndarray,
+    *,
+    ownership: str,
+    name: str = "seed",
+    absolute_tolerance: float = 0.0,
+) -> None:
+    """Collectively enforce the cotangent-seed ownership contract.
+
+    ``replicated`` requires the seed to be identical on every rank;
+    ``root`` requires the seed to be exactly zero on every non-root rank (only
+    rank 0 owns the assembled cotangent).  Both checks are reduced across ranks
+    so a violation raises synchronously everywhere.
+    """
+
+    if ownership not in ("replicated", "root"):
+        raise ValueError("ownership must be 'replicated' or 'root'.")
+    if comm_size(comm) == 1:
+        return
+    if ownership == "replicated":
+        verify_replicated_values(
+            comm, seed, name=name, absolute_tolerance=absolute_tolerance
         )
+        return
+    message: Optional[str] = None
+    if not is_root(comm):
+        local = np.asarray(seed, dtype=np.float64)
+        worst = float(np.max(np.abs(local))) if local.size else 0.0
+        if worst > absolute_tolerance:
+            message = f"rank {comm_rank(comm)} nonzero seed (max {worst:.3e})"
+    _raise_if_any_rank_failed(
+        comm, message, context=f"Root-owned {name!r} must be zero on non-root ranks"
+    )
 
 
 __all__ = [
@@ -308,4 +374,5 @@ __all__ = [
     "assemble_local_gradient",
     "reduce_gradient",
     "verify_replicated_values",
+    "verify_seed_ownership",
 ]

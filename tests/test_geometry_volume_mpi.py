@@ -21,12 +21,15 @@ from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
     reduce_gradient,
     resolve_comm,
     run_on_root,
+    verify_replicated_values,
+    verify_seed_ownership,
 )
 from bsm3.core.boundary_surface_movement.geometry_volume_backend import (
     CSDLRecorderBackend,
 )
 from bsm3.core.boundary_surface_movement.geometry_volume_operation import (
     GeometryVolumeOperation,
+    GeometryVolumeVJP,
 )
 from bsm3.core.boundary_surface_movement.forward_only_fd_checker import (
     ADJOINT_MARKER,
@@ -65,6 +68,29 @@ class ScriptedComm:
 
     def Barrier(self):
         return None
+
+
+class CollectiveComm:
+    """Mock one rank of a small world for the validation collectives.
+
+    ``bcast`` returns the stored rank-0 reference; ``allgather`` returns this
+    rank's contribution in its slot and the caller-specified messages from the
+    other ranks, which is exactly what a real ``allgather`` would produce.  This
+    lets a single-threaded test prove the *synchronous* raise: a rank whose own
+    value is fine still raises when a peer's is not.
+    """
+
+    def __init__(self, rank, size, *, reference=None, other_messages=None):
+        self.rank = rank
+        self.size = size
+        self._reference = reference
+        self._others = other_messages or {}
+
+    def bcast(self, obj, root=0):
+        return self._reference if self.rank != root else obj
+
+    def allgather(self, obj):
+        return [obj if r == self.rank else self._others.get(r) for r in range(self.size)]
 
 
 class SummingComm:
@@ -166,6 +192,62 @@ def test_run_on_root_propagates_exception_symmetrically():
     # Non-root sees the same broadcast error string and raises identically.
     with pytest.raises(RuntimeError, match="root failed"):
         run_on_root(nonroot, lambda: None)
+
+
+def test_verify_replicated_values_raises_synchronously_on_mismatch():
+    reference = np.array([[1.0, 2.0, 3.0]])
+    # Rank 1's local value differs -> it raises.
+    comm1 = CollectiveComm(1, 2, reference=reference, other_messages={0: None})
+    with pytest.raises(RuntimeError, match="not identical"):
+        verify_replicated_values(comm1, reference + 1.0, name="dv")
+    # Matching values on all ranks -> no raise.
+    comm0 = CollectiveComm(0, 2, reference=reference, other_messages={1: None})
+    verify_replicated_values(comm0, reference, name="dv")
+
+
+def test_verify_replicated_values_is_collective_not_one_sided():
+    # The crux of the fix: a rank whose OWN value matches must still raise if a
+    # peer reports a mismatch, so no rank is left in a later collective.
+    reference = np.zeros((1, 3))
+    peer_failure = {1: "rank 1 differs by 1.000e+00 (tolerance 0.000e+00)"}
+    comm0 = CollectiveComm(0, 2, reference=reference, other_messages=peer_failure)
+    with pytest.raises(RuntimeError, match="rank 1 differs"):
+        verify_replicated_values(comm0, reference, name="dv")
+
+
+def test_seed_ownership_root_mode_rejects_nonzero_nonroot_seed():
+    comm = CollectiveComm(1, 2, reference=None, other_messages={0: None})
+    with pytest.raises(RuntimeError, match="must be zero on non-root"):
+        verify_seed_ownership(comm, np.ones((4, 3)), ownership="root", name="seed")
+
+
+def test_seed_ownership_root_mode_accepts_zero_nonroot_seed():
+    comm = CollectiveComm(1, 2, reference=None, other_messages={0: None})
+    verify_seed_ownership(comm, np.zeros((4, 3)), ownership="root", name="seed")
+
+
+def test_seed_ownership_root_mode_ignores_root_seed():
+    # Rank 0 owns the assembled cotangent; its own seed is not checked for zero.
+    comm = CollectiveComm(0, 2, reference=None, other_messages={1: None})
+    verify_seed_ownership(comm, np.ones((4, 3)), ownership="root", name="seed")
+
+
+def test_seed_ownership_rejects_invalid_mode():
+    with pytest.raises(ValueError, match="replicated"):
+        verify_seed_ownership(SerialComm(), np.zeros((4, 3)), ownership="bogus")
+
+
+def test_geometry_volume_vjp_enforces_root_seed_ownership():
+    # A non-root rank whose seed is not zero (root ownership) must fail before
+    # the VJP touches any broadcast collective.
+    comm = CollectiveComm(1, 2, reference=None, other_messages={0: None})
+    vjp = GeometryVolumeVJP(
+        None, comm, output_shape=(4, 3),
+        design_variable_specs={"a": (1,)}, seed_ownership="root",
+    )
+    inputs = {"a": np.array([0.3]), "d_volume_coordinates": np.ones((4, 3))}
+    with pytest.raises(RuntimeError, match="must be zero on non-root"):
+        vjp.compute(inputs, {})
 
 
 def test_duplicate_processor_boundary_points_sum():

@@ -395,8 +395,15 @@ class PYDAFoamBackend:
 
             # In deterministic FD mode restore the fixed converged baseline
             # before every primal; otherwise fall back to the production warm
-            # start from the previous solution.
-            if self.deterministic_fd_mode and self._baseline_states is not None:
+            # start from the previous solution.  A missing baseline is an error,
+            # never a silent fall-back to a history-dependent cached state.
+            if self.deterministic_fd_mode:
+                if self._baseline_states is None:
+                    raise RuntimeError(
+                        "deterministic_fd_mode is enabled but no baseline state "
+                        "has been captured. Run a converged baseline primal and "
+                        "call set_deterministic_baseline() first."
+                    )
                 dafoam.setStates(self._baseline_states.copy())
             elif self._cached_states is not None:
                 dafoam.setStates(self._cached_states.copy())
@@ -450,17 +457,44 @@ class PYDAFoamBackend:
         self._cached_inputs = None
 
     def _invalidate_adjoint_linearization(self) -> None:
-        """Force the next adjoint to reassemble ``dRdWTPC``/``ksp``/coloring."""
+        """Destroy and clear the state/mesh-dependent adjoint matrix and PC.
+
+        Coloring depends only on the topology (the Jacobian sparsity pattern),
+        not on the state or coordinate values, so it is intentionally NOT reset
+        here and is reused across deformations.  Only the state-dependent
+        ``dRdWTPC`` matrix and its ``ksp`` are rebuilt (lazily inside
+        :meth:`_solve_adjoint`).  The old PETSc objects are explicitly destroyed
+        so their memory is released instead of leaked.
+        """
 
         dafoam = self.dafoam_instance
-        # These attributes are lazily (re)built inside ``_solve_adjoint``.
-        if getattr(dafoam, "dRdWTPC", None) is not None:
-            dafoam.dRdWTPC = None
-        if getattr(dafoam, "ksp", None) is not None:
+        ksp = getattr(dafoam, "ksp", None)
+        if ksp is not None:
+            try:
+                ksp.destroy()
+            except Exception:
+                pass
             dafoam.ksp = None
+        preconditioner = getattr(dafoam, "dRdWTPC", None)
+        if preconditioner is not None:
+            try:
+                preconditioner.destroy()
+            except Exception:
+                pass
+            dafoam.dRdWTPC = None
+
+    def invalidate_topology(self) -> None:
+        """Invalidate coloring *and* the linearization for a topology change.
+
+        Call this only when the mesh connectivity/sparsity actually changes
+        (a different mesh), which is the sole case where the reusable coloring
+        becomes stale. A pure coordinate deformation does not need it.
+        """
+
         self._run_coloring = (
-            dafoam.getOption("adjEqnSolMethod") != "fixedPoint"
+            self.dafoam_instance.getOption("adjEqnSolMethod") != "fixedPoint"
         )
+        self._invalidate_adjoint_linearization()
 
     def compute_vjp(
         self,

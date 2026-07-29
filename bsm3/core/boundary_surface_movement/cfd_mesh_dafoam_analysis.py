@@ -434,6 +434,7 @@ def build_cfd_analysis_rank0(
     *,
     geometry_values: dict[str, float],
     debug: bool = False,
+    seed_ownership: str = "replicated",
 ) -> E175DAFoamResult:
     """Build the rank-0 geometry->volume + distributed-DAFoam graph.
 
@@ -489,6 +490,9 @@ def build_cfd_analysis_rank0(
         output_shape=output_shape,
         design_variable_specs=design_variable_specs,
         debug=debug,
+        # The reverse-pass seed is DAFoam's volume-coordinate cotangent, whose
+        # ownership must match DAFoam's gradient assembly mode.
+        seed_ownership=seed_ownership,
     )
     volume_coordinates = geometry_operation.evaluate(design_variable_map)
     volume_coordinates.add_name("global_volume_coordinates")
@@ -599,6 +603,7 @@ def main() -> E175DAFoamResult:
             comm,
             geometry_values=GEOMETRY_VALUES,
             debug=GEOMETRY_VOLUME_DEBUG,
+            seed_ownership=DAFOAM_VOLUME_GRADIENT_OWNERSHIP,
         )
     elif GEOMETRY_VOLUME_MODE == "replicated":
         result = build_cfd_analysis(

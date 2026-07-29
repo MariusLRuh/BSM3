@@ -189,3 +189,38 @@ Lustre scratch, with `run_metadata.txt` (git commit, rank count, host) and an
    assumption).
 5. Do not update stored derivative references to match the new implementation
    until the analytical derivative independently passes Gates A–D.
+
+## 9. Hardening revision (pre-TSCC review fixes)
+
+Applied before any expensive cluster run:
+
+1. **Collective-safe validation.** `verify_replicated_values` now reduces each
+   rank's outcome with an `allgather` and raises synchronously on every rank —
+   a matching rank still raises if a peer diverges, so no rank is stranded in a
+   later collective.
+2. **Cotangent ownership enforcement.** New `verify_seed_ownership` +
+   `GeometryVolumeOperation(..., seed_ownership=...)`: `replicated` verifies all
+   reverse seeds are identical, `root` verifies non-root seeds are zero. The
+   driver propagates `DAFOAM_VOLUME_GRADIENT_OWNERSHIP` into the operation so the
+   contract matches DAFoam's gradient assembly; a violation fails synchronously.
+3. **Coloring vs. adjoint invalidation.** `_invalidate_adjoint_linearization`
+   now `destroy()`s the old PETSc `KSP`/`dRdWTPC` and rebuilds only those
+   state-dependent objects; coloring (topology-only) is reused. A separate
+   `invalidate_topology()` resets coloring for an actual connectivity change.
+4. **Deterministic FD is strict.** Enabling `deterministic_fd_mode` without a
+   captured baseline now raises instead of silently using a history-dependent
+   cached state.
+5. **Level-3 direction corrected.** The DAFoam-only direction is now a proper
+   normalized central difference `(X(d+h·δd) − X(d−h·δd)) / (2h)`; the sweep
+   tests `X ± η·direction` and reports RMS/max coordinate displacement and the
+   CL/CD FD numerator at every step.
+6. **Ladder is collective-safe.** Every root-only geometry forward/VJP in
+   Levels 0–5 is wrapped in `run_on_root`; the CL and CD adjoints reuse one
+   converged baseline primal (no rerun between them, preconditioner reused).
+7. **Slurm hardening.** `LADDER_NP` must not exceed `SLURM_NTASKS` (no
+   `--oversubscribe`); outputs require an explicit Lustre scratch path (no `/tmp`
+   fallback); DAFoam shell init is sourced with `set +u`/`set -u` guards.
+
+Local tests: 34 pass (24 mock-MPI/backend + 10 DAFoam), including the
+collective-safe validation, root/replicated seed-ownership enforcement, and the
+deterministic-baseline guards.

@@ -52,10 +52,12 @@ from bsm3.core.boundary_surface_movement.geometry_volume_backend import (
     read_gmsh_volume_point_count,
 )
 from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
+    broadcast_array,
     comm_rank,
     comm_size,
     is_root,
     resolve_comm,
+    run_on_root,
 )
 
 
@@ -154,11 +156,11 @@ def level0_forward_repetition(comm, repetitions: int = 2) -> dict[str, Any]:
     geometry_backend = _make_geometry_backend(comm)
 
     output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
-    baseline_coordinates = None
-    if is_root(comm):
-        baseline_coordinates = geometry_backend.forward(GEOMETRY_VALUES)
-    from bsm3.core.boundary_surface_movement.geometry_volume_mpi import broadcast_array
-
+    # run_on_root: rank 0 deforms the mesh; a root exception is broadcast before
+    # the following collective so no rank is stranded.
+    baseline_coordinates = run_on_root(
+        comm, lambda: geometry_backend.forward(GEOMETRY_VALUES)
+    )
     coordinates = broadcast_array(
         comm, baseline_coordinates, shape=output_shape, dtype=np.float64
     )
@@ -196,11 +198,9 @@ def level1_mesh_motion_forward(comm) -> dict[str, Any]:
     geometry_backend = _make_geometry_backend(comm)
     output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
 
-    coordinates = None
-    if is_root(comm):
-        coordinates = geometry_backend.forward(GEOMETRY_VALUES)
-    from bsm3.core.boundary_surface_movement.geometry_volume_mpi import broadcast_array
-
+    coordinates = run_on_root(
+        comm, lambda: geometry_backend.forward(GEOMETRY_VALUES)
+    )
     coordinates = broadcast_array(comm, coordinates, shape=output_shape, dtype=np.float64)
 
     payload = {
@@ -223,39 +223,59 @@ def level1_mesh_motion_forward(comm) -> dict[str, Any]:
 # Level 2: mesh-motion custom-op VJP dot-product (no DAFoam)
 # ---------------------------------------------------------------------------
 def level2_mesh_motion_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
-    if not is_root(comm):
-        return {}
+    # No DAFoam: all mesh-motion work is on rank 0. Every rank still drives the
+    # same run_on_root sequence so a root exception cannot strand the others
+    # (this level is intended for np=1 but stays collective-safe for any np).
     geometry_backend = _make_geometry_backend(comm)
     baseline = {name: np.asarray(value, dtype=float) for name, value in GEOMETRY_VALUES.items()}
-    coordinates = geometry_backend.forward(baseline)
-    output_shape = coordinates.shape
+    output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
 
+    # Identical seed/direction on every rank (only used inside root-only lambdas).
     rng = np.random.default_rng(seed_index)
     seed = rng.standard_normal(output_shape)
     delta = {
         name: np.asarray(rng.standard_normal() * DESIGN_VARIABLE_SCALES[name], dtype=float)
         for name in baseline
     }
-    vjp = geometry_backend.compute_vjp(baseline, seed)
-    directional_adjoint = float(sum(np.sum(vjp[name] * delta[name]) for name in baseline))
 
-    sweep = {}
+    run_on_root(comm, lambda: geometry_backend.forward(baseline))
+    vjp = run_on_root(comm, lambda: geometry_backend.compute_vjp(baseline, seed))
+    directional_adjoint = None
+    if is_root(comm):
+        directional_adjoint = float(sum(np.sum(vjp[name] * delta[name]) for name in baseline))
+
+    sweep: dict[float, dict[str, float]] = {}
     for eta in ETAS:
-        plus = {name: baseline[name] + eta * delta[name] for name in baseline}
-        minus = {name: baseline[name] - eta * delta[name] for name in baseline}
-        x_plus = geometry_backend.forward(plus)
-        x_minus = geometry_backend.forward(minus)
-        directional_fd = float(np.sum(seed * (x_plus - x_minus) / (2.0 * eta)))
-        rel = abs(directional_fd - directional_adjoint) / max(abs(directional_adjoint), 1e-30)
-        sweep[eta] = {"fd": directional_fd, "relative_error": rel}
-        print(f"[level2] eta={eta:.1e} fd={directional_fd:.8e} adj={directional_adjoint:.8e} rel={rel:.3e}", flush=True)
+        x_plus = run_on_root(
+            comm,
+            lambda e=eta: geometry_backend.forward(
+                {k: baseline[k] + e * delta[k] for k in baseline}
+            ),
+        )
+        x_minus = run_on_root(
+            comm,
+            lambda e=eta: geometry_backend.forward(
+                {k: baseline[k] - e * delta[k] for k in baseline}
+            ),
+        )
+        if is_root(comm):
+            directional_fd = float(np.sum(seed * (x_plus - x_minus) / (2.0 * eta)))
+            rel = abs(directional_fd - directional_adjoint) / max(abs(directional_adjoint), 1e-30)
+            sweep[eta] = {"fd": directional_fd, "relative_error": rel}
+            print(
+                f"[level2] eta={eta:.1e} fd={directional_fd:.8e} "
+                f"adj={directional_adjoint:.8e} rel={rel:.3e}",
+                flush=True,
+            )
 
-    payload = {
-        "level": 2,
-        "directional_adjoint": directional_adjoint,
-        "sweep": {f"{eta:.1e}": sweep[eta] for eta in ETAS},
-        "best_relative_error": min(v["relative_error"] for v in sweep.values()),
-    }
+    payload: dict[str, Any] = {}
+    if is_root(comm):
+        payload = {
+            "level": 2,
+            "directional_adjoint": directional_adjoint,
+            "sweep": {f"{eta:.1e}": sweep[eta] for eta in ETAS},
+            "best_relative_error": min(v["relative_error"] for v in sweep.values()),
+        }
     _write_result("level2_mesh_motion_vjp", payload, comm)
     return payload
 
@@ -268,23 +288,31 @@ def level3_dafoam_volume_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
     backend = _make_dafoam_backend(comm, deterministic=True)
     geometry_backend = _make_geometry_backend(comm)
     output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
-    from bsm3.core.boundary_surface_movement.geometry_volume_mpi import broadcast_array
 
     baseline = {name: np.asarray(value, dtype=float) for name, value in GEOMETRY_VALUES.items()}
-    # A smooth, mesh-valid direction: the mesh-motion response to a small
-    # geometric step, so the FD perturbation stays on the deformation manifold.
-    coordinates = None
-    direction = None
-    if is_root(comm):
-        coordinates = geometry_backend.forward(baseline)
-        rng = np.random.default_rng(seed_index)
-        step_dv = {
-            name: 1.0e-3 * DESIGN_VARIABLE_SCALES[name] * rng.standard_normal()
-            for name in baseline
-        }
-        perturbed = geometry_backend.forward({k: baseline[k] + step_dv[k] for k in baseline})
-        direction = perturbed - coordinates
-        coordinates = geometry_backend.forward(baseline)
+    # Smooth, mesh-valid coordinate direction J_mesh . delta_d, built from a
+    # PROPER central difference (normalized by 2h). The old code used a one-sided,
+    # unnormalized X(d+h)-X(d) that was then re-scaled by eta -- a doubly-small,
+    # ill-defined direction. delta_d is O(scale); h is the JVP step.
+    h_direction = 1.0e-4
+    rng = np.random.default_rng(seed_index)
+    delta_d = {
+        name: np.asarray(DESIGN_VARIABLE_SCALES[name] * rng.standard_normal(), dtype=float)
+        for name in baseline
+    }
+
+    coordinates = run_on_root(comm, lambda: geometry_backend.forward(baseline))
+
+    def _build_direction():
+        x_plus = geometry_backend.forward(
+            {k: baseline[k] + h_direction * delta_d[k] for k in baseline}
+        )
+        x_minus = geometry_backend.forward(
+            {k: baseline[k] - h_direction * delta_d[k] for k in baseline}
+        )
+        return (x_plus - x_minus) / (2.0 * h_direction)
+
+    direction = run_on_root(comm, _build_direction)
     coordinates = broadcast_array(comm, coordinates, shape=output_shape, dtype=np.float64)
     direction = broadcast_array(comm, direction, shape=output_shape, dtype=np.float64)
 
@@ -297,31 +325,50 @@ def level3_dafoam_volume_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
         )
         return {k: float(np.asarray(v).reshape(-1)[0]) for k, v in functions.items()}
 
+    # One converged baseline primal establishes the cache; both the CL and CD
+    # adjoints are then solved about that same state WITHOUT re-running the
+    # primal between them (compute_vjp is a cache hit; the preconditioner built
+    # for the first adjoint is reused by the second).
     baseline_functions = run(coordinates)
     adjoint = {}
     for function_name in backend.function_names:
-        backend.run_primal({"volume_coordinates": coordinates, "patch_velocity": patch_velocity})
         vjp = backend.compute_vjp(
             {"volume_coordinates": coordinates, "patch_velocity": patch_velocity},
             {function_name: np.array([1.0])},
         )
         adjoint[function_name] = float(np.sum(vjp["volume_coordinates"] * direction))
 
-    sweep = {}
+    sweep: dict[float, dict[str, Any]] = {}
     for eta in ETAS:
         f_plus = run(coordinates + eta * direction)
         f_minus = run(coordinates - eta * direction)
-        sweep[eta] = {}
+        displacement = eta * direction
+        sweep[eta] = {
+            "displacement_rms": float(np.sqrt(np.mean(displacement**2))),
+            "displacement_max": float(np.max(np.abs(displacement))),
+        }
         for function_name in backend.function_names:
-            fd = (f_plus[function_name] - f_minus[function_name]) / (2.0 * eta)
+            numerator = f_plus[function_name] - f_minus[function_name]
+            fd = numerator / (2.0 * eta)
             rel = abs(fd - adjoint[function_name]) / max(abs(adjoint[function_name]), 1e-30)
-            sweep[eta][function_name] = {"fd": fd, "relative_error": rel}
+            sweep[eta][function_name] = {
+                "numerator": numerator,
+                "fd": fd,
+                "relative_error": rel,
+            }
             if is_root(comm):
-                print(f"[level3] {function_name} eta={eta:.1e} fd={fd:.8e} adj={adjoint[function_name]:.8e} rel={rel:.3e}", flush=True)
+                print(
+                    f"[level3] {function_name} eta={eta:.1e} "
+                    f"disp_rms={sweep[eta]['displacement_rms']:.3e} "
+                    f"num={numerator:.6e} fd={fd:.8e} "
+                    f"adj={adjoint[function_name]:.8e} rel={rel:.3e}",
+                    flush=True,
+                )
 
     payload = {
         "level": 3,
         "mpi_ranks": comm_size(comm),
+        "direction_norm": float(np.linalg.norm(direction)),
         "baseline_functions": baseline_functions,
         "directional_adjoint": adjoint,
         "sweep": {f"{eta:.1e}": sweep[eta] for eta in ETAS},
@@ -338,14 +385,12 @@ def level4_chain_rule(comm, seed_index: int = 0) -> dict[str, Any]:
     backend = _make_dafoam_backend(comm, deterministic=True)
     geometry_backend = _make_geometry_backend(comm)
     output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
-    from bsm3.core.boundary_surface_movement.geometry_volume_mpi import broadcast_array
 
     baseline = {name: np.asarray(value, dtype=float) for name, value in GEOMETRY_VALUES.items()}
-    coordinates = None
-    if is_root(comm):
-        coordinates = geometry_backend.forward(baseline)
+    coordinates = run_on_root(comm, lambda: geometry_backend.forward(baseline))
     coordinates = broadcast_array(comm, coordinates, shape=output_shape, dtype=np.float64)
     patch_velocity = np.array([FLOW.velocity_m_per_s, FLOW.angle_of_attack_deg])
+    # One baseline primal (inside prepare) is reused by every function's adjoint.
     _prepare_deterministic_baseline(backend, coordinates, patch_velocity)
 
     rng = np.random.default_rng(seed_index)
@@ -353,32 +398,44 @@ def level4_chain_rule(comm, seed_index: int = 0) -> dict[str, Any]:
         name: np.asarray(rng.standard_normal() * DESIGN_VARIABLE_SCALES[name], dtype=float)
         for name in baseline
     }
+    h_direction = 1.0e-4
 
     payload: dict[str, Any] = {"level": 4, "mpi_ranks": comm_size(comm), "functions": {}}
     for function_name in backend.function_names:
-        backend.run_primal({"volume_coordinates": coordinates, "patch_velocity": patch_velocity})
+        # Collective adjoint; no primal rerun (cache hit at the frozen baseline).
         dafoam_vjp = backend.compute_vjp(
             {"volume_coordinates": coordinates, "patch_velocity": patch_velocity},
             {function_name: np.array([1.0])},
         )
         volume_cotangent = dafoam_vjp["volume_coordinates"]
-        if is_root(comm):
-            # Path A: Xbar^T (J_mesh delta_d), via a mesh-motion directional FD.
-            eta = 1.0e-3
-            plus = geometry_backend.forward({k: baseline[k] + eta * delta_dv[k] for k in baseline})
-            minus = geometry_backend.forward({k: baseline[k] - eta * delta_dv[k] for k in baseline})
-            j_delta = (plus - minus) / (2.0 * eta)
-            path_a = float(np.sum(volume_cotangent * j_delta))
+
+        def _compare_paths(cotangent=volume_cotangent):
+            # Path A: Xbar^T (J_mesh delta_d), via a mesh-motion central FD.
+            plus = geometry_backend.forward(
+                {k: baseline[k] + h_direction * delta_dv[k] for k in baseline}
+            )
+            minus = geometry_backend.forward(
+                {k: baseline[k] - h_direction * delta_dv[k] for k in baseline}
+            )
+            j_delta = (plus - minus) / (2.0 * h_direction)
+            path_a = float(np.sum(cotangent * j_delta))
             # Path B: delta_d^T dbar, via the mesh-motion VJP of Xbar.
-            dbar = geometry_backend.compute_vjp(baseline, volume_cotangent)
+            dbar = geometry_backend.compute_vjp(baseline, cotangent)
             path_b = float(sum(np.sum(dbar[name] * delta_dv[name]) for name in baseline))
-            rel = abs(path_a - path_b) / max(abs(path_b), 1e-30)
-            payload["functions"][function_name] = {
+            return {
                 "xbar_jmesh_delta": path_a,
                 "delta_dbar": path_b,
-                "relative_error": rel,
+                "relative_error": abs(path_a - path_b) / max(abs(path_b), 1e-30),
             }
-            print(f"[level4] {function_name} A={path_a:.8e} B={path_b:.8e} rel={rel:.3e}", flush=True)
+
+        result = run_on_root(comm, _compare_paths)
+        if is_root(comm):
+            payload["functions"][function_name] = result
+            print(
+                f"[level4] {function_name} A={result['xbar_jmesh_delta']:.8e} "
+                f"B={result['delta_dbar']:.8e} rel={result['relative_error']:.3e}",
+                flush=True,
+            )
     _write_result("level4_chain_rule", payload, comm)
     return payload
 
@@ -391,10 +448,6 @@ def level5_end_to_end(comm) -> dict[str, Any]:
     backend = _make_dafoam_backend(comm, deterministic=True)
     geometry_backend = _make_geometry_backend(comm)
     output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
-    from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
-        broadcast_array,
-        run_on_root,
-    )
 
     baseline = {name: np.asarray(value, dtype=float) for name, value in GEOMETRY_VALUES.items()}
     patch_velocity = np.array([FLOW.velocity_m_per_s, FLOW.angle_of_attack_deg])

@@ -341,6 +341,33 @@ class _LinearAdjointModel:
         }
 
 
+def test_set_deterministic_baseline_requires_converged_state():
+    backend = object.__new__(PYDAFoamBackend)
+    backend._cached_states = None
+    with pytest.raises(RuntimeError, match="No converged state"):
+        backend.set_deterministic_baseline()
+
+
+def test_reset_primal_state_clears_cache():
+    backend = object.__new__(PYDAFoamBackend)
+    backend._cached_states = np.ones(3)
+    backend._cached_inputs = {"x": np.ones(2)}
+    backend.reset_primal_state()
+    assert backend._cached_states is None
+    assert backend._cached_inputs is None
+
+
+def test_set_deterministic_baseline_freezes_cached_state():
+    backend = object.__new__(PYDAFoamBackend)
+    backend._cached_states = np.array([1.0, 2.0, 3.0])
+    backend._baseline_states = None
+    backend.set_deterministic_baseline()
+    np.testing.assert_array_equal(backend._baseline_states, [1.0, 2.0, 3.0])
+    # A later cache change must not mutate the frozen baseline.
+    backend._cached_states[:] = 9.0
+    np.testing.assert_array_equal(backend._baseline_states, [1.0, 2.0, 3.0])
+
+
 def test_live_backend_total_vjp_has_correct_discrete_adjoint_sign():
     model = _LinearAdjointModel()
     dafoam = _LinearAdjointDAFoam(model)

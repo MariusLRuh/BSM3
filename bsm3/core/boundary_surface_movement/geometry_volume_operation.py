@@ -30,6 +30,7 @@ from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
     resolve_comm,
     run_on_root,
     verify_replicated_values,
+    verify_seed_ownership,
 )
 
 
@@ -60,6 +61,12 @@ class GeometryVolumeOperation(csdl.experimental.CustomExplicitOperationBeta):
     debug
         Verify that the replicated design variables agree across ranks before
         rank 0 uses its own copy.
+    seed_ownership
+        Contract the incoming volume-coordinate cotangent must satisfy in the
+        reverse pass: ``replicated`` (every rank holds the identical global
+        cotangent, matching a DAFoam ``Allreduce``) or ``root`` (only rank 0
+        holds it, non-root seeds are zero, matching a DAFoam ``Reduce``).  Must
+        agree with the DAFoam ``volume_gradient_ownership``.
     """
 
     def __init__(
@@ -70,6 +77,7 @@ class GeometryVolumeOperation(csdl.experimental.CustomExplicitOperationBeta):
         output_shape: tuple[int, int],
         design_variable_specs: Mapping[str, tuple[int, ...]],
         debug: bool = False,
+        seed_ownership: str = "replicated",
     ):
         super().__init__()
         self.comm = resolve_comm(comm)
@@ -78,6 +86,12 @@ class GeometryVolumeOperation(csdl.experimental.CustomExplicitOperationBeta):
         self.specs = _ordered_specs(design_variable_specs)
         self.design_variable_names = tuple(name for name, _ in self.specs)
         self.debug = bool(debug)
+        if seed_ownership not in ("replicated", "root"):
+            raise ValueError(
+                "seed_ownership must be 'replicated' or 'root'; got "
+                f"{seed_ownership!r}."
+            )
+        self.seed_ownership = str(seed_ownership)
         if is_root(self.comm) and backend is None:
             raise ValueError("The root rank requires a live backend.")
 
@@ -100,6 +114,7 @@ class GeometryVolumeOperation(csdl.experimental.CustomExplicitOperationBeta):
             output_shape=self.output_shape,
             design_variable_specs=dict(self.specs),
             debug=self.debug,
+            seed_ownership=self.seed_ownership,
         )
         return volume_coordinates
 
@@ -161,6 +176,7 @@ class GeometryVolumeVJP(csdl.experimental.CustomExplicitOperationBeta):
         output_shape: tuple[int, int],
         design_variable_specs: Mapping[str, tuple[int, ...]],
         debug: bool = False,
+        seed_ownership: str = "replicated",
     ):
         super().__init__()
         self.comm = resolve_comm(comm)
@@ -169,6 +185,11 @@ class GeometryVolumeVJP(csdl.experimental.CustomExplicitOperationBeta):
         self.specs = _ordered_specs(design_variable_specs)
         self.design_variable_names = tuple(name for name, _ in self.specs)
         self.debug = bool(debug)
+        if seed_ownership not in ("replicated", "root"):
+            raise ValueError(
+                "seed_ownership must be 'replicated' or 'root'."
+            )
+        self.seed_ownership = str(seed_ownership)
         self._total_size = int(
             sum(int(np.prod(shape)) for _name, shape in self.specs)
         )
@@ -192,6 +213,17 @@ class GeometryVolumeVJP(csdl.experimental.CustomExplicitOperationBeta):
         seed = np.asarray(
             inputs["d_volume_coordinates"], dtype=float
         ).reshape(self.output_shape)
+
+        # Enforce the cotangent-ownership contract collectively before rank 0
+        # uses its own seed: 'replicated' requires identical seeds on all ranks,
+        # 'root' requires zero on non-root ranks. Raises synchronously on a
+        # violation so no rank is stranded in the broadcast below.
+        verify_seed_ownership(
+            self.comm,
+            seed,
+            ownership=self.seed_ownership,
+            name="d_volume_coordinates",
+        )
 
         flat = run_on_root(
             self.comm,

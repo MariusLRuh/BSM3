@@ -28,9 +28,14 @@ cd "${RUN_DIR}"
 GIT_COMMIT="$(git -C "${BSM3_REPO}" rev-parse HEAD 2>/dev/null || echo unknown)"
 echo "git_commit=${GIT_COMMIT}" | tee "${RUN_DIR}/run_metadata.txt"
 
+NTASKS="${SLURM_NTASKS:-8}"
 for NP in 1 2 4 8; do
+  if [ "${NP}" -gt "${NTASKS}" ]; then
+    echo "=== skip np=${NP}: exceeds SLURM_NTASKS=${NTASKS} (not oversubscribing) ==="
+    continue
+  fi
   echo "=== Level 1 at np=${NP} ==="
-  mpirun --oversubscribe -np "${NP}" "${BSM3_PYTHON}" -m \
+  mpirun -np "${NP}" "${BSM3_PYTHON}" -m \
     bsm3.core.boundary_surface_movement.e175_derivative_ladder 1 \
     2>&1 | tee "${RUN_DIR}/level1_np${NP}.log"
 done

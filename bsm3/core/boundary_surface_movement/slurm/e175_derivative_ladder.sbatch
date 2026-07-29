@@ -25,6 +25,14 @@ source "${HERE}/env_setup.sh"
 LADDER_LEVEL="${LADDER_LEVEL:-2}"
 LADDER_NP="${LADDER_NP:-1}"
 
+# Do not oversubscribe: the requested rank count must fit the allocation.
+NTASKS="${SLURM_NTASKS:-${LADDER_NP}}"
+if [ "${LADDER_NP}" -gt "${NTASKS}" ]; then
+  echo "ERROR: LADDER_NP=${LADDER_NP} exceeds SLURM_NTASKS=${NTASKS};" \
+       "increase --ntasks or lower LADDER_NP." >&2
+  exit 1
+fi
+
 STAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_DIR="${LADDER_SCRATCH}/level${LADDER_LEVEL}_np${LADDER_NP}_${SLURM_JOB_ID:-$STAMP}"
 mkdir -p "${RUN_DIR}"
@@ -44,7 +52,7 @@ GIT_COMMIT="$(git -C "${BSM3_REPO}" rev-parse HEAD 2>/dev/null || echo unknown)"
 # The ladder writes its JSON under ./ladder_results (RUN_DIR is on scratch).
 LOG="${RUN_DIR}/ladder_level${LADDER_LEVEL}_np${LADDER_NP}.log"
 
-mpirun --oversubscribe -np "${LADDER_NP}" "${BSM3_PYTHON}" -m \
+mpirun -np "${LADDER_NP}" "${BSM3_PYTHON}" -m \
   bsm3.core.boundary_surface_movement.e175_derivative_ladder "${LADDER_LEVEL}" \
   2>&1 | tee "${LOG}"
 
