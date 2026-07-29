@@ -174,17 +174,38 @@ def broadcast_array(
     return buffer
 
 
+def extract_local_coordinates(
+    global_coordinates: np.ndarray,
+    local_to_global: np.ndarray,
+) -> np.ndarray:
+    """Forward scatter: pick each rank's local points from the global array.
+
+    ``local = global[local_to_global]``.  Processor-boundary points may appear
+    on several ranks; this is the forward operator ``S`` whose exact transpose
+    ``S^T`` is :func:`assemble_local_gradient` (scatter-add).  The pair must
+    satisfy ``<S x, ybar> == <x, S^T ybar>``; see
+    ``test_forward_scatter_and_reverse_add_are_transposes``.
+    """
+
+    global_array = np.asarray(global_coordinates, dtype=np.float64)
+    if global_array.ndim != 2 or global_array.shape[1] != 3:
+        raise ValueError("global_coordinates must have shape (n_global, 3).")
+    return global_array[np.asarray(local_to_global)]
+
+
 def assemble_local_gradient(
     local_gradient: np.ndarray,
     local_to_global: np.ndarray,
     num_global_points: int,
 ) -> np.ndarray:
-    """Scatter a local per-point gradient into a dense global-order buffer.
+    """Scatter-add a local per-point gradient into a dense global-order buffer.
 
+    This is the exact transpose ``S^T`` of :func:`extract_local_coordinates`.
     ``np.add.at`` is required (not fancy-index assignment) because
     processor-boundary points are duplicated across partitions and legitimately
     map several local rows to the same global point; their contributions must
-    add rather than overwrite.
+    add rather than overwrite.  Forward overwrite and reverse duplication would
+    *not* be a transpose pair.
     """
 
     local = np.asarray(local_gradient, dtype=np.float64)
@@ -283,6 +304,7 @@ __all__ = [
     "is_root",
     "run_on_root",
     "broadcast_array",
+    "extract_local_coordinates",
     "assemble_local_gradient",
     "reduce_gradient",
     "verify_replicated_values",

@@ -17,6 +17,7 @@ from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
     SerialComm,
     assemble_local_gradient,
     broadcast_array,
+    extract_local_coordinates,
     reduce_gradient,
     resolve_comm,
     run_on_root,
@@ -179,6 +180,38 @@ def test_duplicate_processor_boundary_points_sum():
     np.testing.assert_array_equal(assembled[2], [0.0, 0.0, 0.0])
     # Global point 3 receives the sum of local rows 0 and 2.
     np.testing.assert_array_equal(assembled[3], [1.5, 0.0, 3.0])
+
+
+def test_forward_scatter_and_reverse_add_are_transposes():
+    # The forward global->local scatter S (extract_local_coordinates) and the
+    # reverse local->global scatter-add S^T (assemble_local_gradient) must satisfy
+    # the transpose identity <S x, y> == <x, S^T y>, INCLUDING duplicated
+    # processor-boundary points. Overwrite-forward / duplicate-reverse would fail.
+    rng = np.random.default_rng(7)
+    num_global = 5
+    # local_to_global with a duplicated global id (3 appears twice) and an
+    # unreferenced global id (2 appears zero times).
+    local_to_global = np.array([3, 1, 3, 0, 4])
+    x = rng.standard_normal((num_global, 3))
+    y = rng.standard_normal((local_to_global.size, 3))
+
+    s_x = extract_local_coordinates(x, local_to_global)
+    st_y = assemble_local_gradient(y, local_to_global, num_global)
+
+    left = float(np.sum(s_x * y))          # <S x, y>
+    right = float(np.sum(x * st_y))        # <x, S^T y>
+    assert abs(left - right) <= 1.0e-12 * (abs(left) + 1.0)
+
+
+def test_forward_scatter_matches_dafoam_backend_indexing():
+    # extract_local_coordinates reproduces the exact indexing PYDAFoamBackend
+    # uses internally (global_coordinates[local_to_global]).
+    x = np.arange(15.0).reshape(5, 3)
+    local_to_global = np.array([4, 0, 2, 2])
+    np.testing.assert_array_equal(
+        extract_local_coordinates(x, local_to_global),
+        x[local_to_global],
+    )
 
 
 def test_allreduce_and_root_reduce_are_equivalent_on_root():

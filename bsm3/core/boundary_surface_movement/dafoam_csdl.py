@@ -283,6 +283,8 @@ class PYDAFoamBackend:
         check_mesh: bool = True,
         coordinate_match_tolerance: float | None = None,
         volume_gradient_ownership: str = "replicated",
+        deterministic_fd_mode: bool = False,
+        invalidate_adjoint_on_primal: bool = True,
     ):
         self.dafoam_instance = dafoam_instance
         self.case_directory = Path(case_directory).expanduser().resolve()
@@ -328,6 +330,15 @@ class PYDAFoamBackend:
         self._run_coloring = (
             dafoam_instance.getOption("adjEqnSolMethod") != "fixedPoint"
         )
+        # Deterministic finite-difference mode: restore one fixed converged
+        # baseline state before every primal so +h/-h/baseline samples are
+        # independent (see the derivative-review addendum, finding 1).
+        self.deterministic_fd_mode = bool(deterministic_fd_mode)
+        # Invalidate the adjoint preconditioner/linearization whenever a new
+        # primal point is accepted, so an adjoint never reuses a factorization
+        # assembled at a different mesh/state (addendum finding 2).
+        self.invalidate_adjoint_on_primal = bool(invalidate_adjoint_on_primal)
+        self._baseline_states: np.ndarray | None = None
         self._cached_inputs: dict[str, np.ndarray] | None = None
         self._cached_states: np.ndarray | None = None
         self._cached_functions: dict[str, np.ndarray] | None = None
@@ -382,7 +393,12 @@ class PYDAFoamBackend:
                 dafoam.solver.writeFailedMesh()
                 raise RuntimeError("DAFoam rejected the deformed volume mesh.")
 
-            if self._cached_states is not None:
+            # In deterministic FD mode restore the fixed converged baseline
+            # before every primal; otherwise fall back to the production warm
+            # start from the previous solution.
+            if self.deterministic_fd_mode and self._baseline_states is not None:
+                dafoam.setStates(self._baseline_states.copy())
+            elif self._cached_states is not None:
                 dafoam.setStates(self._cached_states.copy())
             dafoam()
             if int(getattr(dafoam, "primalFail", 0)) != 0:
@@ -399,10 +415,52 @@ class PYDAFoamBackend:
                 for name in self.function_names
             }
 
+        # A newly accepted primal makes any previously assembled adjoint
+        # linearization/preconditioner stale.
+        if self.invalidate_adjoint_on_primal:
+            self._invalidate_adjoint_linearization()
         self._cached_inputs = arrays
         self._cached_states = states
         self._cached_functions = functions
         return {name: value.copy() for name, value in functions.items()}
+
+    def set_deterministic_baseline(
+        self, states: np.ndarray | None = None
+    ) -> None:
+        """Freeze the converged baseline state used by deterministic FD mode.
+
+        With no argument the most recent cached (converged) state is used, so
+        the intended sequence is: run one tightly converged baseline primal,
+        call this, enable :attr:`deterministic_fd_mode`, then evaluate every
+        ``+h``/``-h`` perturbation from that fixed state.
+        """
+
+        source = self._cached_states if states is None else states
+        if source is None:
+            raise RuntimeError(
+                "No converged state available; run a baseline primal before "
+                "capturing the deterministic FD baseline."
+            )
+        self._baseline_states = np.asarray(source, dtype=float).copy()
+
+    def reset_primal_state(self) -> None:
+        """Clear the warm-start cache so the next primal cold-starts."""
+
+        self._cached_states = None
+        self._cached_inputs = None
+
+    def _invalidate_adjoint_linearization(self) -> None:
+        """Force the next adjoint to reassemble ``dRdWTPC``/``ksp``/coloring."""
+
+        dafoam = self.dafoam_instance
+        # These attributes are lazily (re)built inside ``_solve_adjoint``.
+        if getattr(dafoam, "dRdWTPC", None) is not None:
+            dafoam.dRdWTPC = None
+        if getattr(dafoam, "ksp", None) is not None:
+            dafoam.ksp = None
+        self._run_coloring = (
+            dafoam.getOption("adjEqnSolMethod") != "fixedPoint"
+        )
 
     def compute_vjp(
         self,
