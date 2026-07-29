@@ -467,7 +467,12 @@ def build_cfd_analysis_rank0(
     output_shape = (int(num_points), 3)
 
     design_variable_map = geometry_variables.as_dict()
-    design_variable_specs = {name: () for name in design_variable_map}
+    # Derive the declared shapes from the actual CSDL variables (scalar design
+    # variables are shape (1,), not ()), so the VJP cotangent shapes match.
+    design_variable_specs = {
+        name: tuple(variable.shape)
+        for name, variable in design_variable_map.items()
+    }
 
     geometry_backend = None
     if is_root(comm):

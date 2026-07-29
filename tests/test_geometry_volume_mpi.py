@@ -269,6 +269,45 @@ def test_forward_runs_only_on_root_and_broadcasts_identically():
     assert root_backend.forward_calls == 1
 
 
+def test_geometry_volume_op_vjp_through_full_csdl_graph():
+    # Mirror the driver's shape path: scalar design variables are shape (1,), and
+    # the GeometryVolumeVJP cotangents must match that through CSDL's reverse.
+    backend = CSDLRecorderBackend(_smooth_model_builder(), build_eagerly=True)
+    specs = backend.design_variable_shapes()
+    assert all(shape == (1,) for shape in specs.values())
+
+    rng = np.random.default_rng(3)
+    seed = rng.standard_normal(backend.output_shape)
+    design = {"a": np.array([0.3]), "b": np.array([-0.7])}
+    backend_vjp = backend.compute_vjp(design, seed)
+
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    variables = {
+        "a": csdl.Variable(name="a", value=0.3),
+        "b": csdl.Variable(name="b", value=-0.7),
+    }
+    op = GeometryVolumeOperation(
+        backend, SerialComm(), output_shape=backend.output_shape,
+        design_variable_specs=specs,
+    )
+    volume = op.evaluate(variables)
+    contraction = csdl.sum(volume * csdl.Variable(value=seed))
+    derivatives = csdl.derivative([contraction], [variables["a"], variables["b"]])
+    recorder.stop()
+
+    np.testing.assert_allclose(
+        np.asarray(derivatives[contraction, variables["a"]].value).reshape(-1),
+        np.asarray(backend_vjp["a"]).reshape(-1),
+        rtol=1e-9, atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(derivatives[contraction, variables["b"]].value).reshape(-1),
+        np.asarray(backend_vjp["b"]).reshape(-1),
+        rtol=1e-9, atol=1e-12,
+    )
+
+
 def test_root_requires_a_backend():
     with pytest.raises(ValueError, match="root rank requires"):
         GeometryVolumeOperation(
