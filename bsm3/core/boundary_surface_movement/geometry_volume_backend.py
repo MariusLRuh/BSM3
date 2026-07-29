@@ -278,7 +278,19 @@ class E175GeometryVolumeBackend(CSDLRecorderBackend):
         self._geometry_values = dict(geometry_values)
         self._pipeline_config = pipeline_config
         self._aerodynamic_volume_method = str(aerodynamic_volume_method)
+        self._last_mesh_motion_result: Any = None
         super().__init__(self._build_model, build_eagerly=build_eagerly)
+
+    @property
+    def last_mesh_motion_result(self) -> Any:
+        """The most recent :class:`E175MeshMotionResult` (root rank only).
+
+        Populated when the private recorder is first built (which runs one
+        inline forward, including the surface/volume mesh-quality gates) so the
+        coupled driver can still emit its quality diagnostics.
+        """
+
+        return self._last_mesh_motion_result
 
     def _build_model(
         self, recorder: csdl.Recorder
@@ -310,6 +322,7 @@ class E175GeometryVolumeBackend(CSDLRecorderBackend):
                 f"Volume method {method!r} is not available; enable it in the "
                 "VolumeMotionConfig used to build this backend."
             )
+        self._last_mesh_motion_result = result
         volume_output = result.volume_coordinates[method]
         return design_variables, volume_output
 

@@ -350,7 +350,6 @@ def test_live_backend_total_vjp_has_correct_discrete_adjoint_sign():
     backend.function_names = ("CL", "CD")
     backend.reference_volume_coordinates = np.zeros((2, 3))
     backend.local_to_global = np.array([0, 1])
-    backend.volume_gradient_ownership = "replicated"
 
     global_coordinates = np.arange(6, dtype=float).reshape((2, 3)) / 10.0
     patch_velocity = np.array([200.0, 2.0])

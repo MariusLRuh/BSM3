@@ -282,22 +282,12 @@ class PYDAFoamBackend:
         function_names: tuple[str, ...] = ("CL", "CD"),
         check_mesh: bool = True,
         coordinate_match_tolerance: float | None = None,
-        volume_gradient_ownership: str = "replicated",
     ):
         self.dafoam_instance = dafoam_instance
         self.case_directory = Path(case_directory).expanduser().resolve()
         self.volume_input_name = str(volume_input_name)
         self.function_names = tuple(str(name) for name in function_names)
         self.check_mesh = bool(check_mesh)
-        if volume_gradient_ownership not in ("replicated", "root"):
-            raise ValueError(
-                "volume_gradient_ownership must be 'replicated' or 'root'; got "
-                f"{volume_gradient_ownership!r}."
-            )
-        # 'replicated' keeps the validated Allreduce path (every rank holds the
-        # full global gradient); 'root' uses MPI.Reduce so only rank 0 owns it.
-        # Validate the two against one another before dropping 'replicated'.
-        self.volume_gradient_ownership = str(volume_gradient_ownership)
         self.reference_volume_coordinates = np.asarray(
             reference_volume_coordinates, dtype=float
         ).copy()
@@ -555,29 +545,27 @@ class PYDAFoamBackend:
         return np.asarray(dafoam.vec2Array(self._psi), dtype=float)
 
     def _global_volume_vjp(self, local_flat: np.ndarray) -> np.ndarray:
-        from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
-            assemble_local_gradient,
-            reduce_gradient,
-        )
-
         local = np.asarray(local_flat, dtype=float).reshape((-1, 3))
         if local.shape[0] != self.local_to_global.size:
             raise ValueError(
                 "DAFoam returned a volCoord VJP with the wrong local size."
             )
-        # np.add.at (inside assemble_local_gradient) is required because
-        # processor-boundary duplicate points map several local rows to the same
-        # global point and their contributions must add, not overwrite.
-        global_gradient = assemble_local_gradient(
-            local,
-            self.local_to_global,
-            self.reference_volume_coordinates.shape[0],
-        )
-        return reduce_gradient(
-            self.dafoam_instance.comm,
-            global_gradient,
-            ownership=self.volume_gradient_ownership,
-        )
+        global_gradient = np.zeros_like(self.reference_volume_coordinates)
+        np.add.at(global_gradient, self.local_to_global, local)
+
+        comm = self.dafoam_instance.comm
+        if int(getattr(comm, "size", 1)) > 1:
+            reduced = np.empty_like(global_gradient)
+            try:
+                from mpi4py import MPI
+            except ImportError as error:
+                raise RuntimeError(
+                    "mpi4py is required to assemble the distributed DAFoam "
+                    "volume-coordinate gradient."
+                ) from error
+            comm.Allreduce(global_gradient, reduced, op=MPI.SUM)
+            global_gradient = reduced
+        return global_gradient
 
     def _validate_dafoam_options(self) -> None:
         dafoam = self.dafoam_instance

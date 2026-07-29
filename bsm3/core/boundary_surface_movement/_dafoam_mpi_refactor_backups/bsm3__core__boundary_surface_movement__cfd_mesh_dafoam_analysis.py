@@ -26,17 +26,6 @@ from bsm3.core.boundary_surface_movement.dafoam_csdl import (
     add_csdl_inputs_to_da_options,
     make_patch_velocity,
 )
-from bsm3.core.boundary_surface_movement.geometry_volume_backend import (
-    E175GeometryVolumeBackend,
-    read_gmsh_volume_point_count,
-)
-from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
-    is_root,
-    resolve_comm,
-)
-from bsm3.core.boundary_surface_movement.geometry_volume_operation import (
-    GeometryVolumeOperation,
-)
 from bsm3.core.boundary_surface_movement.e175_mesh_motion_config import (
     E175GeometryVariables,
     E175MeshMotionResult,
@@ -221,30 +210,6 @@ class OpenFOAMCaseConfig:
 CASE = OpenFOAMCaseConfig(case_directory=None)
 
 
-# ---------------------------------------------------------------------------
-# 4b. MPI execution model
-# ---------------------------------------------------------------------------
-# Geometry / mesh-motion execution:
-#   "rank0"      -- geometry -> surface -> volume runs only on MPI rank 0 via
-#                   GeometryVolumeOperation; the global volume coordinates are
-#                   broadcast and DAFoam stays distributed.  This is the target
-#                   architecture.
-#   "replicated" -- the original path: the full mesh-motion CSDL graph is built
-#                   and executed on every rank.  Kept for A/B validation of the
-#                   rank-0 forward output against the established pipeline.
-GEOMETRY_VOLUME_MODE = "rank0"
-
-# DAFoam volume-coordinate gradient assembly:
-#   "replicated" -- Allreduce; every rank holds the full global gradient.
-#   "root"       -- Reduce; only rank 0 owns the assembled gradient.
-# Validate the two against one another before dropping "replicated".
-DAFOAM_VOLUME_GRADIENT_OWNERSHIP = "replicated"
-
-# Verify that the replicated design variables agree across ranks before rank 0
-# uses its own copy.  Cheap; leave on until the coupling is trusted.
-GEOMETRY_VOLUME_DEBUG = True
-
-
 @dataclass(frozen=True)
 class EndToEndDerivativeCheckConfig:
     """Optimization-level FD check through geometry, mesh motion, and DAFoam."""
@@ -361,7 +326,6 @@ def create_dafoam_backend(
         volume_input_name="aero_vol_coords",
         function_names=case.function_names,
         check_mesh=case.run_check_mesh,
-        volume_gradient_ownership=DAFOAM_VOLUME_GRADIENT_OWNERSHIP,
     )
 
 
@@ -417,100 +381,6 @@ def build_cfd_analysis(
     outputs = motion_result.aerodynamic_outputs
     return E175DAFoamResult(
         mesh_motion=motion_result,
-        flow_outputs=outputs,
-        cl=outputs["CL"],
-        cd=outputs["CD"],
-    )
-
-
-def build_cfd_analysis_rank0(
-    recorder: csdl.Recorder,
-    model_files: E175ModelFiles,
-    geometry_variables: E175GeometryVariables,
-    mesh_motion: E175PipelineConfig,
-    flow: FlowConfig,
-    backend: PYDAFoamBackend,
-    comm,
-    *,
-    geometry_values: dict[str, float],
-    debug: bool = False,
-) -> E175DAFoamResult:
-    """Build the rank-0 geometry->volume + distributed-DAFoam graph.
-
-    The whole geometry -> surface -> volume pipeline is encapsulated in an
-    ``E175GeometryVolumeBackend`` that lives only on rank 0.  The outer CSDL
-    graph is the two-custom-operation chain ``d -> X -> (CL, CD)``:
-    ``GeometryVolumeOperation`` runs the mesh motion on rank 0 and broadcasts the
-    global coordinates; ``DAFoamAnalysisOperation`` extracts each rank's local
-    OpenFOAM partition and runs the collective primal/adjoint.
-    """
-
-    _ = recorder  # the active recorder owns the variables built below
-    comm = resolve_comm(comm)
-    if mesh_motion.volume_motion.load_mode != "final":
-        raise ValueError(
-            "DAFoam coupling requires volume_motion.load_mode='final'; the "
-            "synchronized re-factorization path is forward-only."
-        )
-    if "elasticity" not in mesh_motion.volume_motion.methods:
-        raise ValueError(
-            "DAFoam coupling requires the elasticity volume-motion method."
-        )
-
-    # Every rank needs the global volume-point count to declare the operation's
-    # output shape.  Read it on rank 0 (geometry I/O stays on the root) and
-    # broadcast the small integer.
-    num_points = None
-    if is_root(comm):
-        num_points = read_gmsh_volume_point_count(model_files.volume_mesh_file)
-    num_points = comm.bcast(num_points, root=0)
-    output_shape = (int(num_points), 3)
-
-    design_variable_map = geometry_variables.as_dict()
-    design_variable_specs = {name: () for name in design_variable_map}
-
-    geometry_backend = None
-    if is_root(comm):
-        geometry_backend = E175GeometryVolumeBackend(
-            model_files=model_files,
-            geometry_values=geometry_values,
-            pipeline_config=mesh_motion,
-            aerodynamic_volume_method="elasticity",
-        )
-
-    geometry_operation = GeometryVolumeOperation(
-        geometry_backend,
-        comm,
-        output_shape=output_shape,
-        design_variable_specs=design_variable_specs,
-        debug=debug,
-    )
-    volume_coordinates = geometry_operation.evaluate(design_variable_map)
-    volume_coordinates.add_name("global_volume_coordinates")
-
-    dafoam_operation = DAFoamAnalysisOperation(backend)
-    airspeed = csdl.Variable(
-        name="dafoam_airspeed_m_per_s",
-        value=np.array([flow.velocity_m_per_s]),
-    )
-    angle_of_attack = csdl.Variable(
-        name="dafoam_angle_of_attack_deg",
-        value=np.array([flow.angle_of_attack_deg]),
-    )
-    outputs = dafoam_operation.evaluate(
-        volume_coordinates,
-        patch_velocity=make_patch_velocity(airspeed, angle_of_attack),
-    )
-    for name, variable in outputs.items():
-        variable.add_name(f"dafoam_{name}")
-
-    mesh_motion_result = (
-        geometry_backend.last_mesh_motion_result
-        if geometry_backend is not None
-        else None
-    )
-    return E175DAFoamResult(
-        mesh_motion=mesh_motion_result,
         flow_outputs=outputs,
         cl=outputs["CL"],
         cd=outputs["CD"],
@@ -583,32 +453,14 @@ def main() -> E175DAFoamResult:
     recorder = csdl.Recorder(inline=True)
     recorder.start()
     geometry_variables = create_geometry_design_variables()
-    if GEOMETRY_VOLUME_MODE == "rank0":
-        result = build_cfd_analysis_rank0(
-            recorder,
-            MODEL_FILES,
-            geometry_variables,
-            MESH_MOTION,
-            FLOW,
-            backend,
-            comm,
-            geometry_values=GEOMETRY_VALUES,
-            debug=GEOMETRY_VOLUME_DEBUG,
-        )
-    elif GEOMETRY_VOLUME_MODE == "replicated":
-        result = build_cfd_analysis(
-            recorder,
-            MODEL_FILES,
-            geometry_variables,
-            MESH_MOTION,
-            FLOW,
-            backend,
-        )
-    else:
-        raise ValueError(
-            "GEOMETRY_VOLUME_MODE must be 'rank0' or 'replicated'; got "
-            f"{GEOMETRY_VOLUME_MODE!r}."
-        )
+    result = build_cfd_analysis(
+        recorder,
+        MODEL_FILES,
+        geometry_variables,
+        MESH_MOTION,
+        FLOW,
+        backend,
+    )
 
     if (
         END_TO_END_DERIVATIVE_CHECK.enabled
@@ -617,20 +469,6 @@ def main() -> E175DAFoamResult:
         raise ValueError(
             "Enable either END_TO_END_DERIVATIVE_CHECK or the generic "
             "MESH_MOTION finite-difference sweep, not both."
-        )
-    if GEOMETRY_VOLUME_MODE == "rank0" and (
-        END_TO_END_DERIVATIVE_CHECK.enabled
-        or MESH_MOTION.finite_difference.enabled
-    ):
-        # In rank-0 mode the mesh motion lives in the backend's private
-        # recorder, not the outer graph, so the legacy CSDL FD paths do not
-        # apply.  Use the forward-only ladder in e175_derivative_ladder.py, which
-        # never reruns the adjoint during finite differences.
-        raise ValueError(
-            "GEOMETRY_VOLUME_MODE='rank0' does not support the legacy "
-            "END_TO_END_DERIVATIVE_CHECK or MESH_MOTION.finite_difference "
-            "sweeps. Run e175_derivative_ladder.py for the forward-only "
-            "derivative validation, or set GEOMETRY_VOLUME_MODE='replicated'."
         )
     if END_TO_END_DERIVATIVE_CHECK.enabled:
         configure_end_to_end_derivative_check(
