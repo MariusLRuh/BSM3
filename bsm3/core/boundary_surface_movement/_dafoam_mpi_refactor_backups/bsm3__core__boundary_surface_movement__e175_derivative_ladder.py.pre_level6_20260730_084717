@@ -11,31 +11,25 @@ end-to-end run, following the validation ladder in
     Level 3  DAFoam-only volume-coordinate VJP directional check
     Level 4  explicit chain-rule test (DAFoam cotangent -> mesh-motion VJP)
     Level 5  one-DV, one-output end-to-end centered FD with a step sweep
-    Level 6  DAFoam primal-only deformation diagnostic (no adjoint)
 
 It reuses the configuration objects from ``cfd_mesh_dafoam_analysis`` so the
 design point, mesh files, flow settings, and OpenFOAM case are defined in exactly
-one place.  Levels 0 and 3-6 require a configured DAFoam case; Levels 1-2 need
-only the mesh-motion stack.  Level 6 requires an *isolated* case (provided via
-``LADDER_CASE_DIRECTORY``) because it repeatedly solves primals from initial
-fields.
+one place.  Levels 0 and 3-5 require a configured DAFoam case; Levels 1-2 need
+only the mesh-motion stack.
 
 Invocation (through Slurm; see slurm/e175_derivative_ladder.sbatch):
 
     mpirun -np <N> python -m \
         bsm3.core.boundary_surface_movement.e175_derivative_ladder <level>
 
-``<level>`` is one of ``0 1 2 3 4 5 6``.  Level 6 additionally reads
-``LADDER_PRIMAL_POINT``, ``LADDER_PRIMAL_START``, and ``LADDER_PRIMAL_ETA`` from
-the environment.  Results and a timestamped log are written under
-``LADDER_OUTPUT_DIRECTORY`` on Lustre scratch.
+``<level>`` is one of ``0 1 2 3 4 5``.  Results and a timestamped log are
+written under ``LADDER_OUTPUT_DIRECTORY`` on Lustre scratch.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict
 import json
-import os
 from pathlib import Path
 import sys
 import time
@@ -128,77 +122,13 @@ def _make_geometry_backend(comm) -> E175GeometryVolumeBackend | None:
     )
 
 
-def _make_dafoam_backend(comm, *, deterministic: bool = False, case=None):
-    # ``case`` defaults to the shared driver CASE so Levels 0-5 are unchanged;
-    # Level 6 passes an isolated case (see _resolve_level6_case).
-    backend = driver.create_dafoam_backend(
-        FLOW, case if case is not None else CASE, MODEL_FILES, comm
-    )
+def _make_dafoam_backend(comm, *, deterministic: bool = False):
+    backend = driver.create_dafoam_backend(FLOW, CASE, MODEL_FILES, comm)
     # Deterministic FD mode + adjoint-linearization invalidation give
     # history-independent finite differences (addendum findings 1 and 2).
     backend.deterministic_fd_mode = bool(deterministic)
     backend.invalidate_adjoint_on_primal = True
     return backend
-
-
-def _baseline_coordinates_and_direction(
-    comm,
-    geometry_backend,
-    *,
-    seed_index: int = 0,
-    h_direction: float = 1.0e-4,
-):
-    """Return the baseline volume coordinates and a smooth directional step.
-
-    Shared by Level 3 and Level 6 so both use numerically identical baseline
-    coordinates ``X(d0)`` and the same mesh-valid direction ``J_mesh . delta_d``.
-    The direction is a PROPER central difference of the mesh motion normalized by
-    ``2 h`` (``delta_d`` is O(scale); ``h_direction`` is the JVP step), built and
-    broadcast on rank 0 so every rank holds identical arrays.
-    """
-
-    output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
-    baseline = {
-        name: np.asarray(value, dtype=float)
-        for name, value in GEOMETRY_VALUES.items()
-    }
-    rng = np.random.default_rng(seed_index)
-    delta_d = {
-        name: np.asarray(DESIGN_VARIABLE_SCALES[name] * rng.standard_normal(), dtype=float)
-        for name in baseline
-    }
-
-    coordinates = run_on_root(comm, lambda: geometry_backend.forward(baseline))
-
-    def _build_direction():
-        x_plus = geometry_backend.forward(
-            {k: baseline[k] + h_direction * delta_d[k] for k in baseline}
-        )
-        x_minus = geometry_backend.forward(
-            {k: baseline[k] - h_direction * delta_d[k] for k in baseline}
-        )
-        return (x_plus - x_minus) / (2.0 * h_direction)
-
-    direction = run_on_root(comm, _build_direction)
-    coordinates = broadcast_array(comm, coordinates, shape=output_shape, dtype=np.float64)
-    direction = broadcast_array(comm, direction, shape=output_shape, dtype=np.float64)
-    return coordinates, direction
-
-
-def _resolve_level6_case():
-    """Case for Level 6: an isolated copy provided via ``LADDER_CASE_DIRECTORY``.
-
-    The batch script copies the OpenFOAM case template into a per-run scratch
-    directory and exports ``LADDER_CASE_DIRECTORY`` so repeated primal-only
-    solves (fresh or baseline start) never collide with a shared case or with
-    the adjoint levels' coloring cache. Falls back to the shared driver CASE when
-    the override is unset.
-    """
-
-    override = os.environ.get("LADDER_CASE_DIRECTORY")
-    if override:
-        return replace(driver.CASE, case_directory=Path(override))
-    return driver.CASE
 
 
 def _prepare_deterministic_baseline(backend, coordinates, patch_velocity):
@@ -357,12 +287,34 @@ def level3_dafoam_volume_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
     driver._require_case_directory(CASE)
     backend = _make_dafoam_backend(comm, deterministic=True)
     geometry_backend = _make_geometry_backend(comm)
+    output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
 
-    # Baseline coordinates and the smooth mesh-valid direction J_mesh . delta_d,
-    # shared verbatim with Level 6 so the two levels probe identical geometry.
-    coordinates, direction = _baseline_coordinates_and_direction(
-        comm, geometry_backend, seed_index=seed_index
-    )
+    baseline = {name: np.asarray(value, dtype=float) for name, value in GEOMETRY_VALUES.items()}
+    # Smooth, mesh-valid coordinate direction J_mesh . delta_d, built from a
+    # PROPER central difference (normalized by 2h). The old code used a one-sided,
+    # unnormalized X(d+h)-X(d) that was then re-scaled by eta -- a doubly-small,
+    # ill-defined direction. delta_d is O(scale); h is the JVP step.
+    h_direction = 1.0e-4
+    rng = np.random.default_rng(seed_index)
+    delta_d = {
+        name: np.asarray(DESIGN_VARIABLE_SCALES[name] * rng.standard_normal(), dtype=float)
+        for name in baseline
+    }
+
+    coordinates = run_on_root(comm, lambda: geometry_backend.forward(baseline))
+
+    def _build_direction():
+        x_plus = geometry_backend.forward(
+            {k: baseline[k] + h_direction * delta_d[k] for k in baseline}
+        )
+        x_minus = geometry_backend.forward(
+            {k: baseline[k] - h_direction * delta_d[k] for k in baseline}
+        )
+        return (x_plus - x_minus) / (2.0 * h_direction)
+
+    direction = run_on_root(comm, _build_direction)
+    coordinates = broadcast_array(comm, coordinates, shape=output_shape, dtype=np.float64)
+    direction = broadcast_array(comm, direction, shape=output_shape, dtype=np.float64)
 
     patch_velocity = np.array([FLOW.velocity_m_per_s, FLOW.angle_of_attack_deg])
     _prepare_deterministic_baseline(backend, coordinates, patch_velocity)
@@ -558,115 +510,6 @@ def level5_end_to_end(comm) -> dict[str, Any]:
     return payload
 
 
-# ---------------------------------------------------------------------------
-# Level 6: DAFoam primal-only deformation diagnostic
-# ---------------------------------------------------------------------------
-def level6_primal_only_deformation(comm) -> dict[str, Any]:
-    """Solve a single deformed primal (no adjoint) to isolate the primal.
-
-    This localizes whether a deformed mesh converges the primal to the requested
-    tolerance, independent of the adjoint. It reuses Level 3's baseline
-    coordinates and smooth direction so the two levels probe identical geometry.
-
-    Controls (environment variables, set through the batch script):
-
-    * ``LADDER_PRIMAL_POINT`` = ``baseline`` | ``plus`` | ``minus`` -- which of
-      ``X0``, ``X0 + eta d``, ``X0 - eta d`` to solve.
-    * ``LADDER_PRIMAL_START`` = ``baseline`` | ``fresh`` -- initialize from a
-      captured converged baseline state, or cold from the case's initial fields.
-    * ``LADDER_PRIMAL_ETA`` -- directional step (default ``1e-2``).
-    """
-
-    point = os.environ.get("LADDER_PRIMAL_POINT", "baseline").strip().lower()
-    if point not in ("baseline", "plus", "minus"):
-        raise ValueError(
-            f"LADDER_PRIMAL_POINT must be baseline|plus|minus; got {point!r}."
-        )
-    start = os.environ.get("LADDER_PRIMAL_START", "baseline").strip().lower()
-    if start not in ("fresh", "baseline"):
-        raise ValueError(
-            f"LADDER_PRIMAL_START must be fresh|baseline; got {start!r}."
-        )
-    try:
-        eta = float(os.environ.get("LADDER_PRIMAL_ETA", "1e-2"))
-    except ValueError as error:
-        raise ValueError("LADDER_PRIMAL_ETA must be a float.") from error
-    if eta <= 0.0:
-        raise ValueError("LADDER_PRIMAL_ETA must be positive.")
-
-    case = _resolve_level6_case()
-    driver._require_case_directory(case)
-    geometry_backend = _make_geometry_backend(comm)
-
-    # Identical baseline coordinates and direction as Level 3.
-    coordinates, direction = _baseline_coordinates_and_direction(
-        comm, geometry_backend
-    )
-    if point == "baseline":
-        requested = coordinates
-    elif point == "plus":
-        requested = coordinates + eta * direction
-    else:
-        requested = coordinates - eta * direction
-
-    displacement = requested - coordinates
-    displacement_rms = float(np.sqrt(np.mean(displacement**2)))
-    displacement_max = float(np.max(np.abs(displacement)))
-    checksum = _coordinate_checksum(requested)
-    patch_velocity = np.array([FLOW.velocity_m_per_s, FLOW.angle_of_attack_deg])
-
-    if is_root(comm):
-        print(
-            "[level6] "
-            f"point={point} start={start} eta={eta:.3e} "
-            f"disp_rms={displacement_rms:.6e} disp_max={displacement_max:.6e} "
-            f"checksum={checksum:.10e} "
-            f"primalMinResTol={FLOW.primal_min_res_tol:.3e} "
-            f"primalMinResTolDiff={FLOW.primal_min_res_tol_difference:g} "
-            f"primalMaxIters={FLOW.primal_max_iterations}",
-            flush=True,
-        )
-
-    # Primal-only diagnostic: no adjoint is ever solved, so DAFoam coloring is
-    # never invoked here.
-    if start == "baseline":
-        # Converge the undeformed baseline, freeze it with
-        # set_deterministic_baseline(), then restore it before the deformed solve.
-        backend = _make_dafoam_backend(comm, deterministic=True, case=case)
-        _prepare_deterministic_baseline(backend, coordinates, patch_velocity)
-        functions = backend.run_primal(
-            {"volume_coordinates": requested, "patch_velocity": patch_velocity}
-        )
-    else:
-        # Fresh: a new backend, no baseline captured; solve the requested
-        # coordinates directly from the case's initial fields.
-        backend = _make_dafoam_backend(comm, deterministic=False, case=case)
-        functions = backend.run_primal(
-            {"volume_coordinates": requested, "patch_velocity": patch_velocity}
-        )
-
-    scalar_functions = {
-        name: float(np.asarray(value).reshape(-1)[0])
-        for name, value in functions.items()
-    }
-    payload = {
-        "level": 6,
-        "mpi_ranks": comm_size(comm),
-        "initialization": start,
-        "point": point,
-        "eta": eta,
-        "displacement_rms": displacement_rms,
-        "displacement_max": displacement_max,
-        "coordinate_checksum": checksum,
-        "CD": scalar_functions.get("CD"),
-        "CL": scalar_functions.get("CL"),
-    }
-    if is_root(comm):
-        print(f"[level6] CD={payload['CD']} CL={payload['CL']}", flush=True)
-    _write_result("level6_primal_only_deformation", payload, comm)
-    return payload
-
-
 LEVELS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "0": level0_forward_repetition,
     "1": level1_mesh_motion_forward,
@@ -674,7 +517,6 @@ LEVELS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "3": level3_dafoam_volume_vjp,
     "4": level4_chain_rule,
     "5": level5_end_to_end,
-    "6": level6_primal_only_deformation,
 }
 
 
@@ -684,10 +526,7 @@ def main() -> None:
         if is_root(comm):
             print(
                 "Usage: python -m bsm3.core.boundary_surface_movement."
-                "e175_derivative_ladder <level 0-6>\n"
-                "  Level 6 also reads LADDER_PRIMAL_POINT (baseline|plus|minus), "
-                "LADDER_PRIMAL_START (fresh|baseline), and LADDER_PRIMAL_ETA "
-                "(default 1e-2) from the environment.",
+                "e175_derivative_ladder <level 0-5>",
                 file=sys.stderr,
                 flush=True,
             )

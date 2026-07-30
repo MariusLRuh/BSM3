@@ -40,27 +40,6 @@ def test_flow_solver_controls_propagate_to_dafoam_options():
     assert options["adjEqnOption"]["gmresRestart"] == 89
 
 
-def test_primal_min_res_tol_difference_propagates_to_dafoam_options():
-    options = build_da_options(
-        FlowConfig(primal_min_res_tol_difference=1.1),
-        ["aircraft"],
-        ["farfield"],
-    )
-    assert options["primalMinResTolDiff"] == pytest.approx(1.1)
-
-
-def test_primal_min_res_tol_difference_defaults_to_dafoam_default():
-    options = build_da_options(FlowConfig(), ["aircraft"], ["farfield"])
-    assert options["primalMinResTolDiff"] == pytest.approx(1.0e2)
-
-
-def test_primal_min_res_tol_difference_rejects_nonpositive_values():
-    with pytest.raises(ValueError, match="primal_min_res_tol_difference"):
-        FlowConfig(primal_min_res_tol_difference=0.0)
-    with pytest.raises(ValueError, match="primal_min_res_tol_difference"):
-        FlowConfig(primal_min_res_tol_difference=-1.0)
-
-
 def test_primal_max_iterations_updates_control_dict(tmp_path):
     system_directory = tmp_path / "system"
     system_directory.mkdir()

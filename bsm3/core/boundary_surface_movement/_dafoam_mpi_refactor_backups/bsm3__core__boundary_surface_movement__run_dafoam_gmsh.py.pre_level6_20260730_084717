@@ -90,10 +90,6 @@ class FlowConfig:
     primal_min_res_tol: float = 1.0e-7
     primal_min_iterations: int = 1
     primal_max_iterations: int = 10_000
-    # DAFoam accepts a converged primal only if the final residual is within
-    # this factor of primalMinResTol; e.g. 1.1 rejects a solve that stalls more
-    # than 10% above the requested residual. Defaults to DAFoam's lenient 1e2.
-    primal_min_res_tol_difference: float = 1.0e2
     adjoint_gmres_relative_tolerance: float = 1.0e-4
     adjoint_gmres_absolute_tolerance: float = 1.0e-14
     adjoint_gmres_max_iterations: int = 1_000
@@ -109,8 +105,6 @@ class FlowConfig:
                 "primal_max_iterations must be greater than or equal to "
                 "primal_min_iterations"
             )
-        if self.primal_min_res_tol_difference <= 0.0:
-            raise ValueError("primal_min_res_tol_difference must be positive")
         if self.adjoint_gmres_relative_tolerance <= 0.0:
             raise ValueError(
                 "adjoint_gmres_relative_tolerance must be positive"
@@ -522,7 +516,6 @@ def build_da_options(
         "designSurfaces": wall_patches,
         "solverName": config.solver_name,
         "primalMinResTol": config.primal_min_res_tol,
-        "primalMinResTolDiff": config.primal_min_res_tol_difference,
         "primalMinIters": config.primal_min_iterations,
         "primalBC": {
             "U0": {

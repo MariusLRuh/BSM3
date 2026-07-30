@@ -194,10 +194,7 @@ FLOW = FlowConfig(
     reference_area_m2=70.0,
     normal_axis="z",
     use_wall_functions=False,
-    # Tight primal tolerance for derivative diagnostics; primalMinResTolDiff=1.1
-    # rejects a solve that stalls more than 10% above the requested residual.
-    primal_min_res_tol=1.0e-9,
-    primal_min_res_tol_difference=1.1,
+    primal_min_res_tol=1.0e-7,
     primal_min_iterations=1,
     primal_max_iterations=10_000,
     adjoint_gmres_relative_tolerance=1.0e-4,

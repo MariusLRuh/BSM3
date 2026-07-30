@@ -79,7 +79,7 @@ Collectives:
 | `geometry_volume_backend.py` | `CSDLRecorderBackend` (matrix-free forward/VJP engine, forward caching + DV-match invalidation), `E175GeometryVolumeBackend`, `read_gmsh_volume_point_count`. |
 | `geometry_volume_operation.py` | `GeometryVolumeOperation` (rank-0 forward + broadcast) and `GeometryVolumeVJP` (rank-0 VJP + DV-cotangent broadcast), CustomExplicitOperationBeta contract. |
 | `forward_only_fd_checker.py` | FD-first checker; stage markers; fd-level `"Solving Linear Equation"` guard; scale-aware steps; degree/radian check. |
-| `e175_derivative_ladder.py` | Levels 0–5, cluster-run. |
+| `e175_derivative_ladder.py` | Levels 0–6, cluster-run. |
 | `slurm/env_setup.sh`, `slurm/e175_derivative_ladder.sbatch`, `slurm/e175_mpi_invariance.sbatch` | TSCC batch scaffolding. |
 | `tests/test_geometry_volume_mpi.py` | 14 dependency-free / mock-MPI tests. |
 
@@ -127,6 +127,10 @@ sbatch --export=ALL,LADDER_LEVEL=3,LADDER_NP=2 e175_derivative_ladder.sbatch
 # Gate D — chain rule + one-DV end-to-end:
 sbatch --export=ALL,LADDER_LEVEL=4,LADDER_NP=2 e175_derivative_ladder.sbatch
 sbatch --export=ALL,LADDER_LEVEL=5,LADDER_NP=2 e175_derivative_ladder.sbatch
+# Level 6 — primal-only deformation diagnostic (isolated case, no adjoint):
+sbatch --export=ALL,LADDER_LEVEL=6,LADDER_NP=1,LADDER_PRIMAL_POINT=plus,\
+LADDER_PRIMAL_START=fresh,LADDER_CASE_TEMPLATE=/path/to/case \
+  e175_derivative_ladder.sbatch
 ```
 
 Ladder ↔ addendum-gate mapping:
@@ -139,6 +143,17 @@ Ladder ↔ addendum-gate mapping:
 | 3 | DAFoam-only volume-coordinate VJP (CL, CD) | C | rel err ~1e-2 → 1e-3; rank-invariant |
 | 4 | Chain rule `X̄ᵀJδd` vs `δdᵀd̄` | D | rel err ≤ 1e-3 |
 | 5 | One-DV, one-output end-to-end centered FD | D | clear regime; then widen to 3 DVs + CL/CD |
+| 6 | Primal-only deformed solve (no adjoint) | primal | primal converges within `primalMinResTolDiff` (1.1 ⇒ ≤10% above tol) |
+
+Level 6 isolates the deformed **primal** from the adjoint: it solves one primal
+at the baseline / `+ηd` / `−ηd` point (`LADDER_PRIMAL_POINT`), started either from
+a captured converged baseline (`LADDER_PRIMAL_START=baseline`) or cold from the
+case's initial fields (`fresh`). It shares Level 3's exact baseline coordinates
+and direction, needs an isolated case (`LADDER_CASE_TEMPLATE` → copied per run →
+`LADDER_CASE_DIRECTORY`), and never invokes coloring or an adjoint. With
+`primal_min_res_tol=1e-9` and `primalMinResTolDiff=1.1`, a deformed solve that
+stalls >10% above the target residual is rejected (surfacing deformation-induced
+convergence problems that Level 0's baseline-only noise check cannot).
 
 Each level writes `ladder_results/levelN_np*_<stamp>.json` and a `.log` on
 Lustre scratch, with `run_metadata.txt` (git commit, rank count, host) and an
