@@ -498,10 +498,6 @@ def build_da_options(
 ) -> dict[str, Any]:
     """Build native DAFoam v4 options for a steady compressible primal run."""
 
-    # DAFoam requires native Python lists; callers may pass tuples.
-    wall_patches = [str(name) for name in wall_patches]
-    farfield_patches = [str(name) for name in farfield_patches]
-
     if config.velocity_m_per_s <= 0.0:
         raise ValueError("Freestream velocity must be positive")
     if config.pressure_pa <= 0.0 or config.temperature_k <= 0.0:

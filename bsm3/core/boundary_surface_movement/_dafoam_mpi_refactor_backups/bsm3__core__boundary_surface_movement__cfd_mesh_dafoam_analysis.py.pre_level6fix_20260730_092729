@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -222,17 +221,7 @@ class OpenFOAMCaseConfig:
     results_file: Path = Path("bsm3_dafoam_results.json")
 
 
-CASE = OpenFOAMCaseConfig(
-    case_directory=Path(
-        os.environ.get(
-            "DAFOAM_CASE_DIRECTORY",
-            "/tscc/lustre/ddn/scratch/mruh/"
-            "dafoam_cases/da_foam_csdl",
-        )
-    ),
-    reuse_openfoam_mesh=True,
-    overwrite_existing_polymesh=False,
-)
+CASE = OpenFOAMCaseConfig(case_directory=None)
 
 
 # ---------------------------------------------------------------------------

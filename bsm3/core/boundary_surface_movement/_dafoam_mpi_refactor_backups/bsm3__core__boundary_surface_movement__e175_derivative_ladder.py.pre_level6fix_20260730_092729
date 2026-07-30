@@ -16,8 +16,8 @@ end-to-end run, following the validation ladder in
 It reuses the configuration objects from ``cfd_mesh_dafoam_analysis`` so the
 design point, mesh files, flow settings, and OpenFOAM case are defined in exactly
 one place.  Levels 0 and 3-6 require a configured DAFoam case; Levels 1-2 need
-only the mesh-motion stack.  Level 6 requires an *isolated* case (mandatory
-``DAFOAM_CASE_DIRECTORY``) because it repeatedly solves primals from initial
+only the mesh-motion stack.  Level 6 requires an *isolated* case (provided via
+``LADDER_CASE_DIRECTORY``) because it repeatedly solves primals from initial
 fields.
 
 Invocation (through Slurm; see slurm/e175_derivative_ladder.sbatch):
@@ -186,27 +186,19 @@ def _baseline_coordinates_and_direction(
 
 
 def _resolve_level6_case():
-    """Case for Level 6: a mandatory isolated ``DAFOAM_CASE_DIRECTORY``.
+    """Case for Level 6: an isolated copy provided via ``LADDER_CASE_DIRECTORY``.
 
     The batch script copies the OpenFOAM case template into a per-run scratch
-    directory and exports ``DAFOAM_CASE_DIRECTORY`` so repeated primal-only
-    solves (fresh or baseline start) never collide with the template case or with
-    the adjoint levels' coloring cache. There is no fall-back to the shared case:
-    Level 6 must never operate on the template case.
+    directory and exports ``LADDER_CASE_DIRECTORY`` so repeated primal-only
+    solves (fresh or baseline start) never collide with a shared case or with
+    the adjoint levels' coloring cache. Falls back to the shared driver CASE when
+    the override is unset.
     """
 
-    override = os.environ.get("DAFOAM_CASE_DIRECTORY")
-    if not override:
-        raise RuntimeError(
-            "Level 6 requires an isolated DAFOAM_CASE_DIRECTORY."
-        )
-
-    return replace(
-        driver.CASE,
-        case_directory=Path(override),
-        reuse_openfoam_mesh=True,
-        overwrite_existing_polymesh=False,
-    )
+    override = os.environ.get("LADDER_CASE_DIRECTORY")
+    if override:
+        return replace(driver.CASE, case_directory=Path(override))
+    return driver.CASE
 
 
 def _prepare_deterministic_baseline(backend, coordinates, patch_velocity):
