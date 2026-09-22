@@ -14,6 +14,7 @@ from bsm3.core.boundary_surface_movement.cfd_mesh_dafoam_analysis import (
 from bsm3.core.boundary_surface_movement.e175_mesh_motion_config import (
     E175ModelFiles,
     E175PipelineConfig,
+    NgonAffineRegularizationConfig,
     SurfaceMotionConfig,
     TangentialSmoothingConfig,
     VolumeMotionConfig,
@@ -28,15 +29,25 @@ PACKAGE_DIRECTORY = (
 )
 
 
-def test_public_e175_drivers_do_not_use_cli_or_environment_configuration():
-    forbidden = ("argparse", "parse_args(", "os.environ")
+def test_public_e175_drivers_do_not_use_cli_configuration():
     for filename in (
         "cfd_mesh_movement_test.py",
         "cfd_mesh_dafoam_analysis.py",
     ):
         source = (PACKAGE_DIRECTORY / filename).read_text(encoding="utf-8")
-        for token in forbidden:
-            assert token not in source
+        assert "argparse" not in source
+        assert "parse_args(" not in source
+
+    surface_source = (
+        PACKAGE_DIRECTORY / "cfd_mesh_movement_test.py"
+    ).read_text(encoding="utf-8")
+    assert "os.environ" not in surface_source
+
+    dafoam_source = (
+        PACKAGE_DIRECTORY / "cfd_mesh_dafoam_analysis.py"
+    ).read_text(encoding="utf-8")
+    assert dafoam_source.count("os.environ.get(") == 1
+    assert '"DAFOAM_CASE_DIRECTORY"' in dafoam_source
 
 
 def test_default_volume_motion_is_final_only_and_differentiable():
@@ -57,26 +68,69 @@ def test_public_drivers_expose_explicit_matching_model_files():
         cfd_mesh_movement_test,
     )
 
-    for driver in (cfd_mesh_movement_test, cfd_mesh_dafoam_analysis):
-        files = driver.MODEL_FILES
-        assert isinstance(files, E175ModelFiles)
-        assert files.geometry_step_file.name == "embraer_175_no_winglets.stp"
-        assert files.surface_mesh_file.name == "e175_openvsp_aircraft_wall.msh"
-        assert files.volume_mesh_file.name == "e175_euler_volume.msh"
-        assert (
-            files.volume_wall_map_file.name
-            == "e175_openvsp_aircraft_wall.volume_map.npz"
-        )
-        assert files.geometry_step_file.is_file()
-        assert files.surface_mesh_file.is_file()
-        assert files.volume_mesh_file.is_file()
-        assert files.volume_wall_map_file.is_file()
+    movement_files = cfd_mesh_movement_test.MODEL_FILES
+    assert isinstance(movement_files, E175ModelFiles)
+    assert movement_files.geometry_step_file.name == "embraer_175_no_winglets.stp"
+    assert (
+        movement_files.surface_mesh_file.name
+        == "e175_fluent_R4_aircraft_wall_tri.msh"
+    )
+    assert (
+        movement_files.volume_mesh_file.name
+        == "e175_fluent_R4_tet_euler_volume.msh"
+    )
+    assert (
+        movement_files.volume_wall_map_file.name
+        == "e175_fluent_R4_aircraft_wall_tri.volume_map.npz"
+    )
+    assert cfd_mesh_movement_test.MESH_MOTION.volume_motion.mode == "off"
+    assert (
+        cfd_mesh_movement_test.MESH_MOTION.volume_motion.load_mode
+        == "synchronized"
+    )
+    # The wall extracted from the volume mesh is already the y >= 0 half.
+    assert cfd_mesh_movement_test.MESH_MOTION.symmetry
+
+    dafoam_files = cfd_mesh_dafoam_analysis.MODEL_FILES
+    assert isinstance(dafoam_files, E175ModelFiles)
+    assert dafoam_files.geometry_step_file.name == "embraer_175_no_winglets.stp"
+    assert dafoam_files.surface_mesh_file.name == "e175_openvsp_aircraft_wall.msh"
+    assert dafoam_files.volume_mesh_file.name == "e175_euler_volume.msh"
+    assert (
+        dafoam_files.volume_wall_map_file.name
+        == "e175_openvsp_aircraft_wall.volume_map.npz"
+    )
+    assert dafoam_files.geometry_step_file.is_file()
+    assert dafoam_files.surface_mesh_file.is_file()
+    assert dafoam_files.volume_mesh_file.is_file()
+    assert dafoam_files.volume_wall_map_file.is_file()
 
     dafoam_source = (
         PACKAGE_DIRECTORY / "cfd_mesh_dafoam_analysis.py"
     ).read_text(encoding="utf-8")
     assert "mesh_file=model_files.volume_mesh_file" in dafoam_source
     assert "read_gmsh22_volume(model_files.volume_mesh_file)" in dafoam_source
+
+
+@pytest.mark.integration
+def test_local_r4_driver_assets_exist_when_available():
+    """Validate the local R4 asset set without requiring it in fresh clones."""
+    from bsm3.core.boundary_surface_movement import cfd_mesh_movement_test
+
+    model_files = cfd_mesh_movement_test.MODEL_FILES
+    local_assets = (
+        model_files.geometry_step_file,
+        model_files.surface_mesh_file,
+        model_files.volume_mesh_file,
+        model_files.volume_wall_map_file,
+    )
+    missing = [path for path in local_assets if not path.is_file()]
+    if missing:
+        pytest.skip(
+            "local R4 assets are unavailable: "
+            + ", ".join(path.name for path in missing)
+        )
+    assert all(path.is_file() for path in local_assets)
 
 
 def test_final_only_tangential_reprojection_is_a_supported_fixed_option():
@@ -88,9 +142,46 @@ def test_final_only_tangential_reprojection_is_a_supported_fixed_option():
     assert config.tangential_smoothing.reprojection == "final_only"
 
 
+def test_quad_diagonal_weight_is_validated_as_graph_only():
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        SurfaceMotionConfig(quad_diagonal_weight=-0.1)
+    with pytest.raises(ValueError, match="requires graph motion"):
+        SurfaceMotionConfig(
+            mode="membrane",
+            load_steps=1,
+            quad_diagonal_weight=1.0,
+        )
+    with pytest.raises(ValueError, match="quad_bracing_mode"):
+        SurfaceMotionConfig(quad_bracing_mode="unknown")
+
+
+def test_ngon_affine_weight_is_validated_as_graph_only():
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        NgonAffineRegularizationConfig(weight=-0.1)
+    with pytest.raises(ValueError, match="requires graph motion"):
+        SurfaceMotionConfig(
+            mode="membrane",
+            load_steps=1,
+            ngon_affine=NgonAffineRegularizationConfig(weight=0.1),
+        )
+
+
 def test_invalid_synchronized_name_is_rejected():
     with pytest.raises(ValueError, match="final or synchronized"):
         VolumeMotionConfig(load_mode="last")
+
+
+def test_independent_synchronized_volume_steps_are_validated():
+    config = VolumeMotionConfig(
+        load_mode="synchronized", synchronized_load_steps=5
+    )
+    assert config.synchronized_load_steps == 5
+    with pytest.raises(ValueError, match="must be positive"):
+        VolumeMotionConfig(
+            load_mode="synchronized", synchronized_load_steps=0
+        )
+    with pytest.raises(ValueError, match="requires synchronized mode"):
+        VolumeMotionConfig(load_mode="final", synchronized_load_steps=5)
 
 
 def test_end_to_end_cl_constraint_cd_objective_uses_py_simulator():

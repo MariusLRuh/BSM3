@@ -19,6 +19,7 @@ import scipy.sparse as sp
 
 from bsm3.preprocessing.mesh_io import _as_mesh_data
 
+from .elasticity import _quad_brace_pairs, _validate_quad_bracing_mode
 from .spd_solve_custom_op import factorize_spd
 
 
@@ -34,8 +35,11 @@ class CurrentGraphModel:
         stiffening_exponent: float,
         area_floor: float = 1e-12,
         distance_weighting=None,
+        quad_diagonal_weight: float = 0.0,
+        quad_bracing_mode: str = "both_diagonals",
     ):
         mesh_data = _as_mesh_data(mesh)
+        baseline_points = np.asarray(mesh_data.vertices, dtype=float)
         self.num_vertices = int(mesh_data.vertices.shape[0])
         self.free_ids = np.asarray(free_ids, dtype=np.int64).reshape(-1)
         self.prescribed_ids = np.asarray(
@@ -43,6 +47,8 @@ class CurrentGraphModel:
         ).reshape(-1)
         self.stiffening_exponent = float(stiffening_exponent)
         self.area_floor = float(area_floor)
+        self.quad_diagonal_weight = float(quad_diagonal_weight)
+        self.quad_bracing_mode = str(quad_bracing_mode)
         # Optional fixed reference-geodesic distance multiplier.  It is a
         # setup-time constant per edge, so the current-area VJP only scales the
         # existing area derivative by it; the distance itself has no derivative.
@@ -51,6 +57,12 @@ class CurrentGraphModel:
             raise ValueError("stiffening_exponent must be non-negative.")
         if self.area_floor <= 0.0:
             raise ValueError("area_floor must be positive.")
+        if (
+            not np.isfinite(self.quad_diagonal_weight)
+            or self.quad_diagonal_weight < 0.0
+        ):
+            raise ValueError("quad_diagonal_weight must be finite and non-negative.")
+        _validate_quad_bracing_mode(self.quad_bracing_mode)
         if np.intersect1d(self.free_ids, self.prescribed_ids).size:
             raise ValueError("free_ids and prescribed_ids must be disjoint.")
 
@@ -63,8 +75,44 @@ class CurrentGraphModel:
 
         edge_index: dict[tuple[int, int], int] = {}
         edge_faces: list[list[int]] = []
+        edge_face_scales: list[list[float]] = []
+        edge_is_physical: list[bool] = []
+        edge_diagonal_weights: list[float] = []
         cells: list[np.ndarray] = []
         cell_edges: list[np.ndarray] = []
+        cell_edge_scales: list[np.ndarray] = []
+
+        def register_edge(
+            vertex_a: int,
+            vertex_b: int,
+            *,
+            face_index: int,
+            scale: float,
+            physical: bool,
+        ) -> int | None:
+            if vertex_a == vertex_b:
+                return None
+            key = (
+                (vertex_a, vertex_b)
+                if vertex_a < vertex_b
+                else (vertex_b, vertex_a)
+            )
+            edge_id = edge_index.get(key)
+            if edge_id is None:
+                edge_id = len(edge_index)
+                edge_index[key] = edge_id
+                edge_faces.append([])
+                edge_face_scales.append([])
+                edge_is_physical.append(False)
+                edge_diagonal_weights.append(0.0)
+            edge_faces[edge_id].append(face_index)
+            edge_face_scales[edge_id].append(scale)
+            if physical:
+                edge_is_physical[edge_id] = True
+            else:
+                edge_diagonal_weights[edge_id] += scale
+            return edge_id
+
         for block in mesh_data.cell_blocks.values():
             block_array = np.asarray(block, dtype=np.int64)
             if block_array.ndim != 2 or block_array.shape[1] < 2:
@@ -73,33 +121,58 @@ class CurrentGraphModel:
                 cell = np.asarray(raw_cell, dtype=np.int64)
                 face_index = len(cells)
                 local_edges = []
+                local_scales = []
                 for index, vertex_a in enumerate(cell):
                     vertex_b = int(cell[(index + 1) % cell.size])
                     vertex_a = int(vertex_a)
-                    if vertex_a == vertex_b:
-                        continue
-                    key = (
-                        (vertex_a, vertex_b)
-                        if vertex_a < vertex_b
-                        else (vertex_b, vertex_a)
+                    edge_id = register_edge(
+                        vertex_a,
+                        vertex_b,
+                        face_index=face_index,
+                        scale=1.0,
+                        physical=True,
                     )
-                    edge_id = edge_index.get(key)
                     if edge_id is None:
-                        edge_id = len(edge_index)
-                        edge_index[key] = edge_id
-                        edge_faces.append([])
-                    edge_faces[edge_id].append(face_index)
+                        continue
                     local_edges.append(edge_id)
+                    local_scales.append(1.0)
+                if cell.size == 4 and self.quad_diagonal_weight > 0.0:
+                    for vertex_a, vertex_b, brace_scale in _quad_brace_pairs(
+                        baseline_points,
+                        cell,
+                        mode=self.quad_bracing_mode,
+                        weight=self.quad_diagonal_weight,
+                    ):
+                        edge_id = register_edge(
+                            vertex_a,
+                            vertex_b,
+                            face_index=face_index,
+                            scale=brace_scale,
+                            physical=False,
+                        )
+                        if edge_id is None:
+                            continue
+                        local_edges.append(edge_id)
+                        local_scales.append(brace_scale)
                 cells.append(cell)
                 cell_edges.append(np.asarray(local_edges, dtype=np.int64))
+                cell_edge_scales.append(np.asarray(local_scales, dtype=float))
 
         ordered_edges = sorted(edge_index, key=edge_index.get)
         self.edge_vertices = np.asarray(ordered_edges, dtype=np.int64)
         self.edge_faces = tuple(
             np.asarray(items, dtype=np.int64) for items in edge_faces
         )
+        self.edge_face_scales = tuple(
+            np.asarray(items, dtype=float) for items in edge_face_scales
+        )
+        self.edge_uniform_weights = (
+            np.asarray(edge_is_physical, dtype=float)
+            + np.asarray(edge_diagonal_weights, dtype=float)
+        )
         self.cells = tuple(cells)
         self.cell_edges = tuple(cell_edges)
+        self.cell_edge_scales = tuple(cell_edge_scales)
 
         # Fixed per-edge distance multiplier (ones without a distance weighting),
         # aligned with ``edge_vertices``/``edge_faces`` so the area weights and
@@ -206,6 +279,7 @@ class CurrentGraphModel:
                 np.sum(
                     edge_sensitivities[cell_edge_ids]
                     * self.edge_distance_multiplier[cell_edge_ids]
+                    * self.cell_edge_scales[cell_index]
                 )
                 * (-exponent)
                 * area ** (-exponent - 1.0)
@@ -255,14 +329,19 @@ class CurrentGraphModel:
         if self.stiffening_exponent == 0.0:
             # w_ij = m_ij * 1; the distance multiplier is still a fixed constant,
             # so the solve has no area dependence and the VJP w.r.t. points is 0.
-            return self.edge_distance_multiplier.copy(), areas
+            return (
+                self.edge_distance_multiplier * self.edge_uniform_weights,
+                areas,
+            )
         contributions = np.maximum(areas, self.area_floor) ** (
             -self.stiffening_exponent
         )
         area_weights = np.asarray(
             [
-                float(np.sum(contributions[faces]))
-                for faces in self.edge_faces
+                float(np.sum(contributions[faces] * scales))
+                for faces, scales in zip(
+                    self.edge_faces, self.edge_face_scales
+                )
             ],
             dtype=float,
         )

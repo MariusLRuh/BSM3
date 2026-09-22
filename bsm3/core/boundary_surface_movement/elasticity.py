@@ -1,7 +1,8 @@
 """Reference-configuration stiffness assembly for mesh-motion propagation.
 
 This module builds the linear system that the physics-based propagator solves
-in place of the RBF field.  Milestone 1 uses a central-force edge-spring energy
+in place of the RBF field.  Milestone 1 uses an isotropic
+displacement-difference graph energy
 
     Phi(u) = 1/2 * sum_{(i,j) in E} w_ij * || u_i - u_j ||^2 ,
 
@@ -103,14 +104,18 @@ class StiffnessAssembler(Protocol):
 
 
 class GraphLaplacianAssembler:
-    """Central-force (edge-spring) stiffness: decoupled scalar graph Laplacian.
+    """Displacement-difference stiffness: decoupled scalar graph Laplacian.
 
     Edge weights follow ``w_ij = sum_{f in faces(i,j)} A_f^{-chi}`` with
     ``A_f`` the reference face area.  ``chi = 0`` recovers uniform weights
     (``w_ij = 1`` per graph edge) -- the pure graph Laplacian / harmonic map,
     which is Milestone 1's validated default.  Positive ``chi`` stiffens small
-    cells so they resist collapse under large compression; it is the single
-    physical knob of the family.
+    cells so they resist collapse under large compression.
+
+    When ``quad_diagonal_weight`` is positive, ``quad_bracing_mode`` selects
+    one quality-chosen diagonal, both diagonals, or a four-spoke virtual center.
+    The center is eliminated analytically, so every mode affects only the
+    deformation operator; none alters the aerodynamic mesh connectivity.
     """
 
     def __init__(
@@ -119,13 +124,23 @@ class GraphLaplacianAssembler:
         stiffening_exponent: float = 0.0,
         area_floor: float = 1e-12,
         distance_weighting=None,
+        quad_diagonal_weight: float = 0.0,
+        quad_bracing_mode: str = "both_diagonals",
     ):
         if float(stiffening_exponent) < 0.0:
             raise ValueError("stiffening_exponent (chi) must be non-negative.")
         if float(area_floor) <= 0.0:
             raise ValueError("area_floor must be positive.")
+        if (
+            not np.isfinite(float(quad_diagonal_weight))
+            or float(quad_diagonal_weight) < 0.0
+        ):
+            raise ValueError("quad_diagonal_weight must be finite and non-negative.")
+        _validate_quad_bracing_mode(quad_bracing_mode)
         self.stiffening_exponent = float(stiffening_exponent)
         self.area_floor = float(area_floor)
+        self.quad_diagonal_weight = float(quad_diagonal_weight)
+        self.quad_bracing_mode = str(quad_bracing_mode)
         # Optional fixed reference-geodesic distance multiplier applied to every
         # edge weight.  ``None`` (or ``beta = 0``) is the exact no-op baseline.
         self.distance_weighting = distance_weighting
@@ -154,6 +169,8 @@ class GraphLaplacianAssembler:
             points,
             stiffening_exponent=self.stiffening_exponent,
             area_floor=self.area_floor,
+            quad_diagonal_weight=self.quad_diagonal_weight,
+            quad_bracing_mode=self.quad_bracing_mode,
         )
         if self.distance_weighting is not None:
             # Multiply each reference edge weight by its fixed distance factor.
@@ -429,16 +446,30 @@ class CorotationalMembraneAssembler:
         )
 
 
-def graph_neighbors(mesh, vertex_ids: np.ndarray) -> np.ndarray:
+def graph_neighbors(
+    mesh,
+    vertex_ids: np.ndarray,
+    *,
+    include_quad_diagonals: bool = False,
+    quad_bracing_mode: str | None = None,
+) -> np.ndarray:
     """Return the mesh-graph neighbors of ``vertex_ids`` not in the set.
 
-    Neighbors are defined by the ring edges of the triangle/quad cells (the
-    same connectivity the stiffness assembler uses).  This is how the elastic
-    prescribed set is grown from the free set: every graph neighbor of a free
-    vertex must be prescribed so the free-free block has no stiffness leak.
+    Neighbors are defined by the ring edges of the triangle/quad cells.
+    ``include_quad_diagonals`` retains the legacy request for both diagonals.
+    ``quad_bracing_mode`` can instead select the single-diagonal,
+    both-diagonal, or statically condensed virtual-center operator graph.  This
+    is how the elastic prescribed set is grown from the free set: every
+    stiffness neighbor of a free vertex must be prescribed so the free-free
+    block has no stiffness leak.
     """
 
     mesh_data = _as_mesh_data(mesh)
+    if quad_bracing_mode is not None:
+        _validate_quad_bracing_mode(quad_bracing_mode)
+    elif include_quad_diagonals:
+        quad_bracing_mode = "both_diagonals"
+    points = np.asarray(mesh_data.vertices, dtype=float)
     source = set(int(vertex) for vertex in np.asarray(vertex_ids, dtype=np.int64).reshape(-1))
     neighbors: set[int] = set()
     for block in mesh_data.cell_blocks.values():
@@ -448,9 +479,23 @@ def graph_neighbors(mesh, vertex_ids: np.ndarray) -> np.ndarray:
         for cell in cells:
             ring = cell.tolist()
             count = len(ring)
-            for local_index in range(count):
-                vertex_a = int(ring[local_index])
-                vertex_b = int(ring[(local_index + 1) % count])
+            edges = [
+                (ring[local_index], ring[(local_index + 1) % count])
+                for local_index in range(count)
+            ]
+            if quad_bracing_mode is not None and count == 4:
+                edges.extend(
+                    (vertex_a, vertex_b)
+                    for vertex_a, vertex_b, _ in _quad_brace_pairs(
+                        points,
+                        np.asarray(cell, dtype=np.int64),
+                        mode=quad_bracing_mode,
+                        weight=1.0,
+                    )
+                )
+            for raw_a, raw_b in edges:
+                vertex_a = int(raw_a)
+                vertex_b = int(raw_b)
                 if vertex_a == vertex_b:
                     continue
                 if vertex_a in source and vertex_b not in source:
@@ -699,16 +744,21 @@ def _edge_weights(
     *,
     stiffening_exponent: float,
     area_floor: float,
+    quad_diagonal_weight: float = 0.0,
+    quad_bracing_mode: str = "both_diagonals",
 ) -> dict[tuple[int, int], float]:
     """Reference-mesh edge weights keyed by ordered vertex pairs.
 
-    Edges are the ring segments of every triangle/quad cell (diagonals are not
-    edges).  For ``chi = 0`` each edge weight is 1; for ``chi > 0`` each edge
-    accumulates ``A_f^{-chi}`` from the faces that contain it.
+    Physical edges are the ring segments of every polygon.  For ``chi = 0``
+    each physical edge weight is 1; for ``chi > 0`` each physical edge
+    accumulates ``A_f^{-chi}`` from its incident faces.  With
+    ``quad_diagonal_weight = lambda``, quads additionally contribute the
+    selected auxiliary bracing operator.
     """
 
     uniform = stiffening_exponent == 0.0
-    weights: dict[tuple[int, int], float] = {}
+    physical_weights: dict[tuple[int, int], float] = {}
+    diagonal_weights: dict[tuple[int, int], float] = {}
     for block in mesh_data.cell_blocks.values():
         cells = np.asarray(block, dtype=np.int64)
         if cells.ndim != 2 or cells.shape[1] < 2:
@@ -728,10 +778,105 @@ def _edge_weights(
                     continue
                 key = (vertex_a, vertex_b) if vertex_a < vertex_b else (vertex_b, vertex_a)
                 if uniform:
-                    weights[key] = 1.0
+                    physical_weights[key] = 1.0
                 else:
-                    weights[key] = weights.get(key, 0.0) + contribution
+                    physical_weights[key] = (
+                        physical_weights.get(key, 0.0) + contribution
+                    )
+            if len(ring) == 4 and quad_diagonal_weight > 0.0:
+                for vertex_a, vertex_b, brace_scale in _quad_brace_pairs(
+                    points,
+                    np.asarray(cell, dtype=np.int64),
+                    mode=quad_bracing_mode,
+                    weight=quad_diagonal_weight,
+                ):
+                    if vertex_a == vertex_b:
+                        continue
+                    key = (
+                        (vertex_a, vertex_b)
+                        if vertex_a < vertex_b
+                        else (vertex_b, vertex_a)
+                    )
+                    diagonal_weights[key] = (
+                        diagonal_weights.get(key, 0.0)
+                        + brace_scale * contribution
+                    )
+    weights = physical_weights.copy()
+    for key, contribution in diagonal_weights.items():
+        weights[key] = weights.get(key, 0.0) + contribution
     return weights
+
+
+_QUAD_BRACING_MODES = (
+    "single_diagonal",
+    "both_diagonals",
+    "virtual_center",
+)
+
+
+def _validate_quad_bracing_mode(mode: str) -> None:
+    if str(mode) not in _QUAD_BRACING_MODES:
+        choices = ", ".join(_QUAD_BRACING_MODES)
+        raise ValueError(f"quad_bracing_mode must be one of: {choices}.")
+
+
+def _quad_brace_pairs(
+    points: np.ndarray,
+    cell: np.ndarray,
+    *,
+    mode: str,
+    weight: float,
+) -> tuple[tuple[int, int, float], ...]:
+    """Return condensed corner-pair contributions for one quad.
+
+    ``single_diagonal`` selects the baseline diagonal that maximizes the worse
+    mean-ratio quality of its two triangles.  ``both_diagonals`` contributes
+    both crossing diagonals.  ``virtual_center`` represents four equal spokes
+    of weight ``2 * weight`` to a free center node.  Eliminating that center
+    exactly gives all six corner pairs weight ``weight / 2``.
+    """
+
+    _validate_quad_bracing_mode(mode)
+    vertices = tuple(int(vertex) for vertex in np.asarray(cell).reshape(-1))
+    if len(vertices) != 4 or weight == 0.0:
+        return ()
+    if mode == "single_diagonal":
+        option_02 = min(
+            _triangle_mean_ratio(points[[vertices[0], vertices[1], vertices[2]]]),
+            _triangle_mean_ratio(points[[vertices[0], vertices[2], vertices[3]]]),
+        )
+        option_13 = min(
+            _triangle_mean_ratio(points[[vertices[0], vertices[1], vertices[3]]]),
+            _triangle_mean_ratio(points[[vertices[1], vertices[2], vertices[3]]]),
+        )
+        diagonal = (
+            (vertices[0], vertices[2])
+            if option_02 >= option_13
+            else (vertices[1], vertices[3])
+        )
+        return ((diagonal[0], diagonal[1], 2.0 * weight),)
+    if mode == "both_diagonals":
+        return (
+            (vertices[0], vertices[2], 2.0 * weight),
+            (vertices[1], vertices[3], 2.0 * weight),
+        )
+    pair_scale = 0.5 * weight
+    return tuple(
+        (vertices[left], vertices[right], pair_scale)
+        for left in range(4)
+        for right in range(left + 1, 4)
+    )
+
+
+def _triangle_mean_ratio(triangle: np.ndarray) -> float:
+    triangle = np.asarray(triangle, dtype=float).reshape((3, 3))
+    edges = np.roll(triangle, -1, axis=0) - triangle
+    squared_lengths = np.einsum("ij,ij->i", edges, edges)
+    denominator = float(np.sum(squared_lengths))
+    if denominator <= 1e-30:
+        return 0.0
+    twice_area = float(np.linalg.norm(np.cross(edges[0], -edges[2])))
+    return 2.0 * np.sqrt(3.0) * twice_area / denominator
 
 
 def _polygon_area(polygon: np.ndarray) -> float:

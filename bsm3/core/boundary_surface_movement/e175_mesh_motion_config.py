@@ -12,18 +12,18 @@ import numpy as np
 
 @dataclass(frozen=True)
 class E175ModelFiles:
-    """Geometry and matching surface/volume mesh inputs for one analysis.
+    """Geometry and surface/optional-volume mesh inputs for one analysis.
 
-    ``surface_mesh_file`` must be the aircraft-wall boundary extracted from
-    ``volume_mesh_file``. ``volume_wall_map_file`` stores the corresponding
-    surface-to-volume node map; loading deliberately fails if those inputs do
-    not match.
+    When volume motion is enabled, ``surface_mesh_file`` must be the
+    aircraft-wall boundary extracted from ``volume_mesh_file`` and
+    ``volume_wall_map_file`` must store the corresponding surface-to-volume
+    node map. Surface-only analyses may omit both volume paths.
     """
 
     geometry_step_file: Path
     surface_mesh_file: Path
-    volume_mesh_file: Path
-    volume_wall_map_file: Path
+    volume_mesh_file: Path | None = None
+    volume_wall_map_file: Path | None = None
     setup_cache_directory: Path | None = None
 
     def __post_init__(self):
@@ -33,7 +33,9 @@ class E175ModelFiles:
             "volume_mesh_file",
             "volume_wall_map_file",
         ):
-            object.__setattr__(self, name, Path(getattr(self, name)).expanduser())
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, Path(value).expanduser())
         if self.setup_cache_directory is not None:
             object.__setattr__(
                 self,
@@ -97,6 +99,21 @@ class DistortionRegularizationConfig:
 
 
 @dataclass(frozen=True)
+class NgonAffineRegularizationConfig:
+    """Fixed element-local affine-residual weight for polygons with n >= 4."""
+
+    weight: float = 0.0
+
+    def __post_init__(self):
+        value = float(self.weight)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError(
+                "N-gon affine regularization weight must be finite and nonnegative."
+            )
+        object.__setattr__(self, "weight", value)
+
+
+@dataclass(frozen=True)
 class FinalSurfaceQualityConfig:
     mode: str = "none"
     layers: int = 16
@@ -119,6 +136,8 @@ class SurfaceMotionConfig:
     mode: str = "graph"
     load_steps: int = 2
     stiffening_exponent: float = 1.5
+    quad_diagonal_weight: float = 0.0
+    quad_bracing_mode: str = "both_diagonals"
     tangential_smoothing: TangentialSmoothingConfig = field(
         default_factory=TangentialSmoothingConfig
     )
@@ -127,6 +146,9 @@ class SurfaceMotionConfig:
     )
     distortion: DistortionRegularizationConfig = field(
         default_factory=DistortionRegularizationConfig
+    )
+    ngon_affine: NgonAffineRegularizationConfig = field(
+        default_factory=NgonAffineRegularizationConfig
     )
     final_quality: FinalSurfaceQualityConfig = field(
         default_factory=FinalSurfaceQualityConfig
@@ -147,10 +169,35 @@ class SurfaceMotionConfig:
             raise ValueError("Surface motion mode must be graph or membrane.")
         if self.load_steps < 1:
             raise ValueError("Surface load_steps must be positive.")
+        if (
+            not np.isfinite(float(self.quad_diagonal_weight))
+            or float(self.quad_diagonal_weight) < 0.0
+        ):
+            raise ValueError(
+                "Surface quad_diagonal_weight must be finite and non-negative."
+            )
+        if self.quad_bracing_mode not in (
+            "single_diagonal",
+            "both_diagonals",
+            "virtual_center",
+        ):
+            raise ValueError(
+                "Surface quad_bracing_mode must be single_diagonal, "
+                "both_diagonals, or virtual_center."
+            )
         if self.mode != "graph" and self.load_steps != 1:
             raise ValueError("Multiple surface steps require graph motion.")
+        if self.mode != "graph" and self.quad_diagonal_weight != 0.0:
+            raise ValueError("Quad diagonal bracing requires graph motion.")
         if self.mode != "graph" and self.distortion.weight != 0.0:
             raise ValueError("Distortion regularization requires graph motion.")
+        if self.mode != "graph" and self.ngon_affine.weight != 0.0:
+            raise ValueError("N-gon affine regularization requires graph motion.")
+        if self.distortion.weight > 0.0 and self.ngon_affine.weight > 0.0:
+            raise ValueError(
+                "The first-milestone n-gon study does not combine affine and "
+                "membrane-like distortion regularization."
+            )
         if self.mode != "graph" and self.tangential_smoothing.enabled:
             raise ValueError("Tangential smoothing requires graph motion.")
         if self.graph_distance_weighting.enabled and self.mode != "graph":
@@ -161,6 +208,7 @@ class SurfaceMotionConfig:
 class VolumeMotionConfig:
     mode: str = "elasticity"
     load_mode: str = "final"
+    synchronized_load_steps: int | None = None
     graph_stiffening_exponent: float = 0.3
     elasticity_poisson_ratio: float = 0.3
     elasticity_stiffening_exponent: float = 0.75
@@ -172,6 +220,22 @@ class VolumeMotionConfig:
             raise ValueError("Invalid volume motion mode.")
         if self.load_mode not in ("final", "synchronized"):
             raise ValueError("Volume load_mode must be final or synchronized.")
+        if (
+            self.synchronized_load_steps is not None
+            and self.synchronized_load_steps < 1
+        ):
+            raise ValueError("Volume synchronized_load_steps must be positive.")
+        if (
+            self.synchronized_load_steps is not None
+            and self.load_mode != "synchronized"
+        ):
+            raise ValueError(
+                "Volume synchronized_load_steps requires synchronized mode."
+            )
+        if not (0.0 <= self.elasticity_poisson_ratio < 0.5):
+            raise ValueError("Elasticity Poisson ratio must lie in [0, 0.5).")
+        if self.elasticity_stiffening_exponent < 0.0:
+            raise ValueError("Elasticity stiffening exponent must be nonnegative.")
 
     @property
     def methods(self) -> tuple[str, ...]:
@@ -230,8 +294,8 @@ class E175PipelineConfig:
     )
     symmetry: bool = False
     symmetry_plane_tolerance: float = 1.0e-8
-    setup_projection_resolution: int = 60
-    projection_warm_start_resolution: int = 100
+    setup_projection_resolution: int = 80
+    projection_warm_start_resolution: int = 130
     rebuild_setup_cache: bool = False
     query_seam_reference: bool = True
     lifting_surface_patch_mode: str = "side"
@@ -296,6 +360,7 @@ __all__ = [
     "FiniteDifferenceConfig",
     "GraphDistanceWeightingConfig",
     "MeshQualityOutputConfig",
+    "NgonAffineRegularizationConfig",
     "SurfaceMotionConfig",
     "TangentialSmoothingConfig",
     "VisualizationConfig",

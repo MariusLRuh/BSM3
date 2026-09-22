@@ -567,6 +567,10 @@ class CurrentGraphDistortionModel:
                         edge_sensitivities[
                             self.graph_model.cell_edges[cell_index]
                         ]
+                        * self.graph_model.edge_distance_multiplier[
+                            self.graph_model.cell_edges[cell_index]
+                        ]
+                        * self.graph_model.cell_edge_scales[cell_index]
                     )
                     * (-exponent)
                     * area ** (-exponent - 1.0)

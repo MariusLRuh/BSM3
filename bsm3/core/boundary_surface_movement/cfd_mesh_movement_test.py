@@ -1,4 +1,4 @@
-"""Clean deformation-only E175 CSDL pipeline.
+"""Quality-first E175 surface and Euler volume-mesh deformation pipeline.
 
 Edit the three configuration sections below, then run this module directly.
 There is deliberately no command-line or environment-variable configuration.
@@ -25,6 +25,7 @@ from bsm3.core.boundary_surface_movement.e175_mesh_motion_config import (
     FiniteDifferenceConfig,
     GraphDistanceWeightingConfig,
     MeshQualityOutputConfig,
+    NgonAffineRegularizationConfig,
     SurfaceMotionConfig,
     TangentialSmoothingConfig,
     VisualizationConfig,
@@ -41,15 +42,24 @@ from bsm3.core.boundary_surface_movement.e175_mesh_motion_pipeline import (
 # 1. Geometry and matching mesh files
 # ---------------------------------------------------------------------------
 ASSET_DIRECTORY = Path(__file__).resolve().parent
-OPENVSP_MESH_DIRECTORY = ASSET_DIRECTORY / "openvsp_euler_volume_mesh"
+# Rebuilt from ``embraer_175_no_winglets_fluent_mesh.msh`` by
+# ``fluent_to_gmsh_euler_volume.py``: 2.17 M tetrahedra inside a 400 m
+# half-sphere, 87 412 aircraft-wall triangles, converted from millimetres to
+# metres.  The previous mesh was
+# ``quality_first_native_tri_tet_euler_volume_mesh/e175_production_*``.
+FLUENT_MESH_DIRECTORY = ASSET_DIRECTORY / "fluent_R4_tet_euler_volume_mesh"
 
 MODEL_FILES = E175ModelFiles(
     geometry_step_file=ASSET_DIRECTORY / "embraer_175_no_winglets.stp",
-    surface_mesh_file=OPENVSP_MESH_DIRECTORY / "e175_openvsp_aircraft_wall.msh",
-    volume_mesh_file=OPENVSP_MESH_DIRECTORY / "e175_euler_volume.msh",
+    surface_mesh_file=(
+        FLUENT_MESH_DIRECTORY / "e175_fluent_R4_aircraft_wall_tri.msh"
+    ),
+    volume_mesh_file=(
+        FLUENT_MESH_DIRECTORY / "e175_fluent_R4_tet_euler_volume.msh"
+    ),
     volume_wall_map_file=(
-        OPENVSP_MESH_DIRECTORY
-        / "e175_openvsp_aircraft_wall.volume_map.npz"
+        FLUENT_MESH_DIRECTORY
+        / "e175_fluent_R4_aircraft_wall_tri.volume_map.npz"
     ),
     setup_cache_directory=ASSET_DIRECTORY,
 )
@@ -58,15 +68,14 @@ MODEL_FILES = E175ModelFiles(
 # ---------------------------------------------------------------------------
 # 2. Geometry design point
 # ---------------------------------------------------------------------------
-# Small nonzero perturbations provide an FD signal while remaining essentially
-# at the undeformed reference geometry.
+# Deliberately extreme deformation used by the mesh-validity regression.
 GEOMETRY_VALUES = {
-    "wing_translation_x": 0.01,       # m
-    "wing_rotation_degrees": 0.01,    # deg
-    "tail_rotation_degrees": 0.01,    # deg
-    "wing_area": 70.01,               # m^2 (reference: 70.0)
-    "wing_aspect_ratio": 8.41,        # reference: 8.4
-    "fuselage_diameter_scale": 1.001,
+    "wing_translation_x": 0.0, # 4.51,       # m
+    "wing_rotation_degrees": 0.0, #5.01,    # deg
+    "tail_rotation_degrees": 0.0, #8.01,    # deg
+    "wing_area": 70.01 * 1.001, #1.25,        # m^2 (reference: 70.0)
+    "wing_aspect_ratio": 8.41 * 1.0, # 0.75,  # reference: 8.4
+    "fuselage_diameter_scale": 1.001 * 1., # 1.25,
 }
 
 
@@ -103,7 +112,7 @@ def create_geometry_design_variables() -> E175GeometryVariables:
 # ---------------------------------------------------------------------------
 # 3. Surface and volume deformation settings
 # ---------------------------------------------------------------------------
-OUTPUT_DIRECTORY = OPENVSP_MESH_DIRECTORY / "deformation_results"
+OUTPUT_DIRECTORY = FLUENT_MESH_DIRECTORY / "deformation_results"
 
 MESH_MOTION = E175PipelineConfig(
     surface_motion=SurfaceMotionConfig(
@@ -111,7 +120,7 @@ MESH_MOTION = E175PipelineConfig(
         load_steps=2,
         stiffening_exponent=1.5,
         tangential_smoothing=TangentialSmoothingConfig(
-            enabled=True,
+            enabled=False,
             layers=16,
             iterations=3,
             relaxation=1.0,
@@ -120,18 +129,22 @@ MESH_MOTION = E175PipelineConfig(
         ),
         graph_distance_weighting=GraphDistanceWeightingConfig(
             enabled=True,
-            beta=2.0,
-            length_scale=4.0,
+            beta=5.0,
+            length_scale=10.0,
             cap=float("inf"),
             decay="exp",
             power=1.0,
             seeds="both",
         ),
+        # The production wall is triangle-only, so there are no n-gon
+        # hourglass modes for the affine regularizer to constrain.
+        ngon_affine=NgonAffineRegularizationConfig(weight=0.0),
     ),
     volume_motion=VolumeMotionConfig(
-        mode="elasticity",
-        # Default: deform the volume once from the final surface displacement.
-        load_mode="final",
+        mode="off",
+        load_mode="synchronized",
+        # Follow the two nonlinear surface states exactly.
+        synchronized_load_steps=None,
         elasticity_poisson_ratio=0.3,
         elasticity_stiffening_exponent=0.75,
         output_directory=OUTPUT_DIRECTORY,
@@ -148,7 +161,8 @@ MESH_MOTION = E175PipelineConfig(
         objective="surface_coordinates",
         step_sizes=(1.0e-2, 1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6),
     ),
-    symmetry=False,
+    # The extracted wall is already the y>=0 half mesh.
+    symmetry=True,
 )
 
 

@@ -17,6 +17,7 @@ from bsm3.core.boundary_surface_movement import (
     CornerInversionBarrierOperation,
     CorotationalMembraneAssembler,
     CurrentGraphDistortionModel,
+    CurrentGraphNgonAffineModel,
     CurrentGraphModel,
     classify_patch_sides,
     DisplacementInterpolationParameters,
@@ -30,6 +31,8 @@ from bsm3.core.boundary_surface_movement import (
     compute_multisource_geodesic_distance,
     OMLQualityModel,
     OMLQualityOperation,
+    NgonAffineAssembler,
+    NgonAffineConfig,
     ParameterizedProjectionGroup,
     QuadraticDistortionAssembler,
     QuadraticDistortionConfig,
@@ -42,6 +45,7 @@ from bsm3.core.boundary_surface_movement import (
     element_neighbors,
     enforce_symmetry_plane,
     factorize_spd,
+    graph_neighbors,
     identify_symmetry_plane_vertices,
     project_onto_oml,
     reevaluate_vertices,
@@ -50,6 +54,10 @@ from bsm3.core.boundary_surface_movement import (
     select_free_vertices,
     solve_intersection,
     stack_component_coefficients,
+)
+from bsm3.core.boundary_surface_movement.elasticity import (
+    _edge_weights,
+    _quad_brace_pairs,
 )
 from bsm3.core.projections.function_set_evaluation_custom_op import (
     FunctionSetEvaluationModel,
@@ -1179,9 +1187,25 @@ def test_elasticity_motion_solver_seam_exact_and_free_harmonic():
     np.testing.assert_allclose(np.asarray(derivative.value).reshape(-1)[0], 10.0, atol=1e-6)
 
 
-@pytest.mark.parametrize("distortion_lambda", [0.0, 0.2])
+@pytest.mark.parametrize(
+    (
+        "distortion_lambda",
+        "quad_diagonal_weight",
+        "quad_bracing_mode",
+        "ngon_affine_lambda",
+    ),
+    [
+        (0.0, 0.0, "both_diagonals", 0.0),
+        (0.0, 1.0, "single_diagonal", 0.0),
+        (0.2, 1.0, "virtual_center", 0.0),
+        (0.0, 0.0, "both_diagonals", 0.3),
+    ],
+)
 def test_fixed_graph_load_steps_project_each_increment_and_differentiate(
     distortion_lambda,
+    quad_diagonal_weight,
+    quad_bracing_mode,
+    ngon_affine_lambda,
 ):
     """The unrolled path retains exact seams and the fixed-factor derivative."""
 
@@ -1266,6 +1290,14 @@ def test_fixed_graph_load_steps_project_each_increment_and_differentiate(
         components=[wing, fuselage],
         component_reevaluations=(),
         stiffening_exponent=0.9,
+        quad_diagonal_weight=quad_diagonal_weight,
+        quad_bracing_mode=quad_bracing_mode,
+        prescribed_ids=(
+            element_neighbors(mesh, free_ids)
+            if ngon_affine_lambda > 0.0
+            else None
+        ),
+        symmetry_use_element_neighbors=(ngon_affine_lambda > 0.0),
         symmetry_plane_ids=np.where(np.abs(vertices[:, 1]) <= 1e-12)[0],
     )
     plane_ids = np.where(np.abs(vertices[:, 1]) <= 1e-12)[0]
@@ -1305,6 +1337,9 @@ def test_fixed_graph_load_steps_project_each_increment_and_differentiate(
         distortion_config=QuadraticDistortionConfig(
             lambda_dist=distortion_lambda
         ),
+        ngon_affine_config=NgonAffineConfig(
+            lambda_ngon=ngon_affine_lambda
+        ),
         symmetry_plane_vertex_ids=plane_ids,
     )
     assert isinstance(result, GraphLoadStepResult)
@@ -1316,11 +1351,19 @@ def test_fixed_graph_load_steps_project_each_increment_and_differentiate(
     final = np.asarray(result.final_mesh_vertices.value)
     # The exact seam follows dz; the two adjacent free rows follow dz/2.
     np.testing.assert_allclose(final[seam_ids, 2], 0.2, atol=1e-8)
-    np.testing.assert_allclose(
-        final[free_ids, 2] - vertices[free_ids, 2],
-        0.1,
-        atol=1e-6,
-    )
+    free_z_displacement = final[free_ids, 2] - vertices[free_ids, 2]
+    if quad_bracing_mode == "single_diagonal" and quad_diagonal_weight > 0.0:
+        # A one-diagonal stencil is directionally biased even on a square
+        # lattice; opposing deviations balance in this symmetric patch.
+        np.testing.assert_allclose(
+            np.mean(free_z_displacement), 0.1, atol=1e-6
+        )
+    else:
+        np.testing.assert_allclose(
+            free_z_displacement,
+            0.1,
+            atol=1e-6,
+        )
     np.testing.assert_allclose(final[plane_ids, 1], 0.0, atol=0.0)
     # Five seam rows contribute 1 and ten free rows contribute 1/2.
     np.testing.assert_allclose(
@@ -1409,6 +1452,181 @@ def test_current_area_graph_vjp_matches_finite_difference():
         fd_prescribed,
         rtol=2e-7,
         atol=2e-9,
+    )
+
+
+def _two_quad_mesh():
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.2, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.1, 1.2, 0.15],
+            [2.0, 1.0, -0.05],
+        ]
+    )
+    quads = np.array([[0, 1, 4, 3], [1, 2, 5, 4]], dtype=np.int64)
+    mesh = MeshData(
+        vertices=points,
+        connectivity=quads,
+        cell_types=np.full(2, "quad", dtype=object),
+        cell_blocks={"quad": quads},
+    )
+    return mesh, points
+
+
+def test_quad_diagonal_weights_and_physical_graph_distance_are_separate():
+    mesh, points = _two_quad_mesh()
+    baseline = _edge_weights(
+        mesh,
+        points,
+        stiffening_exponent=0.0,
+        area_floor=1e-12,
+    )
+    disabled = _edge_weights(
+        mesh,
+        points,
+        stiffening_exponent=0.0,
+        area_floor=1e-12,
+        quad_diagonal_weight=0.0,
+    )
+    braced = _edge_weights(
+        mesh,
+        points,
+        stiffening_exponent=0.0,
+        area_floor=1e-12,
+        quad_diagonal_weight=1.0,
+    )
+    assert disabled == baseline
+    assert braced[(0, 4)] == 2.0
+    assert braced[(1, 3)] == 2.0
+    assert braced[(1, 5)] == 2.0
+    assert braced[(2, 4)] == 2.0
+
+    # Operator closure sees the virtual diagonal, while the graph-geodesic
+    # routine continues to traverse only physical perimeter edges.
+    np.testing.assert_array_equal(graph_neighbors(mesh, np.array([0])), [1, 3])
+    np.testing.assert_array_equal(
+        graph_neighbors(
+            mesh, np.array([0]), include_quad_diagonals=True
+        ),
+        [1, 3, 4],
+    )
+    distances = compute_multisource_geodesic_distance(mesh, np.array([0]))
+    assert distances[4] > np.linalg.norm(points[4] - points[0])
+
+
+def test_single_diagonal_and_virtual_center_weights():
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+    quad = np.arange(4, dtype=np.int64)
+    mesh = MeshData(
+        vertices=points,
+        connectivity=quad.reshape((1, 4)),
+        cell_types=np.array(["quad"], dtype=object),
+        cell_blocks={"quad": quad.reshape((1, 4))},
+    )
+    single = _edge_weights(
+        mesh,
+        points,
+        stiffening_exponent=0.0,
+        area_floor=1e-12,
+        quad_diagonal_weight=1.0,
+        quad_bracing_mode="single_diagonal",
+    )
+    assert single[(0, 2)] == 2.0
+    assert (1, 3) not in single
+
+    center = _edge_weights(
+        mesh,
+        points,
+        stiffening_exponent=0.0,
+        area_floor=1e-12,
+        quad_diagonal_weight=1.0,
+        quad_bracing_mode="virtual_center",
+    )
+    # Eliminating four equal center spokes adds 1/2 to every corner pair.
+    for edge in ((0, 1), (1, 2), (2, 3), (0, 3)):
+        assert center[edge] == 1.5
+    assert center[(0, 2)] == 0.5
+    assert center[(1, 3)] == 0.5
+
+    # The quality-selected diagonal is a fixed baseline choice.
+    skewed = points.copy()
+    skewed[2] = [2.0, 0.2, 0.0]
+    selected = _quad_brace_pairs(
+        skewed, quad, mode="single_diagonal", weight=1.0
+    )
+    assert selected == ((1, 3, 2.0),)
+
+
+@pytest.mark.parametrize(
+    "quad_bracing_mode",
+    ["single_diagonal", "both_diagonals", "virtual_center"],
+)
+def test_quad_bracing_current_area_vjp_matches_finite_difference(
+    quad_bracing_mode,
+):
+    mesh, points = _two_quad_mesh()
+    free_ids = np.array([1, 4])
+    prescribed_ids = np.array([0, 2, 3, 5])
+    weighting = build_graph_distance_weighting(
+        mesh, np.array([0]), beta=1.5, length=1.0, cap=3.0
+    )
+    model = CurrentGraphModel(
+        mesh,
+        free_ids=free_ids,
+        prescribed_ids=prescribed_ids,
+        stiffening_exponent=0.9,
+        distance_weighting=weighting,
+        quad_diagonal_weight=1.0,
+        quad_bracing_mode=quad_bracing_mode,
+    )
+    prescribed = np.array(
+        [[0.2, -0.1], [0.3, 0.4], [-0.2, 0.1], [0.5, -0.3]]
+    )
+    cotangent = np.array([[0.7, -0.4], [-0.2, 0.6]])
+    d_points, d_prescribed = model.compute_vjp(
+        points, prescribed, cotangent
+    )
+
+    def objective(current_points, current_prescribed):
+        return float(
+            np.sum(
+                model.solve(current_points, current_prescribed) * cotangent
+            )
+        )
+
+    step = 1e-6
+    fd_points = np.zeros_like(points)
+    for index in np.ndindex(points.shape):
+        plus = points.copy()
+        minus = points.copy()
+        plus[index] += step
+        minus[index] -= step
+        fd_points[index] = (
+            objective(plus, prescribed) - objective(minus, prescribed)
+        ) / (2.0 * step)
+    fd_prescribed = np.zeros_like(prescribed)
+    for index in np.ndindex(prescribed.shape):
+        plus = prescribed.copy()
+        minus = prescribed.copy()
+        plus[index] += step
+        minus[index] -= step
+        fd_prescribed[index] = (
+            objective(points, plus) - objective(points, minus)
+        ) / (2.0 * step)
+
+    np.testing.assert_allclose(d_points, fd_points, rtol=3e-6, atol=3e-9)
+    np.testing.assert_allclose(
+        d_prescribed, fd_prescribed, rtol=3e-7, atol=3e-9
     )
 
 
@@ -1668,6 +1886,137 @@ def test_quadratic_distortion_mixed_polygons_psd_patch_and_hourglass(mode):
             computed = element_values.T @ subtriangle.gradient_map
             expected = affine_gradient @ subtriangle.local_frame[:, :2]
             np.testing.assert_allclose(computed, expected, atol=2e-12)
+
+
+def test_ngon_affine_projector_is_psd_affine_exact_and_quad_hourglass():
+    triangle = np.array([[0.0, 0.0], [1.0, 0.0], [0.2, 0.9]])
+    quad = np.array([[2.0, 0.0], [3.0, 0.0], [3.0, 1.0], [2.0, 1.0]])
+    pentagon = np.array(
+        [[4.0, 0.0], [5.0, 0.0], [5.3, 0.6], [4.6, 1.2], [3.8, 0.7]]
+    )
+    vertices = np.vstack(
+        (
+            np.column_stack((triangle, np.zeros(3))),
+            np.column_stack((quad, np.zeros(4))),
+            np.column_stack((pentagon, np.zeros(5))),
+        )
+    )
+    triangle_ids = np.arange(0, 3, dtype=np.int64)
+    quad_ids = np.arange(3, 7, dtype=np.int64)
+    pentagon_ids = np.arange(7, 12, dtype=np.int64)
+    mesh = MeshData(
+        vertices=vertices,
+        connectivity=np.asarray(
+            [triangle_ids, quad_ids, pentagon_ids], dtype=object
+        ),
+        cell_types=np.asarray(("triangle", "quad", "polygon5"), dtype=object),
+        cell_blocks={
+            "triangle": triangle_ids.reshape((1, 3)),
+            "quad": quad_ids.reshape((1, 4)),
+            "polygon5": pentagon_ids.reshape((1, 5)),
+        },
+    )
+    system = NgonAffineAssembler(NgonAffineConfig(lambda_ngon=1.0)).assemble(
+        mesh,
+        free_ids=np.arange(vertices.shape[0], dtype=np.int64),
+        prescribed_ids=np.empty(0, dtype=np.int64),
+    )
+    matrix = system.full_matrix()
+    assert system.num_regularized_elements == 2
+    assert system.num_hourglass_modes == 3
+    np.testing.assert_allclose((matrix - matrix.T).data, 0.0, atol=1e-14)
+    assert float(np.min(np.linalg.eigvalsh(matrix.toarray()))) >= -1e-12
+
+    # A globally affine displacement is in every local projector's nullspace.
+    gradient = np.array(
+        [[0.3, -0.2, 0.1], [0.1, 0.4, -0.05], [0.05, -0.08, 0.2]]
+    )
+    affine = vertices @ gradient.T + np.array([0.2, -0.4, 0.7])
+    np.testing.assert_allclose(matrix @ affine, 0.0, atol=2e-12)
+
+    # A regular cyclic quad reduces exactly to h h^T / 4.
+    quad_matrix = matrix[quad_ids][:, quad_ids].toarray()
+    hourglass_vector = np.array([1.0, -1.0, 1.0, -1.0])
+    expected = np.outer(hourglass_vector, hourglass_vector) / 4.0
+    np.testing.assert_allclose(quad_matrix, expected, atol=2e-12)
+    displacement = np.zeros((vertices.shape[0], 3))
+    displacement[quad_ids, 2] = hourglass_vector
+    assert float(np.sum(displacement * (matrix @ displacement))) == pytest.approx(4.0)
+
+
+def test_current_graph_ngon_affine_vjp_matches_directional_finite_difference():
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.15],
+            [2.0, 1.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [1.0, 2.0, 0.0],
+            [2.0, 2.0, 0.0],
+        ]
+    )
+    quads = np.array(
+        [[0, 1, 4, 3], [1, 2, 5, 4], [3, 4, 7, 6], [4, 5, 8, 7]],
+        dtype=np.int64,
+    )
+    mesh = MeshData(
+        vertices=points,
+        connectivity=quads,
+        cell_types=np.full(4, "quad", dtype=object),
+        cell_blocks={"quad": quads},
+    )
+    free_ids = np.array([4], dtype=np.int64)
+    prescribed_ids = element_neighbors(mesh, free_ids)
+    graph = CurrentGraphModel(
+        mesh,
+        free_ids=free_ids,
+        prescribed_ids=prescribed_ids,
+        stiffening_exponent=0.9,
+    )
+    config = NgonAffineConfig(lambda_ngon=0.3)
+    system = NgonAffineAssembler(config).assemble(
+        mesh,
+        free_ids=free_ids,
+        prescribed_ids=prescribed_ids,
+    )
+    model = CurrentGraphNgonAffineModel(
+        graph,
+        system,
+        lambda_ngon=config.lambda_ngon,
+        baseline_vertices=points,
+    )
+    rng = np.random.default_rng(17)
+    inputs = (
+        points,
+        rng.normal(scale=0.08, size=(prescribed_ids.size, 5)),
+        rng.normal(scale=0.04, size=(free_ids.size, 5)),
+        rng.normal(scale=0.10, size=(prescribed_ids.size, 5)),
+    )
+    cotangent = rng.normal(size=(free_ids.size, 5))
+    analytic = model.compute_vjp(*inputs, cotangent)
+    directions = tuple(rng.normal(size=value.shape) for value in inputs)
+    analytic_directional = sum(
+        float(np.sum(gradient * direction))
+        for gradient, direction in zip(analytic, directions)
+    )
+
+    step = 1e-6
+    plus = tuple(
+        value + step * direction for value, direction in zip(inputs, directions)
+    )
+    minus = tuple(
+        value - step * direction for value, direction in zip(inputs, directions)
+    )
+    finite_difference = (
+        float(np.sum(model.solve(*plus) * cotangent))
+        - float(np.sum(model.solve(*minus) * cotangent))
+    ) / (2.0 * step)
+    np.testing.assert_allclose(
+        analytic_directional, finite_difference, rtol=2e-6, atol=2e-8
+    )
 
 
 def test_current_graph_distortion_vjp_matches_finite_difference():

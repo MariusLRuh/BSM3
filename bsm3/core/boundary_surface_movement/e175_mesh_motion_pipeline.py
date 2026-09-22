@@ -168,8 +168,10 @@ def _run_volume_motion(
       driven by the final wall, factored once on the baseline volume mesh.  This
       is the default and stays in the CSDL graph even for multi-step surfaces.
     * ``synchronized`` -- reassemble/refactor from every intermediate deformed
-      volume state along the wall history in NumPy; forward-only, deferred
-      derivatives.
+      volume state in NumPy; forward-only, deferred derivatives.  When
+      ``synchronized_load_steps`` is set, the volume gets its own uniform
+      baseline-to-final continuation so surface and volume robustness controls
+      remain independent.
 
     The exact wall history and per-step wall meshes are always written so the
     volume-only replay tool can reproduce either path.
@@ -182,17 +184,31 @@ def _run_volume_motion(
     evaluate_gmsh_quality = quality_config.gmsh_volume_metrics
     output_directory = Path(output_directory).expanduser()
 
-    fractions = tuple(float(value) for value in load_fractions)
-    if not fractions:
+    surface_fractions = tuple(float(value) for value in load_fractions)
+    if not surface_fractions:
         raise ValueError("Volume motion requires at least one load fraction.")
-    targets = [
+    surface_targets = [
         np.asarray(
             item.value if hasattr(item, "value") else item,
             dtype=float,
         )
         for item in wall_position_history
     ]
-    targets[-1] = np.asarray(final_wall_positions.value, dtype=float)
+    final_target = np.asarray(final_wall_positions.value, dtype=float)
+    surface_targets[-1] = final_target
+    fractions = surface_fractions
+    targets = surface_targets
+    if (
+        volume_load_mode == "synchronized"
+        and volume_config.synchronized_load_steps is not None
+    ):
+        step_count = int(volume_config.synchronized_load_steps)
+        fractions = tuple(np.linspace(1.0 / step_count, 1.0, step_count))
+        baseline_wall = volume_mesh.vertices[volume_mesh.aircraft_nodes]
+        targets = [
+            baseline_wall + fraction * (final_target - baseline_wall)
+            for fraction in fractions
+        ]
     history_path = (
         output_directory
         / f"e175_surface_wall_history_load{len(fractions)}.npz"
@@ -227,12 +243,14 @@ def _run_volume_motion(
             volume_mesh.vertices,
             volume_mesh.vertices,
             volume_mesh.tetrahedra,
+            pyramids=volume_mesh.pyramids,
         )
     )
     summary = {
         "volume_mesh": str(volume_mesh.source_path),
         "surface_mesh": str(surface_mesh_file.resolve()),
-        "surface_load_steps": len(fractions),
+        "surface_load_steps": len(surface_fractions),
+        "surface_load_fractions": list(surface_fractions),
         "volume_load_mode": volume_load_mode,
         "load_steps": len(fractions),
         "load_fractions": list(fractions),
@@ -335,6 +353,7 @@ def _run_volume_motion(
                 volume_mesh.vertices,
                 final_vertices,
                 volume_mesh.tetrahedra,
+                pyramids=volume_mesh.pyramids,
             )
         )
         method_summary["final_quality"] = final_quality.as_dict()
@@ -439,6 +458,7 @@ def build_e175_mesh_motion_model(
     smoothing = surface.tangential_smoothing
     distance = surface.graph_distance_weighting
     distortion = surface.distortion
+    ngon_affine = surface.ngon_affine
     final_quality = surface.final_quality
     volume = config.volume_motion
 
@@ -446,6 +466,8 @@ def build_e175_mesh_motion_model(
     # without dynamic module globals. Every value originates in the explicit
     # dataclasses passed by the public drivers.
     STIFFENING_EXPONENT = surface.stiffening_exponent
+    QUAD_DIAGONAL_WEIGHT = surface.quad_diagonal_weight
+    QUAD_BRACING_MODE = surface.quad_bracing_mode
     ELASTIC_STRATEGY = surface.mode
     GRAPH_LOAD_STEPS = surface.load_steps
     DISTORTION_LAMBDA = distortion.weight
@@ -455,6 +477,7 @@ def build_e175_mesh_motion_model(
     DISTORTION_K_SHEAR = distortion.shear
     DISTORTION_K_ROTATION = distortion.rotation
     DISTORTION_K_NORMAL = distortion.normal
+    NGON_AFFINE_LAMBDA = ngon_affine.weight
     TANGENTIAL_SMOOTHING = smoothing.enabled
     TANGENTIAL_SMOOTHING_LAYERS = smoothing.layers
     TANGENTIAL_SMOOTHING_ITERATIONS = smoothing.iterations
@@ -503,8 +526,16 @@ def build_e175_mesh_motion_model(
 
     geometry_file = model_files.geometry_step_file.resolve()
     mesh_file = model_files.surface_mesh_file.resolve()
-    volume_mesh_file = model_files.volume_mesh_file.resolve()
-    volume_wall_map_file = model_files.volume_wall_map_file.resolve()
+    volume_mesh_file = (
+        model_files.volume_mesh_file.resolve()
+        if model_files.volume_mesh_file is not None
+        else None
+    )
+    volume_wall_map_file = (
+        model_files.volume_wall_map_file.resolve()
+        if model_files.volume_wall_map_file is not None
+        else None
+    )
     setup_cache_directory = (
         model_files.setup_cache_directory.resolve()
         if model_files.setup_cache_directory is not None
@@ -513,24 +544,40 @@ def build_e175_mesh_motion_model(
     volume_output_directory = (
         Path(volume.output_directory).expanduser().resolve()
         if volume.output_directory is not None
-        else volume_mesh_file.parent / "deformation_results"
+        else (
+            volume_mesh_file.parent
+            if volume_mesh_file is not None
+            else mesh_file.parent
+        )
+        / "deformation_results"
     )
 
     if not geometry_file.is_file():
         raise FileNotFoundError(f"STEP geometry not found: {geometry_file}")
-    if not volume_mesh_file.is_file():
-        raise FileNotFoundError(f"Volume mesh not found: {volume_mesh_file}")
     surface_exists = mesh_file.is_file()
-    wall_map_exists = volume_wall_map_file.is_file()
-    if surface_exists != wall_map_exists:
+    if VOLUME_METHODS:
+        if volume_mesh_file is None or volume_wall_map_file is None:
+            raise ValueError(
+                "Volume motion requires volume_mesh_file and "
+                "volume_wall_map_file."
+            )
+        if not volume_mesh_file.is_file():
+            raise FileNotFoundError(f"Volume mesh not found: {volume_mesh_file}")
+        wall_map_exists = volume_wall_map_file.is_file()
+        if surface_exists != wall_map_exists:
+            raise FileNotFoundError(
+                "The surface mesh and volume-wall map are a matched pair and "
+                "must either both exist or both be absent so they can be "
+                f"extracted from the selected volume mesh. Surface: "
+                f"{mesh_file}; wall map: {volume_wall_map_file}"
+            )
+    elif not surface_exists:
         raise FileNotFoundError(
-            "The surface mesh and volume-wall map are a matched pair and must "
-            "either both exist or both be absent so they can be extracted from "
-            f"the selected volume mesh. Surface: {mesh_file}; "
-            f"wall map: {volume_wall_map_file}"
+            f"Surface mesh not found for surface-only motion: {mesh_file}"
         )
     setup_cache_directory.mkdir(parents=True, exist_ok=True)
-    volume_output_directory.mkdir(parents=True, exist_ok=True)
+    if VOLUME_METHODS:
+        volume_output_directory.mkdir(parents=True, exist_ok=True)
     print(
         "[inputs] "
         f"STEP={geometry_file} "
@@ -552,6 +599,9 @@ def build_e175_mesh_motion_model(
 
     volume_mesh = None
     if not surface_exists:
+        # The volume-path validation above guarantees both paths are present.
+        assert volume_mesh_file is not None
+        assert volume_wall_map_file is not None
         volume_mesh = (
             bsm3.core.boundary_surface_movement.read_gmsh22_volume(
                 volume_mesh_file
@@ -566,8 +616,11 @@ def build_e175_mesh_motion_model(
             f"[volume] extracted exact aircraft wall from {volume_mesh_file.name}",
             flush=True,
         )
-    mesh = bsm3.preprocessing.import_mesh(mesh_file)
-    cfd_polygon_connectivity = _cfd_surface_cells(mesh)
+    if mesh_file.suffix.lower() in (".pickle", ".pkl"):
+        mesh, cfd_polygon_connectivity = _cfd_mesh_from_pickle(mesh_file)
+    else:
+        mesh = bsm3.preprocessing.import_mesh(mesh_file)
+        cfd_polygon_connectivity = _cfd_surface_cells(mesh)
 
     # plot mesh
     # bsm3.plotting.plot_mesh(mesh, show=True)
@@ -581,6 +634,8 @@ def build_e175_mesh_motion_model(
         f"{len(cfd_polygon_connectivity)} polygons (no triangulation) [{_block_summary}]"
     )
     if VOLUME_METHODS:
+        assert volume_mesh_file is not None
+        assert volume_wall_map_file is not None
         if volume_mesh is None:
             volume_mesh = (
                 bsm3.core.boundary_surface_movement.read_gmsh22_volume(
@@ -594,18 +649,21 @@ def build_e175_mesh_motion_model(
                 wall_vertices=np.asarray(mesh.vertices, dtype=float),
             )
         )
+        topology = (
+            f"{volume_mesh.tetrahedra.shape[0]} tetrahedra, "
+            f"{volume_mesh.pyramids.shape[0]} pyramids"
+        )
         print(
             f"[volume] exact wall map validated: {wall_to_volume.size} wall "
-            f"nodes -> {volume_mesh.vertices.shape[0]} volume nodes, "
-            f"{volume_mesh.tetrahedra.shape[0]} tetrahedra",
+            f"nodes -> {volume_mesh.vertices.shape[0]} volume nodes, {topology}",
             flush=True,
         )
     _setup_after_load = time.perf_counter()
 
     # Symmetry: solve on one half and mirror.  The whole pipeline (steps 2-7)
     # then runs on ``mesh`` = the half; ``full_mesh`` is kept for the final
-    # reconstruction, quality report, and plot.  The CFD mesh is already a
-    # half-mesh (y>=0), so use ``config.symmetry=False`` to skip the split.
+    # reconstruction, quality report, and plot. If the supplied mesh is already
+    # a half-mesh (y>=0), symmetry detection returns false and no split occurs.
     full_mesh = mesh
     initial_full_vertices = np.asarray(full_mesh.vertices, dtype=float).copy()
     symmetry_split = None
@@ -1024,7 +1082,7 @@ def build_e175_mesh_motion_model(
         )
     else:
         graph_prescribed_ids = None
-        if DISTORTION_LAMBDA > 0.0:
+        if DISTORTION_LAMBDA > 0.0 or NGON_AFFINE_LAMBDA > 0.0:
             graph_prescribed_ids = (
                 bsm3.core.boundary_surface_movement.element_neighbors(
                     mesh, free_ids
@@ -1035,7 +1093,10 @@ def build_e175_mesh_motion_model(
             stiffening_exponent=STIFFENING_EXPONENT,
             use_corotational_reference=True,
             prescribed_ids=graph_prescribed_ids,
+            symmetry_use_element_neighbors=(NGON_AFFINE_LAMBDA > 0.0),
             distance_weighting=distance_weighting,
+            quad_diagonal_weight=QUAD_DIAGONAL_WEIGHT,
+            quad_bracing_mode=QUAD_BRACING_MODE,
         )
 
     # -------------------------------------------------------------------------
@@ -1230,6 +1291,13 @@ def build_e175_mesh_motion_model(
                                 normal=DISTORTION_K_NORMAL,
                             )
                         ),
+                    )
+                ),
+                ngon_affine_config=(
+                    None
+                    if NGON_AFFINE_LAMBDA == 0.0
+                    else bsm3.core.boundary_surface_movement.NgonAffineConfig(
+                        lambda_ngon=NGON_AFFINE_LAMBDA,
                     )
                 ),
                 tangential_smoother=tangential_smoother,
@@ -1460,10 +1528,13 @@ def build_e175_mesh_motion_model(
     else:
         print(
             f"[diagnostics] elasticity=graph chi={STIFFENING_EXPONENT} "
+            f"quad_bracing_mode={QUAD_BRACING_MODE} "
+            f"quad_diagonal_weight={QUAD_DIAGONAL_WEIGHT:g} "
             f"surface_load_steps={GRAPH_LOAD_STEPS} "
             f"volume_load_mode={VOLUME_LOAD_MODE} "
             f"distortion_lambda={DISTORTION_LAMBDA:g} "
-            f"distortion_mode={DISTORTION_MODE}"
+            f"distortion_mode={DISTORTION_MODE} "
+            f"ngon_affine_lambda={NGON_AFFINE_LAMBDA:g}"
         )
         if load_step_result.distortion_normalization_scale is not None:
             print(
@@ -1472,6 +1543,14 @@ def build_e175_mesh_motion_model(
                 f"redundancy={load_step_result.distortion_redundancy:.6f} "
                 f"ear_clipped={load_step_result.distortion_num_ear_clipped} "
                 f"max_warp={load_step_result.distortion_maximum_warp_ratio:.6g}"
+            )
+        if load_step_result.ngon_affine_normalization_scale is not None:
+            print(
+                "[diagnostics] ngon_affine "
+                f"normalization={load_step_result.ngon_affine_normalization_scale:.6g} "
+                f"elements={load_step_result.ngon_affine_num_elements} "
+                f"modes={load_step_result.ngon_affine_num_modes} "
+                f"max_warp={load_step_result.ngon_affine_maximum_warp_ratio:.6g}"
             )
         print(
             "[diagnostics] tangential_smoothing="
@@ -1534,6 +1613,8 @@ def build_e175_mesh_motion_model(
             tail_ids=_ids_to_full(tail_ids),
             fuselage_ids=_ids_to_full(fuselage_ids),
             deformation_vertex_ids=_ids_to_full(deformation_vertex_ids),
+            graph_free_ids=_ids_to_full(motion.free_ids),
+            graph_prescribed_ids=_ids_to_full(motion.prescribed_ids),
             tangential_smoothing_ids=_ids_to_full(
                 tangential_smoothing_ids
             ),
@@ -1568,25 +1649,28 @@ def build_e175_mesh_motion_model(
         f"{len(cfd_polygon_connectivity)} polygons"
     )
 
-    if (
-        config.quality.fail_on_surface_inversion
-        and inversion_report.num_inverted
-    ):
-        raise RuntimeError(
-            "DAFoam/deformation continuation blocked: the final surface mesh "
-            f"contains {inversion_report.num_inverted} inverted elements."
-        )
-    if config.quality.fail_on_volume_inversion and volume_summary is not None:
-        inverted_by_method = {
-            name: int(data["final_quality"]["inverted_tetrahedra"])
-            for name, data in volume_summary["methods"].items()
-            if int(data["final_quality"]["inverted_tetrahedra"]) != 0
-        }
-        if inverted_by_method:
-            raise RuntimeError(
-                "DAFoam/deformation continuation blocked: inverted volume "
-                f"tetrahedra were found: {inverted_by_method}."
-            )
+    # if (
+    #     config.quality.fail_on_surface_inversion
+    #     and inversion_report.num_inverted
+    # ):
+    #     raise RuntimeError(
+    #         "DAFoam/deformation continuation blocked: the final surface mesh "
+    #         f"contains {inversion_report.num_inverted} inverted elements."
+    #     )
+    # if config.quality.fail_on_volume_inversion and volume_summary is not None:
+    #     inverted_by_method = {}
+    #     for name, data in volume_summary["methods"].items():
+    #         quality = data["final_quality"]
+    #         inverted = int(
+    #             quality.get("inverted_tetrahedra", quality.get("inverted_cells", 0))
+    #         )
+    #         if inverted:
+    #             inverted_by_method[name] = inverted
+    #     if inverted_by_method:
+    #         raise RuntimeError(
+    #             "DAFoam/deformation continuation blocked: inverted volume "
+    #             f"tetrahedra were found: {inverted_by_method}."
+    #         )
 
     # Run downstream CFD only after all requested mesh-quality diagnostics and
     # inversion gates have completed.

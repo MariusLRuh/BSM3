@@ -1,10 +1,18 @@
-"""Tetrahedral volume-mesh motion driven by an exactly matching wall mesh.
+"""Hybrid volume-mesh motion driven by an exactly matching wall mesh.
+
+The mesh may be purely tetrahedral or a tetrahedron/pyramid hybrid.  Pyramids
+appear when the aircraft wall is quad-dominant: Gmsh caps every boundary
+quadrangle with a pyramid rather than splitting it into triangles.  Both
+propagators consume a *decomposition* of the mesh into tetrahedra
+(:attr:`TetraVolumeMesh.assembly_cells`) so a single code path serves both mesh
+types; each pyramid contributes two tetrahedra split across its shorter base
+diagonal.
 
 Two reference-configuration propagators are provided:
 
 ``graph``
-    A scalar graph-Laplacian assembled from all six edges of every tetrahedron.
-    The same matrix is used for each Cartesian component.
+    A scalar graph-Laplacian assembled from all six edges of every decomposed
+    tetrahedron.  The same matrix is used for each Cartesian component.
 
 ``elasticity``
     Coupled three-dimensional linear elasticity assembled from four-node
@@ -19,7 +27,7 @@ load stepping.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 import json
 from pathlib import Path
 import time
@@ -43,9 +51,21 @@ PHYSICAL_FLUID = 100
 VolumeMethod = Literal["graph", "elasticity"]
 
 
+def _empty_cells(width: int):
+    return lambda: np.zeros((0, width), dtype=np.int64)
+
+
+def _empty_ids():
+    return np.zeros(0, dtype=np.int64)
+
+
 @dataclass(frozen=True)
 class TetraVolumeMesh:
-    """Arrays and patch topology from an ASCII Gmsh 2.2 volume mesh."""
+    """Arrays and patch topology from an ASCII Gmsh 2.2 volume mesh.
+
+    Quadrangle boundary faces and pyramids are optional, so a purely
+    tetrahedral mesh constructs exactly as before.
+    """
 
     source_path: Path
     node_ids: np.ndarray
@@ -55,6 +75,16 @@ class TetraVolumeMesh:
     tetrahedra: np.ndarray
     tetrahedron_physical_ids: np.ndarray
     physical_names: dict[tuple[int, int], str]
+    quadrangles: np.ndarray = dataclass_field(default_factory=_empty_cells(4))
+    quadrangle_physical_ids: np.ndarray = dataclass_field(
+        default_factory=_empty_ids
+    )
+    pyramids: np.ndarray = dataclass_field(default_factory=_empty_cells(5))
+    pyramid_physical_ids: np.ndarray = dataclass_field(default_factory=_empty_ids)
+
+    @property
+    def is_hybrid(self) -> bool:
+        return self.pyramids.shape[0] > 0
 
     @property
     def aircraft_triangles(self) -> np.ndarray:
@@ -63,8 +93,38 @@ class TetraVolumeMesh:
         ]
 
     @property
+    def aircraft_quadrangles(self) -> np.ndarray:
+        return self.quadrangles[
+            self.quadrangle_physical_ids == PHYSICAL_AIRCRAFT
+        ]
+
+    @property
     def aircraft_nodes(self) -> np.ndarray:
-        return np.unique(self.aircraft_triangles.ravel())
+        return _unique_nodes(
+            self.aircraft_triangles, self.aircraft_quadrangles
+        )
+
+    @property
+    def assembly_cells(self) -> np.ndarray:
+        """Tetrahedra used to assemble the motion operators.
+
+        Every pyramid is split into two tetrahedra across its shorter base
+        diagonal, which is the better-conditioned of the two splits.
+        """
+        return _decompose_cells(
+            self.vertices, self.tetrahedra, self.pyramids, both_diagonals=False
+        )
+
+    @property
+    def quality_cells(self) -> np.ndarray:
+        """Tetrahedra used to test validity.
+
+        Both base diagonals of every pyramid are included, so a pyramid counts
+        as valid only when it is non-degenerate either way it is split.
+        """
+        return _decompose_cells(
+            self.vertices, self.tetrahedra, self.pyramids, both_diagonals=True
+        )
 
     @property
     def symmetry_nodes(self) -> np.ndarray:
@@ -89,7 +149,7 @@ class TetraVolumeMesh:
 
     @property
     def boundary_nodes(self) -> np.ndarray:
-        return np.unique(self.triangles.ravel())
+        return _unique_nodes(self.triangles, self.quadrangles)
 
 
 @dataclass(frozen=True)
@@ -288,8 +348,15 @@ class WallPositionHistory:
     source_path: Path
 
 
-def read_gmsh22_volume(path: str | Path) -> TetraVolumeMesh:
-    """Read the nodes, linear triangles/tetrahedra and physical tags."""
+def read_gmsh22_volume(
+    path: str | Path, *, validate: bool = True
+) -> TetraVolumeMesh:
+    """Read nodes, supported linear cells and physical tags.
+
+    ``validate=False`` is reserved for diagnosing a rejected mesh that cannot
+    pass the normal orientation/topology checks. Production callers should
+    retain the default.
+    """
     source = Path(path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
@@ -302,6 +369,10 @@ def read_gmsh22_volume(path: str | Path) -> TetraVolumeMesh:
     triangle_physical_ids: list[int] = []
     tetrahedra: list[list[int]] = []
     tetrahedron_physical_ids: list[int] = []
+    quadrangles: list[list[int]] = []
+    quadrangle_physical_ids: list[int] = []
+    pyramids: list[list[int]] = []
+    pyramid_physical_ids: list[int] = []
 
     with source.open("r", encoding="utf8") as stream:
         lines = iter(stream)
@@ -345,9 +416,20 @@ def read_gmsh22_volume(path: str | Path) -> TetraVolumeMesh:
                     if element_type == 2:
                         triangles.append(connectivity)
                         triangle_physical_ids.append(physical_id)
+                    elif element_type == 3:
+                        quadrangles.append(connectivity)
+                        quadrangle_physical_ids.append(physical_id)
                     elif element_type == 4:
                         tetrahedra.append(connectivity)
                         tetrahedron_physical_ids.append(physical_id)
+                    elif element_type == 7:
+                        pyramids.append(connectivity)
+                        pyramid_physical_ids.append(physical_id)
+                    elif element_type in (5, 6):
+                        raise ValueError(
+                            f"{source} contains element type {element_type}; "
+                            "only tetrahedra and pyramids are supported."
+                        )
 
     if node_ids is None or vertices is None:
         raise ValueError(f"{source} does not contain nodes.")
@@ -366,8 +448,23 @@ def read_gmsh22_volume(path: str | Path) -> TetraVolumeMesh:
             tetrahedron_physical_ids, dtype=np.int64
         ),
         physical_names=physical_names,
+        quadrangles=(
+            np.asarray(quadrangles, dtype=np.int64)
+            if quadrangles
+            else np.zeros((0, 4), dtype=np.int64)
+        ),
+        quadrangle_physical_ids=np.asarray(
+            quadrangle_physical_ids, dtype=np.int64
+        ),
+        pyramids=(
+            np.asarray(pyramids, dtype=np.int64)
+            if pyramids
+            else np.zeros((0, 5), dtype=np.int64)
+        ),
+        pyramid_physical_ids=np.asarray(pyramid_physical_ids, dtype=np.int64),
     )
-    _validate_volume_mesh(mesh)
+    if validate:
+        _validate_volume_mesh(mesh)
     return mesh
 
 
@@ -390,6 +487,7 @@ def extract_aircraft_wall_mesh(
     volume_to_wall = np.full(mesh.vertices.shape[0], -1, dtype=np.int64)
     volume_to_wall[volume_nodes] = np.arange(volume_nodes.size, dtype=np.int64)
     wall_triangles = volume_to_wall[mesh.aircraft_triangles]
+    wall_quadrangles = volume_to_wall[mesh.aircraft_quadrangles]
     wall_vertices = mesh.vertices[volume_nodes]
 
     with output.open("w", encoding="utf8") as stream:
@@ -402,13 +500,21 @@ def extract_aircraft_wall_mesh(
                 f"{point[2]:.17g}\n"
             )
         stream.write("$EndNodes\n")
-        stream.write(f"$Elements\n{wall_triangles.shape[0]}\n")
-        for index, triangle in enumerate(wall_triangles, start=1):
-            stream.write(
-                f"{index} 2 2 1 1 "
-                f"{int(triangle[0]) + 1} {int(triangle[1]) + 1} "
-                f"{int(triangle[2]) + 1}\n"
-            )
+        total = int(wall_triangles.shape[0] + wall_quadrangles.shape[0])
+        stream.write(f"$Elements\n{total}\n")
+        # ``bsm3.preprocessing.import_mesh`` expects one contiguous triangle
+        # block followed by one contiguous quadrangle block.
+        index = 0
+        for element_type, block in (
+            (2, wall_triangles),
+            (3, wall_quadrangles),
+        ):
+            for cell in block:
+                index += 1
+                connectivity = " ".join(
+                    str(int(node) + 1) for node in cell
+                )
+                stream.write(f"{index} {element_type} 2 1 1 {connectivity}\n")
         stream.write("$EndElements\n")
 
     np.savez(
@@ -416,6 +522,7 @@ def extract_aircraft_wall_mesh(
         wall_to_volume=volume_nodes,
         baseline_wall_vertices=wall_vertices,
         surface_triangles=wall_triangles,
+        surface_quadrangles=wall_quadrangles,
         volume_mesh_path=str(mesh.source_path),
         wall_mesh_path=str(output),
     )
@@ -553,6 +660,7 @@ def write_aircraft_wall_gmsh22(
     volume_to_wall = np.full(mesh.vertices.shape[0], -1, dtype=np.int64)
     volume_to_wall[wall_nodes] = np.arange(wall_nodes.size, dtype=np.int64)
     triangles = volume_to_wall[mesh.aircraft_triangles]
+    quadrangles = volume_to_wall[mesh.aircraft_quadrangles]
 
     output = Path(output_path).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -566,13 +674,16 @@ def write_aircraft_wall_gmsh22(
                 f"{point[2]:.17g}\n"
             )
         stream.write("$EndNodes\n")
-        stream.write(f"$Elements\n{triangles.shape[0]}\n")
-        for element_id, triangle in enumerate(triangles, start=1):
-            stream.write(
-                f"{element_id} 2 2 1 1 "
-                f"{int(triangle[0]) + 1} {int(triangle[1]) + 1} "
-                f"{int(triangle[2]) + 1}\n"
-            )
+        total = int(triangles.shape[0] + quadrangles.shape[0])
+        stream.write(f"$Elements\n{total}\n")
+        element_id = 0
+        for element_type, block in ((2, triangles), (3, quadrangles)):
+            for cell in block:
+                element_id += 1
+                connectivity = " ".join(str(int(node) + 1) for node in cell)
+                stream.write(
+                    f"{element_id} {element_type} 2 1 1 {connectivity}\n"
+                )
         stream.write("$EndElements\n")
     return output
 
@@ -635,7 +746,7 @@ def assemble_graph_volume_system(
         raise ValueError("volume_floor must be positive.")
     partition = make_boundary_partition(mesh)
 
-    tetrahedra = mesh.tetrahedra
+    tetrahedra = mesh.assembly_cells
     volumes = np.maximum(
         np.abs(_tetrahedron_determinants(points, tetrahedra)) / 6.0,
         float(volume_floor),
@@ -718,7 +829,7 @@ def assemble_elastic_volume_system(
 
     stiffness = _assemble_tetrahedral_elasticity_bsr(
         points,
-        mesh.tetrahedra,
+        mesh.assembly_cells,
         poisson_ratio=nu,
         stiffening_exponent=exponent,
         volume_floor=float(volume_floor),
@@ -810,7 +921,7 @@ def run_forward_volume_load_steps(
         current = current + increment
         current_wall = target.copy()
         quality = evaluate_volume_quality(
-            baseline_vertices, current, mesh.tetrahedra
+            baseline_vertices, current, mesh.tetrahedra, pyramids=mesh.pyramids
         )
         records.append(
             LoadStepRecord(
@@ -855,11 +966,23 @@ def evaluate_volume_quality(
     baseline_vertices: np.ndarray,
     deformed_vertices: np.ndarray,
     tetrahedra: np.ndarray,
+    pyramids: np.ndarray | None = None,
 ) -> VolumeQualityReport:
-    """Evaluate signed-Jacobian, volume-ratio and mean-ratio metrics."""
+    """Evaluate signed-Jacobian, volume-ratio and mean-ratio metrics.
+
+    When ``pyramids`` is given, each pyramid is tested under both base splits,
+    so ``inverted_tetrahedra`` counts every decomposed cell that folded.
+    """
     baseline = np.asarray(baseline_vertices, dtype=float)
     deformed = np.asarray(deformed_vertices, dtype=float)
     cells = np.asarray(tetrahedra, dtype=np.int64)
+    if pyramids is not None and np.asarray(pyramids).size:
+        cells = _decompose_cells(
+            baseline,
+            cells,
+            np.asarray(pyramids, dtype=np.int64),
+            both_diagonals=True,
+        )
     determinant_0 = _tetrahedron_determinants(baseline, cells)
     determinant_1 = _tetrahedron_determinants(deformed, cells)
     scale = np.maximum(np.abs(determinant_0), np.finfo(float).tiny)
@@ -905,7 +1028,13 @@ def evaluate_gmsh_tetra_quality(
         gmsh.model.setCurrent(quality_model)
         gmsh.merge(str(path))
         tetrahedron_tags, _ = gmsh.model.mesh.getElementsByType(4)
-        tags = np.asarray(tetrahedron_tags, dtype=np.int64)
+        pyramid_tags, _ = gmsh.model.mesh.getElementsByType(7)
+        tags = np.concatenate(
+            (
+                np.asarray(tetrahedron_tags, dtype=np.int64),
+                np.asarray(pyramid_tags, dtype=np.int64),
+            )
+        )
         if tags.size == 0:
             raise ValueError(f"{path} contains no linear tetrahedra.")
         report: dict[str, dict[str, float | int]] = {}
@@ -1021,6 +1150,51 @@ def _assemble_tetrahedral_elasticity_bsr(
     )
 
 
+def _unique_nodes(*blocks: np.ndarray) -> np.ndarray:
+    """Sorted unique node indices over any number of connectivity blocks."""
+    present = [block.ravel() for block in blocks if block.size]
+    if not present:
+        return np.empty(0, dtype=np.int64)
+    return np.unique(np.concatenate(present))
+
+
+# Gmsh orders a pyramid as four base nodes followed by the apex.  Splitting the
+# base across 0-2 or across 1-3 gives these tetrahedra.
+_PYRAMID_SPLIT_02 = ((0, 1, 2, 4), (0, 2, 3, 4))
+_PYRAMID_SPLIT_13 = ((1, 2, 3, 4), (1, 3, 0, 4))
+
+
+def _decompose_cells(
+    vertices: np.ndarray,
+    tetrahedra: np.ndarray,
+    pyramids: np.ndarray,
+    *,
+    both_diagonals: bool,
+) -> np.ndarray:
+    """Represent a hybrid mesh as tetrahedra only."""
+    if pyramids.size == 0:
+        return tetrahedra
+    if both_diagonals:
+        splits = _PYRAMID_SPLIT_02 + _PYRAMID_SPLIT_13
+    else:
+        points = np.asarray(vertices, dtype=float)
+        corners = points[pyramids[:, :4]]
+        first = np.linalg.norm(corners[:, 2] - corners[:, 0], axis=1)
+        second = np.linalg.norm(corners[:, 3] - corners[:, 1], axis=1)
+        use_02 = first <= second
+        blocks = [tetrahedra]
+        for group, split in ((use_02, _PYRAMID_SPLIT_02), (~use_02, _PYRAMID_SPLIT_13)):
+            selected = pyramids[group]
+            if selected.size == 0:
+                continue
+            blocks.extend(selected[:, list(corner)] for corner in split)
+        return np.concatenate(blocks, axis=0)
+    return np.concatenate(
+        [tetrahedra] + [pyramids[:, list(corner)] for corner in splits],
+        axis=0,
+    )
+
+
 def _tetrahedron_determinants(
     vertices: np.ndarray, tetrahedra: np.ndarray
 ) -> np.ndarray:
@@ -1051,38 +1225,58 @@ def _tetrahedron_mean_ratio(
 def _nodes_for_physical_patch(
     mesh: TetraVolumeMesh, physical_id: int
 ) -> np.ndarray:
-    selected = mesh.triangles[
-        mesh.triangle_physical_ids == int(physical_id)
-    ]
-    return (
-        np.empty(0, dtype=np.int64)
-        if selected.size == 0
-        else np.unique(selected.ravel())
+    physical_id = int(physical_id)
+    return _unique_nodes(
+        mesh.triangles[mesh.triangle_physical_ids == physical_id],
+        mesh.quadrangles[mesh.quadrangle_physical_ids == physical_id],
     )
 
 
 def _validate_volume_mesh(mesh: TetraVolumeMesh) -> None:
-    required_surfaces = {
-        PHYSICAL_AIRCRAFT,
-        PHYSICAL_SYMMETRY,
-        PHYSICAL_INLET,
-        PHYSICAL_OUTLET,
-        PHYSICAL_FARFIELD,
-    }
+    required_surfaces = {PHYSICAL_AIRCRAFT, PHYSICAL_SYMMETRY}
+    # Whether the outer boundary is split into inlet/outlet caps or written as
+    # one far-field surface is a meshing choice; ``fixed_outer_nodes`` unions
+    # all three either way, so only the union has to be non-empty.
+    outer_surfaces = {PHYSICAL_INLET, PHYSICAL_OUTLET, PHYSICAL_FARFIELD}
     present = set(int(value) for value in np.unique(mesh.triangle_physical_ids))
+    present.update(int(value) for value in np.unique(mesh.quadrangle_physical_ids))
     missing = required_surfaces - present
     if missing:
         raise ValueError(f"Volume mesh is missing physical surfaces {missing}.")
-    if PHYSICAL_FLUID not in set(
-        int(value) for value in np.unique(mesh.tetrahedron_physical_ids)
-    ):
+    if not (outer_surfaces & present):
+        raise ValueError(
+            "Volume mesh has no outer boundary; expected at least one of the "
+            f"physical surfaces {sorted(outer_surfaces)}."
+        )
+    fluid_ids = set(int(value) for value in np.unique(mesh.tetrahedron_physical_ids))
+    fluid_ids.update(int(value) for value in np.unique(mesh.pyramid_physical_ids))
+    if PHYSICAL_FLUID not in fluid_ids:
         raise ValueError("Volume mesh is missing physical volume 'fluid'.")
+
     determinant = _tetrahedron_determinants(mesh.vertices, mesh.tetrahedra)
     if np.any(determinant == 0.0):
         raise ValueError("Volume mesh contains degenerate tetrahedra.")
     signs = np.sign(determinant)
     if np.any(signs != signs[0]):
         raise ValueError("Tetrahedron orientations are inconsistent.")
+    if mesh.pyramids.size:
+        # Each pyramid must be non-degenerate under either base split, and
+        # wound the same way as the tetrahedra.
+        pyramid_cells = _decompose_cells(
+            mesh.vertices,
+            np.zeros((0, 4), dtype=np.int64),
+            mesh.pyramids,
+            both_diagonals=True,
+        )
+        pyramid_determinant = _tetrahedron_determinants(
+            mesh.vertices, pyramid_cells
+        )
+        if np.any(pyramid_determinant == 0.0):
+            raise ValueError("Volume mesh contains degenerate pyramids.")
+        if np.any(np.sign(pyramid_determinant) != signs[0]):
+            raise ValueError(
+                "Pyramid orientations are inconsistent with the tetrahedra."
+            )
 
 
 def _mesh_with_vertices(
@@ -1097,6 +1291,10 @@ def _mesh_with_vertices(
         tetrahedra=mesh.tetrahedra,
         tetrahedron_physical_ids=mesh.tetrahedron_physical_ids,
         physical_names=mesh.physical_names,
+        quadrangles=mesh.quadrangles,
+        quadrangle_physical_ids=mesh.quadrangle_physical_ids,
+        pyramids=mesh.pyramids,
+        pyramid_physical_ids=mesh.pyramid_physical_ids,
     )
 
 

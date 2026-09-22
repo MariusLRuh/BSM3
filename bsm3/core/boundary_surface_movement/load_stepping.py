@@ -34,6 +34,12 @@ from .quadratic_distortion import (
     QuadraticDistortionAssembler,
     QuadraticDistortionConfig,
 )
+from .ngon_affine import (
+    CurrentGraphNgonAffineModel,
+    CurrentGraphNgonAffineSolveOperation,
+    NgonAffineAssembler,
+    NgonAffineConfig,
+)
 from .projection import (
     ParameterizedProjection,
     VertexBatch,
@@ -60,6 +66,10 @@ class GraphLoadStepResult:
     distortion_redundancy: float | None = None
     distortion_num_ear_clipped: int = 0
     distortion_maximum_warp_ratio: float = 0.0
+    ngon_affine_normalization_scale: float | None = None
+    ngon_affine_num_elements: int = 0
+    ngon_affine_num_modes: int = 0
+    ngon_affine_maximum_warp_ratio: float = 0.0
 
 
 def linear_load_fractions(num_steps: int) -> tuple[float, ...]:
@@ -84,6 +94,7 @@ def run_graph_load_steps(
     load_fractions: Sequence[float] | None = None,
     parameterize_final_projection: bool = False,
     distortion_config: QuadraticDistortionConfig | None = None,
+    ngon_affine_config: NgonAffineConfig | None = None,
     tangential_smoother: FixedProjectedTangentialSmoother | None = None,
     symmetry_plane_vertex_ids: np.ndarray | None = None,
     symmetry_plane_axis: int = 1,
@@ -112,6 +123,15 @@ def run_graph_load_steps(
     coefficient_steps = tuple(component_coefficient_steps)
     if not coefficient_steps:
         raise ValueError("component_coefficient_steps must not be empty.")
+    if (
+        distortion_config is not None
+        and distortion_config.lambda_dist > 0.0
+        and ngon_affine_config is not None
+        and ngon_affine_config.lambda_ngon > 0.0
+    ):
+        raise ValueError(
+            "Distortion and n-gon affine regularization are mutually exclusive."
+        )
 
     if load_fractions is None:
         fractions = linear_load_fractions(len(coefficient_steps))
@@ -190,9 +210,13 @@ def run_graph_load_steps(
         stiffening_exponent=motion.assembler.stiffening_exponent,
         area_floor=motion.assembler.area_floor,
         distance_weighting=distance_weighting,
+        quad_diagonal_weight=motion.assembler.quad_diagonal_weight,
+        quad_bracing_mode=motion.assembler.quad_bracing_mode,
     )
     distortion_model = None
     distortion_system = None
+    ngon_affine_model = None
+    ngon_affine_system = None
     if (
         distortion_config is not None
         and distortion_config.lambda_dist > 0.0
@@ -220,7 +244,25 @@ def run_graph_load_steps(
             constrained_free_dofs=constrained_free_dofs,
             baseline_vertices=motion.initial_vertices,
         )
+    if (
+        ngon_affine_config is not None
+        and ngon_affine_config.lambda_ngon > 0.0
+    ):
+        ngon_affine_system = NgonAffineAssembler(
+            ngon_affine_config
+        ).assemble(
+            mesh,
+            free_ids=motion.free_ids,
+            prescribed_ids=motion.prescribed_ids,
+        )
+        ngon_affine_model = CurrentGraphNgonAffineModel(
+            graph_model,
+            ngon_affine_system,
+            lambda_ngon=ngon_affine_config.lambda_ngon,
+            baseline_vertices=motion.initial_vertices,
+        )
     graph_model_y = None
+    ngon_affine_model_y = None
     if motion.symmetry_plane_ids is not None and distortion_model is None:
         graph_model_y = CurrentGraphModel(
             mesh,
@@ -229,7 +271,23 @@ def run_graph_load_steps(
             stiffening_exponent=motion.assembler.stiffening_exponent,
             area_floor=motion.assembler.area_floor,
             distance_weighting=distance_weighting,
+            quad_diagonal_weight=motion.assembler.quad_diagonal_weight,
+            quad_bracing_mode=motion.assembler.quad_bracing_mode,
         )
+        if ngon_affine_model is not None:
+            ngon_affine_system_y = NgonAffineAssembler(
+                ngon_affine_config
+            ).assemble(
+                mesh,
+                free_ids=motion.free_ids_y,
+                prescribed_ids=motion.prescribed_ids_y,
+            )
+            ngon_affine_model_y = CurrentGraphNgonAffineModel(
+                graph_model_y,
+                ngon_affine_system_y,
+                lambda_ngon=ngon_affine_config.lambda_ngon,
+                baseline_vertices=motion.initial_vertices,
+            )
 
     preprojected_history: list[csdl.Variable] = []
     projected_history: list[csdl.Variable] = []
@@ -257,10 +315,38 @@ def run_graph_load_steps(
             )
         )
         prescribed_matrix = _stack_columns(prescribed_increments)
-        if distortion_model is None:
+        if distortion_model is None and ngon_affine_model is None:
             solved_blocks = CurrentGraphSolveOperation(graph_model).evaluate(
                 current_mesh,
                 prescribed_matrix,
+            )
+        elif ngon_affine_model is not None:
+            previous_reference = (
+                csdl.Variable(
+                    value=np.zeros((motion.free_ids.size, 3), dtype=float)
+                )
+                if previous_state is None
+                else previous_state.free_reference
+            )
+            accumulated_correction = (
+                current_mesh[_row_slice(motion.free_ids)]
+                - motion.initial_vertices[motion.free_ids]
+                - previous_reference
+            )
+            current_free_matrix = _stack_block_rows(
+                accumulated_correction,
+                motion._free_reference_groups,
+            )
+            total_prescribed_matrix = _stack_columns(
+                state.prescribed_deviations
+            )
+            solved_blocks = CurrentGraphNgonAffineSolveOperation(
+                ngon_affine_model
+            ).evaluate(
+                current_mesh,
+                prescribed_matrix,
+                current_free_matrix,
+                total_prescribed_matrix,
             )
         else:
             previous_reference = (
@@ -323,10 +409,54 @@ def run_graph_load_steps(
                     for item in prescribed_increments_y
                 )
             )
-            solved_y_blocks = CurrentGraphSolveOperation(graph_model_y).evaluate(
-                current_mesh,
-                prescribed_y,
-            )
+            if ngon_affine_model_y is None:
+                solved_y_blocks = CurrentGraphSolveOperation(
+                    graph_model_y
+                ).evaluate(
+                    current_mesh,
+                    prescribed_y,
+                )
+            else:
+                previous_reference_y = (
+                    csdl.Variable(
+                        value=np.zeros((motion.free_ids_y.size, 1), dtype=float)
+                    )
+                    if previous_state is None
+                    else previous_state.free_reference[
+                        _row_slice(
+                            np.asarray(
+                                [
+                                    motion._free_local[int(vertex)]
+                                    for vertex in motion.free_ids_y
+                                ],
+                                dtype=np.int64,
+                            )
+                        )
+                    ][csdl.slice[:, 1:2]]
+                )
+                accumulated_correction_y = (
+                    current_mesh[_row_slice(motion.free_ids_y)][csdl.slice[:, 1:2]]
+                    - motion.initial_vertices[motion.free_ids_y, 1:2]
+                    - previous_reference_y
+                )
+                current_free_y = _stack_scalar_block_rows(
+                    accumulated_correction_y,
+                    motion._free_reference_groups_y,
+                )
+                total_prescribed_y = _stack_columns(
+                    tuple(
+                        item[csdl.slice[:, 1:2]]
+                        for item in state.prescribed_deviations_y
+                    )
+                )
+                solved_y_blocks = CurrentGraphNgonAffineSolveOperation(
+                    ngon_affine_model_y
+                ).evaluate(
+                    current_mesh,
+                    prescribed_y,
+                    current_free_y,
+                    total_prescribed_y,
+                )
             correction_y_free = csdl.Variable(
                 value=np.zeros((motion.free_ids_y.size, 1), dtype=float)
             )
@@ -456,6 +586,26 @@ def run_graph_load_steps(
             if distortion_system is None
             else distortion_system.maximum_warp_ratio
         ),
+        ngon_affine_normalization_scale=(
+            None
+            if ngon_affine_model is None
+            else ngon_affine_model.normalization_scale
+        ),
+        ngon_affine_num_elements=(
+            0
+            if ngon_affine_system is None
+            else ngon_affine_system.num_regularized_elements
+        ),
+        ngon_affine_num_modes=(
+            0
+            if ngon_affine_system is None
+            else ngon_affine_system.num_hourglass_modes
+        ),
+        ngon_affine_maximum_warp_ratio=(
+            0.0
+            if ngon_affine_system is None
+            else ngon_affine_system.maximum_warp_ratio
+        ),
     )
 
 
@@ -467,6 +617,20 @@ def _stack_columns(values):
 
 def _stack_block_rows(values, groups):
     """Place each component's free correction in its own 3-column block."""
+
+    blocks = []
+    for group in groups:
+        block = csdl.Variable(value=np.zeros(values.shape, dtype=float))
+        block = block.set(
+            _row_slice(group.free_rows),
+            values[_row_slice(group.free_rows)],
+        )
+        blocks.append(block)
+    return _stack_columns(tuple(blocks))
+
+
+def _stack_scalar_block_rows(values, groups):
+    """Place each component's scalar correction in its own column."""
 
     blocks = []
     for group in groups:

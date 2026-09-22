@@ -184,7 +184,10 @@ class ElasticityMotionSolver:
         symmetry_plane_ids: np.ndarray | None = None,
         assembler: StiffnessAssembler | None = None,
         prescribed_ids: np.ndarray | None = None,
+        symmetry_use_element_neighbors: bool = False,
         distance_weighting=None,
+        quad_diagonal_weight: float = 0.0,
+        quad_bracing_mode: str = "both_diagonals",
     ):
         self.use_corotational_reference = bool(use_corotational_reference)
         self.use_query_seam_reference = bool(use_query_seam_reference)
@@ -202,12 +205,32 @@ class ElasticityMotionSolver:
         self.component_reevaluations = tuple(component_reevaluations)
 
         self.free_ids = np.unique(np.asarray(free_ids, dtype=np.int64).reshape(-1))
+        self.distance_weighting = distance_weighting
+        self.symmetry_use_element_neighbors = bool(
+            symmetry_use_element_neighbors
+        )
+        assembler = assembler or GraphLaplacianAssembler(
+            stiffening_exponent=float(stiffening_exponent),
+            distance_weighting=distance_weighting,
+            quad_diagonal_weight=quad_diagonal_weight,
+            quad_bracing_mode=quad_bracing_mode,
+        )
+        self.assembler = assembler
+        active_quad_bracing_mode = (
+            str(getattr(assembler, "quad_bracing_mode", "both_diagonals"))
+            if float(getattr(assembler, "quad_diagonal_weight", 0.0)) > 0.0
+            else None
+        )
 
         # Prescribed set = every graph neighbor of the free band (seam ring +
         # frozen ring).  Growing P from connectivity guarantees the free-free
         # block has no stiffness leak.
         self.prescribed_ids = (
-            graph_neighbors(self.mesh, self.free_ids)
+            graph_neighbors(
+                self.mesh,
+                self.free_ids,
+                quad_bracing_mode=active_quad_bracing_mode,
+            )
             if prescribed_ids is None
             else np.unique(np.asarray(prescribed_ids, dtype=np.int64).reshape(-1))
         )
@@ -236,12 +259,6 @@ class ElasticityMotionSolver:
         # fixed reference-geodesic distance weighting multiplies every edge; it
         # is shared with the current-area load-stepping model (read back from
         # ``self.assembler.distance_weighting``).
-        self.distance_weighting = distance_weighting
-        assembler = assembler or GraphLaplacianAssembler(
-            stiffening_exponent=float(stiffening_exponent),
-            distance_weighting=distance_weighting,
-        )
-        self.assembler = assembler
         self.system = assembler.assemble(
             self.mesh,
             free_ids=self.free_ids,
@@ -287,7 +304,16 @@ class ElasticityMotionSolver:
                 [int(v) for v in self.free_ids if int(v) not in plane_set],
                 dtype=np.int64,
             )
-            self.prescribed_ids_y = graph_neighbors(self.mesh, self.free_ids_y)
+            if self.symmetry_use_element_neighbors:
+                self.prescribed_ids_y = element_neighbors(
+                    self.mesh, self.free_ids_y
+                )
+            else:
+                self.prescribed_ids_y = graph_neighbors(
+                    self.mesh,
+                    self.free_ids_y,
+                    quad_bracing_mode=active_quad_bracing_mode,
+                )
             self._prescribed_local_y = {
                 int(v): r for r, v in enumerate(self.prescribed_ids_y)
             }
