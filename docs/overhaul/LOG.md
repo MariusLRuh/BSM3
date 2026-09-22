@@ -506,12 +506,49 @@ Scope:     M1.4 observable polygon6 regularization and VJP regression
 
 Did:
 - Claimed the turn after reading the finalized M1.4 design and allowlist.
+- Added pure polygon6/quad projector algebra and mode-count checks, including
+  the analytically derived harmonic and affine-completion limits.
+- Added an observable polygon6 CSDL design variable through the production
+  `run_graph_load_steps` solve and OML reprojection path. The boundary-state
+  fixture is synthetic; the graph solve, N-gon custom operation/VJP, and
+  projection are production implementations.
+- Added a disconnected quad + pentagon + hexagon deformation check with six
+  total hourglass modes, zero inverted elements/corners, zero degeneracies,
+  and positive scaled-Jacobian and area-ratio bounds.
+- Added an integration-only assembly of the trusted `wall_surface.pkl` asset:
+  **117,267** expected and assembled modes, with no solve or derivative.
+- Reclassified the existing derivative gate as the expected affine-nullspace
+  control in its docstring only.
+- Committed the implementation as `0f3e10c` using exactly the seven literal
+  allowlisted paths.
 
 Decided:
-- `ngon_affine.py` remains unchanged unless a new test demonstrates a genuine
-  operator defect.
+- **No operator defect was found.** `ngon_affine.py` was not changed or staged.
+- The bare six-node ring is sufficient when paired with a broad bilinear plane
+  for the real reprojection. A honeycomb enlargement was not needed.
+- At `lambda_ngon=0.3`, the normalized production operator changes the free
+  solution by **0.153846·delta** in infinity norm, above the binding
+  `0.04·delta` threshold. The earlier 0.0465 estimate was not used as a golden
+  value.
 
 Open:
-- none
+- Remote GitHub Actions remains unrun; local and genuine-clone gates are green.
 
-Status:    open
+Validation:
+- Operator file: **3 passed in 2.78 s**.
+- Load-step file: **2 passed in 3.17 s**.
+- Focused operator + load-step + affine-nullspace gate: **6 passed in 8.50 s**.
+- Derivative observability: regularized analytic derivative **4.3846153846**,
+  unregularized **4.0**, difference **0.3846153846**; centered-FD relative
+  errors at `(1e-4, 1e-5, 1e-6)` were **9.22e-13, 8.45e-12, 1.11e-10**.
+- Working-tree suite (includes the excluded untracked hybrid-volume test):
+  **178 passed in 49.52 s**.
+- Ruff default and `--select D`: **all checks passed** for both new files.
+- Genuine clone of `0f3e10c`: empty `git status --porcelain`; editable install
+  succeeded; **164 passed, 1 skipped in 50.98 s**. This is six new passes and
+  about **6.22 s** over the prior 158-pass/1-skip clone, below the 30 s budget.
+- The prompt-mandated editable install first failed because the sandbox blocked
+  build-isolation access to `setuptools`; rerunning the identical command with
+  approved network access succeeded. No dependency or source change was made.
+
+Status:    closed
