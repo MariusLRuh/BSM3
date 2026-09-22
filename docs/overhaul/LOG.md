@@ -693,6 +693,25 @@ Open:
   `__init__.py`, `elasticity.py`, `motion.py`, `inversion_barrier.py`, and
   `oml_quality.py`. Removing those is a broader public-API deletion and was not
   inferred into this turn.
-- Genuine-clone verification and final commit are pending.
+- Remote GitHub Actions remains unrun; local and genuine-clone gates are green.
 
-Status:    open
+Validation:
+- Driver configuration: **10 passed in 2.78 s**.
+- Boundary-surface movement: **45 passed in 35.59 s** after deleting the two
+  strategy-only tests.
+- M1.4 polygon6 tests: **5 passed in 3.08 s**.
+- Affine-nullspace derivative gate: **1 passed in 8.20 s**.
+- Working-tree suite, including the excluded untracked hybrid-volume test:
+  **176 passed in 47.05 s**.
+- Ruff on `e175_mesh_motion_config.py`: **all checks passed**; both modified
+  production modules compile; `git diff --check` is clean.
+- `git grep -i membrane -- tests`: no matches. The E175 config and pipeline
+  likewise have no matches. The five residual lower-level module paths are
+  listed above and justified by direct reachability.
+- Commit `52b43c9` contains exactly the seven allowed paths. Code/test delta:
+  **+52/-163**. `motion.py` and `inversion_barrier.py` are absent.
+- Genuine clone of `52b43c9`: empty `git status --porcelain` and
+  **162 passed, 1 skipped in 47.22 s**, exactly two fewer passes than Turn 9
+  because the two standalone strategy-only tests were removed.
+
+Status:    closed
