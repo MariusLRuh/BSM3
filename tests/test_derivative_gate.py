@@ -109,7 +109,12 @@ def _structured_quad_patch():
 
 @pytest.mark.timeout(60)
 def test_final_reprojected_mesh_vjp_matches_finite_difference():
-    """Check DV totals through intersections, graph motion, N-gons, and OML."""
+    """Check the affine-nullspace control through graph motion and OML.
+
+    The N-gon term is expected to be unobservable here because this fixture's
+    deformation is affine in each element chart. The observable hourglass case
+    is covered by the polygon6 operator and load-step tests.
+    """
     recorder = csdl.Recorder(inline=True)
     recorder.start()
 

@@ -1,158 +1,173 @@
-# Next implementation prompt for Codex — Turn 6
+# Next implementation prompt for Codex — Turn 8 (M1.4)
 
 Paste into a Codex session at the repository root.
 
 ---
 
-You are continuing the BSM3 overhaul with Claude. Read in order:
-`docs/overhaul/PLAN.md` (section 4 carries the Turn-5 ruling),
-`docs/overhaul/LOG.md` (Turn 5 is closed), then this file.
+Read `docs/overhaul/PLAN.md` (the Turn-7 M0 closure and the finalized M1.4
+design in section 5), then `docs/overhaul/LOG.md` (Turn 7 is closed).
 
-**Turn-4 verdict.** Your work is accepted. The trusted-pickle split, the R4
-marker split, `MANIFEST.md`, and the `pytest-timeout` substitution all stand. The
-manifest's root-M attribution of `smooth_existing_tip_cap.py` was spot-checked
-and is correct. Your four agreements are all confirmed.
+**M0 is closed.** Your C1-C5 series was audited: exact allowlist match, no
+forbidden paths, excluded files preserved, trusted-pickle boundary correct.
+One caveat recorded — C1 is red standalone because it inherits a failure that
+predates the series at `0a657a7`; C2 repairs it, so the first green commit is
+C2 and future bisects should start from `76f24ce`. Claude's Turn-5 prediction
+that C1 would be green was wrong and is on record.
 
-**Two corrections to your Turn-4 blocker, both measured:**
+**This turn is M1.4 only.** Do not touch M1.1-M1.3 or M1.5-M1.8. Specifically:
+no config generalization, no pipeline decomposition, no membrane deletion, no
+meshgen carve-out, no docstring sweep, no pickle retirement.
 
-1. Your tracked-only validation was a tracked-*path* / working-tree-*content*
-   hybrid, not a clone. HEAD's `__init__.py` and `load_stepping.py` do **not**
-   import `ngon_affine`; only the dirty copies do. A real clone of `6ef0703`
-   does not fail that way.
-2. The real dependency is larger than four files. A preflight from clean
-   `git archive HEAD` converged only after adopting **12 modified tracked files
-   carrying +1415/-196 lines of pre-M0 user work**. Preflight result with the
-   allowlist below: **158 passed, 1 skipped, 0 failed in 41.92 s**; gate 7.66 s.
+Claim `## Turn 8` in `LOG.md` before editing. Close it when done.
 
-Claim `## Turn 6` in `LOG.md` before editing. Close it when done.
-
-**Still prohibited:** history rewrite, orphan branch, bulk deletion, `git add -A`
-or any other broad staging command. Stage only by explicit path from the
-allowlist below. Preserve every excluded dirty file.
+**Prohibited:** history rewrite, deletion, `git add -A` or any broad staging,
+staging any path outside the allowlist below, new binary assets, DAFoam
+dependence, and putting the large `wall_surface.pkl` into the fast gate.
 
 ---
 
-## Task 1 — land the M0 commit series (C1 through C5, in order)
+## The mathematics you are testing
 
-Stage **only** these literal paths. Any path not listed is forbidden.
+`_affine_residual_projector` builds, per element, from the **baseline** polygon:
+centre, SVD to the best-fit plane, in-plane chart `(u, v)`, design matrix
+`[1, u, v]`, reduced QR giving `Q_e`, then `P_e = I - Q_e Q_e^T`.
 
-### C1 — N-gon substrate
-```
-bsm3/core/boundary_surface_movement/ngon_affine.py
-bsm3/core/boundary_surface_movement/__init__.py
-```
+`P_e` acts on the **n-vector of nodal values per spatial component**. So
+`null(P_e) = span{1, u, v}` — any nodal field affine in the element's own
+baseline in-plane coordinates — and `rank(P_e) = n - 3`.
 
-### C2 — adopted pre-M0 motion work — **FLAGGED FOR USER REVIEW**
-```
-bsm3/core/boundary_surface_movement/load_stepping.py
-bsm3/core/boundary_surface_movement/motion.py
-bsm3/core/boundary_surface_movement/e175_mesh_motion_config.py
-bsm3/core/boundary_surface_movement/current_graph_solve.py
-bsm3/core/boundary_surface_movement/e175_mesh_motion_pipeline.py
-bsm3/core/boundary_surface_movement/elasticity.py
-bsm3/core/boundary_surface_movement/quadratic_distortion.py
-bsm3/core/boundary_surface_movement/volume_mesh_motion.py
-bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py
-tests/test_boundary_surface_movement.py
-tests/templates.py
-tests/test_e175_driver_configuration.py
-```
-This commit promotes the user's in-progress work to the project baseline. Say so
-in the commit message, state the `+1415/-196` figure, and list the files. Do not
-attempt to split these diffs — the N-gon wiring and the surrounding work are
-entangled, and a hand-split would produce a state nobody has tested.
+That is `range(A_e) = range(Q_e) = 𝒜_e`, and it is why the existing gate
+measured 3.3e-16: a z-ramp is affine in `(u, v)`, so `r_e = 0`. That gate is
+**correct**; reclassify it, do not "fix" it.
 
-### C3 — trusted polygon reader
-```
-bsm3/preprocessing/mesh_io.py
-bsm3/preprocessing/__init__.py
-```
+## Task 1 — `tests/test_ngon_affine_operator.py` (new)
 
-### C4 — M0 test and CI infrastructure
+### Test A — projector algebra (< 1 s, pure numpy)
+
+Regular planar hexagon, vertices at `kπ/3`, `k = 0..5`, in `z = 0`.
+Claude measured these in Turn 7; assert them:
+
+- `P` symmetric; `P @ P ≈ P`; `np.linalg.matrix_rank(P, tol=1e-10) == 3`
+- `‖P·1‖`, `‖P·u‖`, `‖P·v‖`, `‖P·(2+3u-5v)‖` all `< 1e-12`
+  (measured 6.5e-16, 3.8e-16, 2.0e-16, 2.7e-15)
+- alternating ring mode `p = (+1,-1,+1,-1,+1,-1)`:
+  `abs(‖P·p‖/‖p‖ - 1.0) < 1e-12` (measured exactly 1.000000)
+- quad control: `rank == 1`, retained fraction `1.0`
+- via `NgonAffineAssembler`: `num_hourglass_modes == 3` for the hexagon,
+  `== 1` for a quad, `== 0` for a triangle-only mesh
+
+### Test B — primal observability (< 5 s)
+
+Single regular hexagon. Prescribe `{0, 2, 4}` to `(+δ, -δ, +δ)`; free
+`{1, 3, 5}`. Both limits are analytic — **derive them in the test, do not paste
+values produced by the implementation**:
+
+- `λ = 0` → harmonic on the 6-cycle → `δ·(0, 0, 1)`, match to `1e-12`
+- `λ = 1e6` → affine completion → `δ·(-1/3, -1/3, +5/3)`, match to `1e-5`
+  (solve `[1,u,v]` through the three prescribed nodes for `f = a + bu + cv`;
+  Claude gets `f = δ(1/3 + (2/3)u - 1.1547v)`)
+- `λ = 0.3` → `‖z(0.3) - z(0)‖∞ ≥ 0.04·δ` (measured 0.0465·δ)
+
+## Task 2 — `tests/test_ngon_affine_load_step.py` (new)
+
+### Test C — load-step VJP vs finite differences (< 20 s)
+
+Drive the hourglass amplitude `δ` as a CSDL design variable through
+`run_graph_load_steps` on a synthetic polygon6 mesh with `lambda_ngon > 0`.
+Scalar objective on the final deformed/reprojected coordinates.
+
+- centered FD at `(1e-4, 1e-5, 1e-6)`
+- **per-pair best-step, then worst-pair** aggregation — the convention from the
+  existing gate. Do not minimise across pairs.
+- tolerance `< 1e-5`
+- **Guard, required:** assert `d(objective)/dδ` at `λ > 0` differs from the same
+  derivative at `λ = 0` by `≥ 1e-6`. Without this, a VJP that silently drops the
+  N-gon adjoint term still passes.
+
+This test is load-bearing in a way A and B are not: `P_e` is symmetric, so no
+operator-level assertion can see a transpose error in the free/prescribed
+coupling block. Only FD can.
+
+### Mixed-polygon case (same file)
+
+Synthetic mesh with quad + pentagon + hexagon cells:
+- `num_hourglass_modes == Σ(n_e - 3)`
+- after deformation at `λ > 0`: **zero folds and zero inversions**, plus the
+  quality assertions already available in `bsm3.core.boundary_surface_movement.quality`
+
+## Task 3 — `tests/test_curated_assets.py` (modify)
+
+Add one `@pytest.mark.integration` test: `wall_surface.pkl` loads via
+`import_trusted_polygon_pickle` and assembles with the expected hourglass-mode
+count. **No solve, no derivative.** It must not enter the fast gate.
+
+## Task 4 — `tests/test_derivative_gate.py` (modify, docstring only)
+
+Reclassify it as the affine-nullspace control. State in the docstring that its
+N-gon term is *expected* to be unobservable because the deformation is affine in
+the element chart, and point to the polygon6 tests for the observable case.
+No behavioural change.
+
+---
+
+## Literal file allowlist
+
+Stage only these. Anything else is forbidden.
+
 ```
-pytest.ini
-ruff.toml
-requirements-ci.txt
-.github/workflows/actions.yml
-tests/test_derivative_gate.py
+tests/test_ngon_affine_operator.py
+tests/test_ngon_affine_load_step.py
 tests/test_curated_assets.py
-```
-
-### C5 — collaboration records
-```
-docs/overhaul/ASSETS.md
-docs/overhaul/CODEX_KICKOFF.md
-docs/overhaul/CODEX_NEXT.md
-docs/overhaul/LOG.md
-docs/overhaul/MANIFEST.md
+tests/test_derivative_gate.py
 docs/overhaul/PLAN.md
+docs/overhaul/LOG.md
+docs/overhaul/CODEX_NEXT.md
 ```
 
-**Never stage** (non-exhaustive, but these specifically):
-`bsm3/core/boundary_surface_movement/embraer_175_geom_parameterization.py`,
-`movement_test_csdl_single_rbf_master.py`,
-`movement_test_csdl_single_rbf_master_2.py`,
-`movement_test_embraer_175_hex_mesh.py`,
-`visualize_wing_rotation_deformation.py`,
-`bsm3/core/sdf/rbf_based/dwr_refinement.py`,
-`examples/basic_examples/ex_wing_sdf_newton.py`,
-`examples/basic_examples/wing_mesh_projections.py`,
-`tests/test_hybrid_volume_mesh_motion.py` (measured: causes 9 failures),
-`e175_panel_opt.py`, `gmsh_occ_oml_surface_mesh.py`,
-`smooth_existing_tip_cap.py` (deferred to M1.5/M1.7),
-and every R4 or other large volume mesh.
+`bsm3/core/boundary_surface_movement/ngon_affine.py` is **conditionally**
+allowed: only if these tests expose a genuine defect in the operator. If you
+touch it, say so prominently in Turn 8 with the failing assertion that justified
+it — a source change here is a finding, not routine.
 
-After each commit, run `python -m pytest -q tests` in the working tree and record
-the result. Each commit must be green on its own so the series stays bisectable.
-
-## Task 2 — genuine fresh-clone verification
-
-Not a copy of the working tree. A real clone of the commits:
+## Acceptance commands
 
 ```bash
-rm -rf /tmp/bsm3-clone-verify
-git clone --no-hardlinks \
-  --branch production-ready-overhaul \
-  "file:///Users/mariusruh/Documents/Research/nasa_uli/mesh_movement/packages/BSM3" \
-  /tmp/bsm3-clone-verify
-cd /tmp/bsm3-clone-verify
-
-# 1. proof of no working-tree leakage -- MUST print nothing
-git status --porcelain
-
-# 2. the five commits are present
-git log --oneline -6
-
-# 3. no large volume mesh came along
-test ! -e bsm3/core/boundary_surface_movement/fluent_R4_tet_euler_volume_mesh/e175_fluent_R4_tet_euler_volume.msh \
-  && echo "R4 volume mesh correctly absent"
-du -sh .
-
-# 4. the suite
-python -m pip install --no-deps -e .
-python -m pytest -q tests
+python -m pytest -q tests/test_ngon_affine_operator.py
+python -m pytest -q tests/test_ngon_affine_load_step.py
 python -m pytest -q tests/test_derivative_gate.py
+python -m pytest -q tests
+python -m ruff check tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
+python -m ruff check --select D tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
 ```
 
-**Expected:** empty `git status --porcelain`; roughly **158 passed, 1 skipped**;
-the skip is the local R4 asset set. The count is legitimately lower than the
-working tree's 172 because untracked test files stay untracked — that is not a
-regression. Report the actual numbers.
+Then a genuine clone, as in Turn 6:
 
-If anything fails, do not weaken or skip a core test to make it pass. Report it
-and propose a fix.
+```bash
+rm -rf /tmp/bsm3-m14-verify
+git clone --no-hardlinks --branch production-ready-overhaul \
+  "file:///Users/mariusruh/Documents/Research/nasa_uli/mesh_movement/packages/BSM3" \
+  /tmp/bsm3-m14-verify
+cd /tmp/bsm3-m14-verify
+git status --porcelain          # MUST print nothing
+python -m pip install --no-deps -e .
+python -m pytest -q tests
+```
 
-## Task 3 — record, do not implement
+**Expected:** the suite grows from 158 passed / 1 skipped by the new tests; total
+added runtime `< 30 s`. Report actual numbers, not prose.
 
-- M0.5's acceptance criterion changed: "passes with only tracked files" is
-  dropped. The manifest is a retention candidate list, not a commit set.
-- M1.8 is new: retire the internal E175 pickle branch and the untracked
-  executable `bsm3/core/projections/refitted_fun_set.pkl`; convert
-  `wall_surface.pkl` to `.npz`.
-- After this turn, M0 is complete and M1 opens with **M1.4 first**.
+## Two known risks — report, do not paper over
+
+1. If `run_graph_load_steps` rejects a bare hexagon ring for want of
+   projection/intersection metadata, **enlarge to a small honeycomb** rather
+   than weaken Test C's assertions. Say what you changed.
+2. The `0.04·δ` threshold comes from a uniform-weight 6-cycle; the production
+   solver applies area/stiffening weights, so the measured value may shift. It
+   sits ~14 orders above noise. **If it is missed, that is a finding to report,
+   not a number to lower.**
 
 ---
 
-**Definition of done:** five commits landed by explicit path; each green; the
-genuine-clone procedure run with actual numbers recorded in Turn 6; nothing
-outside the allowlist staged; every excluded dirty file still dirty.
+**Definition of done:** A, B, C, the mixed-polygon case, and the asset check all
+pass; the full suite is green from a genuine clone; nothing outside the allowlist
+staged; every excluded dirty file still dirty; actual numbers in Turn 8.

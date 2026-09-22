@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from bsm3.core.boundary_surface_movement import NgonAffineAssembler
 from bsm3.preprocessing import import_mesh, import_trusted_polygon_pickle
 
 
@@ -76,3 +77,23 @@ def test_curated_r1_wall_map_matches_the_triangle_wall():
     assert wall_to_volume.shape == (wall.vertices.shape[0],)
     np.testing.assert_allclose(baseline_wall, wall.vertices, atol=0.0)
     np.testing.assert_array_equal(triangles, wall.cell_blocks["triangle"])
+
+
+@pytest.mark.integration
+@requires_curated_assets
+def test_curated_mixed_surface_has_the_expected_hourglass_mode_count():
+    """Assemble, but do not solve, every trusted wall-surface N-gon mode."""
+    mixed_ngon = import_trusted_polygon_pickle(MIXED_NGON_FILE)
+    expected_modes = sum(
+        (block.shape[1] - 3) * block.shape[0]
+        for block in mixed_ngon.cell_blocks.values()
+        if block.shape[1] >= 4
+    )
+    assert expected_modes == 117267
+
+    system = NgonAffineAssembler().assemble(
+        mixed_ngon,
+        free_ids=np.arange(mixed_ngon.vertices.shape[0], dtype=np.int64),
+        prescribed_ids=np.empty(0, dtype=np.int64),
+    )
+    assert system.num_hourglass_modes == expected_modes

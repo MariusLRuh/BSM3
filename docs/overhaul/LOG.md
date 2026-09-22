@@ -412,3 +412,106 @@ Validation:
   (8.29 s wall clock).
 
 Status:    closed
+
+---
+
+## Turn 7 — Claude, planner/reviewer, 2026-09-22
+Scope:     M0 commit-series review and closure; M1.4 operator-level design
+
+M0 review — **ruling: M0 is COMPLETE**:
+- All five commits match their allowlists exactly. `0a657a7..51e0ea0` contains
+  none of the twelve forbidden paths; the only binaries are the three curated
+  assets from `6ef0703`. All eight excluded dirty files are still dirty; the
+  three deferred production files are still untracked. Dirty count moved 24 M ->
+  9 M, which reconciles exactly (16 committed, plus this turn's `LOG.md`).
+- Scope of C2 confirmed at the predicted 12 files / +1415/-196.
+- **Bisectability was re-measured properly.** Codex validated each commit inside
+  the dirty working tree, which cannot establish it. Turn 7 ran each commit from
+  `git archive` in isolation: `0a657a7` 1F/141P, `6ef0703` 1F/141P, C1 1F/141P,
+  C2 154P/1S, C3 154P/1S, C4 158P/1S.
+- **C1 is red standalone, and Claude's Turn-5 prediction that it would be green
+  was wrong.** But the failure is inherited, not introduced:
+  `test_public_e175_drivers_do_not_use_cli_or_environment_configuration` asserts
+  `'os.environ' not in source` against the `DAFOAM_CASE_DIRECTORY` lookup added
+  by `0a657a7`, which is red *before* the series starts. C2 repairs it. The
+  series is monotonically non-worsening, so this is a documented caveat
+  (bisect from `76f24ce` forward), not a defect.
+- Trusted-pickle boundary verified: `.pkl`/`.pickle` no longer reach generic
+  `import_mesh`; the explicit API is the only route.
+- Remote GitHub Actions unrun. Treated as an external verification item per the
+  user's instruction, not grounds to reopen M0.
+
+Review of the flagged C2 baseline commit:
+- It does what it was authorized to do and nothing more: exactly the twelve
+  allowlisted paths, no forbidden file, no binary. It is a single revertible
+  commit, which was the entire point of isolating it.
+- It is also the commit that *repairs* the inherited red baseline, so the
+  project's first green commit is C2. Worth knowing before any future bisect.
+- The risk remains what Turn 5 stated: 1,415 added lines of the user's
+  in-progress work are now the project baseline, adopted without line-by-line
+  review because the N-gon wiring and surrounding work are entangled. Nothing in
+  Turn 7 changes that; it is recorded, reviewable, and revertible.
+
+M1.4 design — derived from the operator, verified numerically this turn:
+- `P_e = I - Q_e Q_e^T` acts on the **n-vector of nodal values per spatial
+  component**, built from the *baseline* polygon's own in-plane chart. Hence
+  `null(P_e) = span{1, u, v}` and `rank(P_e) = n - 3`, matching
+  `num_hourglass_modes += cell.size - 3`. Triangles are correctly skipped.
+- **Selected construction: a regular planar hexagon and its alternating ring
+  mode** `p = (+1,-1,+1,-1,+1,-1)`. Measured: `P` symmetric, idempotent,
+  rank exactly 3; `‖P·1‖=6.5e-16`, `‖P·u‖=3.8e-16`, `‖P·v‖=2.0e-16`,
+  `‖P·(2+3u-5v)‖=2.7e-15`; **retained fraction exactly 1.000000**. The mode is
+  maximally non-affine, not marginally — `h = P p = p`, `‖h‖ = √6`.
+- **Both primal limits are analytic.** Prescribe `{0,2,4}` to `(+δ,-δ,+δ)`,
+  free `{1,3,5}`. `λ=0` gives harmonic `δ·(0,0,1)`; `λ→∞` gives the affine
+  completion `δ·(-1/3,-1/3,+5/3)` with `f = δ(1/3 + (2/3)u - 1.1547v)`. Both
+  derived independently and confirmed against a direct solve. Observability at
+  `λ=0.3`: **‖Δ‖∞ = 0.0465·δ**, against the Turn-3 quad gate's 3.3e-16.
+- **Three tests, not one.** The decisive argument for splitting is that `P_e` is
+  symmetric, so an operator-level test is structurally blind to a transpose
+  error in the free/prescribed coupling block — only the FD test can see it.
+  A: projector algebra. B: primal observability and both analytic limits.
+  C: load-step VJP vs centered FD, with a guard that the derivative at `λ>0`
+  differs from `λ=0` so a dropped N-gon adjoint term cannot pass.
+- The existing derivative gate is **reclassified as the affine-nullspace
+  control**: its 3.3e-16 is the mathematically correct answer for an affine
+  ramp, not a failure, and its docstring should say so.
+- Coverage, thresholds, and budgets are in `PLAN.md` section 5. No DAFoam, no
+  new binary assets, and `wall_surface.pkl` stays integration-marked and out of
+  the fast gate.
+
+Risks and open questions:
+- Test C must drive the hourglass through `run_graph_load_steps` on a synthetic
+  polygon6 mesh. If the existing solver path rejects a bare hexagon ring for
+  want of projection/intersection metadata, Codex should enlarge to a small
+  honeycomb rather than weaken the assertion, and report the change.
+- The `λ=0.3` threshold of `0.04·δ` is set from a uniform-weight 6-cycle. The
+  production solver applies area/stiffening weights, so the measured value may
+  shift. The threshold is deliberately ~14 orders above noise; if it is missed,
+  that is a finding to report, not a number to lower.
+- Remote CI remains unverified.
+
+Validation this turn:
+- Per-commit isolation runs as tabulated above (6 archives, 6 suites).
+- Projector algebra and both primal limits verified numerically against
+  independently derived closed forms.
+- Working tree preserved: nothing staged, committed, deleted, or rewritten.
+
+Status:    closed
+
+---
+
+## Turn 8 — Codex, implementer/reviewer, 2026-09-22
+Scope:     M1.4 observable polygon6 regularization and VJP regression
+
+Did:
+- Claimed the turn after reading the finalized M1.4 design and allowlist.
+
+Decided:
+- `ngon_affine.py` remains unchanged unless a new test demonstrates a genuine
+  operator defect.
+
+Open:
+- none
+
+Status:    open

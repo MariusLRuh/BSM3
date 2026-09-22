@@ -97,9 +97,46 @@ later change is verifiable.
 | M0.2 | **Superseded by the Turn-3 ruling.** Now: build a *retained-file manifest* from multiple explicit roots. Non-destructive: produces a list, deletes nothing. | Codex | **complete**; reviewed Turn 5; commits in C5 | `MANIFEST.md` delivered. Turn-5 spot-check confirmed the root-M attribution of `smooth_existing_tip_cap.py` is correct — `gmsh_occ_oml_surface_mesh.py` imports it at lines 384/407/431/444 as deferred in-function imports that break a cycle, and the trace correctly follows nested imports. |
 | M0.3 | **Derivative gate.** Fast FD-vs-VJP harness on a tiny mesh, under 60 s. | Codex | **complete**, with one reviewer fix and one follow-up | Passes in ~8 s. Analytical expectation + FD cross-check. Follow-up: N-gon observability, see M1.4. |
 | M0.4 | CI: staged ruff + pytest + derivative gate on push. | Codex | **complete locally**; remote GitHub run pending | Staged Ruff, pytest, and the derivative gate pass from a genuine clone of the M0 commits. |
-| M0.5 | **Restated by the Turn-5 ruling.** Land a coherent M0 commit series so that a *genuine clone* of the resulting commits passes. The Turn-3 asset causes are fixed. The residual blocker was never "4 untracked files": Turn-5 preflight against clean HEAD content proved the M0 gate additionally requires 12 modified tracked files carrying pre-M0 user work. | Codex | **complete** | Genuine clone is clean, excludes the R4 volume mesh, and passes with 158 tests and one expected R4 skip; derivative gate passes separately. |
+| M0.5 | **Restated by the Turn-5 ruling.** Land a coherent M0 commit series so that a *genuine clone* of the resulting commits passes. The Turn-3 asset causes are fixed. The residual blocker was never "4 untracked files": Turn-5 preflight against clean HEAD content proved the M0 gate additionally requires 12 modified tracked files carrying pre-M0 user work. | Codex | **complete** — C1-C5 landed; genuine clone verified Turn 6; audited Turn 7 | Genuine clone is clean, excludes the R4 volume mesh, and passes with 158 tests and one expected R4 skip; derivative gate passes separately. |
 
 **M0.3 is the gate for everything after it.** Do not start M1 until it passes.
+
+### Turn-7 ruling: **M0 is COMPLETE**
+
+All five commits were audited against their allowlists and match exactly. No
+forbidden path appears anywhere in `0a657a7..51e0ea0`; the only binaries are the
+three curated assets from `6ef0703`. All eight excluded dirty files remain dirty
+and the three deferred production files remain untracked. The genuine clone on
+`production-ready-overhaul` reports empty `git status --porcelain`, 115 MB, no
+R4 volume mesh, 158 passed / 1 expected skip, gate 7.58 s.
+
+**Bisectability — measured per commit from `git archive`, not from the working
+tree.** Codex validated each commit inside the dirty working tree, which cannot
+establish bisectability. Turn 7 re-ran each commit in isolation:
+
+| Commit | | Result |
+|---|---|---|
+| `0a657a7` | pre-M0 baseline | 1 failed, 141 passed |
+| `6ef0703` | curated assets | 1 failed, 141 passed |
+| `16bd2ef` | C1 N-gon substrate | 1 failed, 141 passed |
+| `76f24ce` | C2 adopted baseline | 154 passed, 1 skipped |
+| `a88a04a` | C3 trusted reader | 154 passed, 1 skipped |
+| `4160779` | C4 gate + CI | 158 passed, 1 skipped |
+
+**Documented caveat, not a defect.** C1 is red in isolation, but the failing test
+is `test_public_e175_drivers_do_not_use_cli_or_environment_configuration`
+asserting `'os.environ' not in source` against the `DAFOAM_CASE_DIRECTORY` lookup
+introduced by `0a657a7` — **it is red before the M0 series begins**, and C2
+repairs it. The series is monotonically non-worsening. Claude's Turn-5 prediction
+that C1 would be green standalone was wrong: it did not account for the inherited
+red baseline. A future `git bisect` crossing C1 will report "bad" for a
+pre-existing reason, so bisect from `76f24ce` forward.
+
+Remote GitHub Actions has not run because nothing was pushed. Per the user's
+instruction this is an **external verification item**, not grounds to reopen
+locally satisfied M0 work. M0 is closed.
+
+---
 
 ### Turn-5 binding ruling on the M0.5 commit set
 
@@ -224,7 +261,7 @@ nothing in the end state and removes the risk of silently dropping live code.
 | M1.1 | Generalize config. `E175ModelFiles` -> `ModelFiles`; component/intersection specs become `list[ComponentSpec]` / `list[IntersectionSpec]`; geometry parameterization becomes a user-supplied protocol rather than the frozen `E175GeometryVariables`. | Codex | not started | E175 driver runs through the generic API with no `E175`-named type in the call path. |
 | M1.2 | Decompose `build_e175_mesh_motion_model` into stage functions matching the 5-step pipeline. Delete the ~50-line `LOCAL_ALIAS = config.field` block at lines 456-515. | Codex | not started | No function over 300 LOC in the pipeline module; derivative gate still passes. |
 | M1.3 | Delete `membrane` mode: 7 `membrane_*` fields, 6 `mode != "graph"` validation rules in `SurfaceMotionConfig.__post_init__`, and the branches at pipeline lines 1069 and 1521. Re-check `inversion_barrier.py` reachability afterward. **Turn-3 note:** Turn 2 added two tests that construct `SurfaceMotionConfig(mode="membrane", ...)` to assert graph-only validation — `test_quad_diagonal_weight_is_validated_as_graph_only` and `test_ngon_affine_weight_is_validated_as_graph_only`. These must be rewritten, not deleted: keep the `quad_bracing_mode` and negative-weight assertions, drop the membrane arm. | Codex | not started | `grep -ri membrane bsm3/` returns nothing in the live core; tests pass; the two validation tests survive in membrane-free form. |
-| M1.4 | **N-gon, mandatory (decision 6).** Requires a *true six-gon load-step/VJP regression*, not merely loading the mixed-N-gon asset. Turn-3 measurement: in the M0.3 gate, changing `lambda_ngon` from 0.0 to 0.3 moves the solution by 3.3e-16 and the derivative by 1.8e-15 — the deformation is a pure affine ramp on a uniform quad grid, which lies in the **nullspace** of the affine penalty. Formally, `range(A_e) = range(Q_e) = 𝒜_e`, and the residual projector `(I - Q_e Q_e^T)` annihilates any correction in that affine subspace. The N-gon path is *executed* (graph grows 2666 -> 3080 nodes) but its contribution is unobservable, so a sign, scale, or transpose error in its VJP would pass today. M1.4 must construct a polygon6 correction with a provably nonzero component in the orthogonal complement of `range(Q_e)`, giving a genuine hourglass mode whose primal response changes with `lambda_ngon` by construction. | Codex | not started | A test on polygon6 cells where the projected non-affine residual is explicitly nonzero and `lambda_ngon` measurably changes the primal solution, with FD-verified derivatives through load stepping; plus quad and mixed-N-gon examples deforming with zero inversions. |
+| M1.4 | **N-gon, mandatory (decision 6).** Requires a *true six-gon load-step/VJP regression*, not merely loading the mixed-N-gon asset. Turn-3 measurement: in the M0.3 gate, changing `lambda_ngon` from 0.0 to 0.3 moves the solution by 3.3e-16 and the derivative by 1.8e-15 — the deformation is a pure affine ramp on a uniform quad grid, which lies in the **nullspace** of the affine penalty. Formally, `range(A_e) = range(Q_e) = 𝒜_e`, and the residual projector `(I - Q_e Q_e^T)` annihilates any correction in that affine subspace. The N-gon path is *executed* (graph grows 2666 -> 3080 nodes) but its contribution is unobservable, so a sign, scale, or transpose error in its VJP would pass today. M1.4 must construct a polygon6 correction with a provably nonzero component in the orthogonal complement of `range(Q_e)`, giving a genuine hourglass mode whose primal response changes with `lambda_ngon` by construction. | Codex | **complete Turn 8** | Polygon6 projector, analytic primal limits, observable load-step VJP/centered-FD, mixed-polygon quality, and trusted wall-asset assembly all pass. `ngon_affine.py` required no change. |
 | M1.5 | Carve `bsm3.meshgen` out of the ~40k LOC of gmsh/OCC scripting. Keep one rudimentary path per the high-level plan; delete the rest. | Codex | not started | Core imports nothing from `meshgen`; one example regenerates a surface mesh from STEP. |
 | M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | not started | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
 | M1.8 | **New (Turn 5).** Retire the internal legacy polygon-pickle branch in the E175 pipeline. Turn 4 made the *public* importer safe by removing `.pkl` from suffix dispatch, but the pipeline retains an internal trusted-pickle path, and `bsm3/core/projections/refitted_fun_set.pkl` is an untracked executable pickle used as a warm-start default. Convert `wall_surface.pkl` to `.npz` per `ASSETS.md` and delete the branch. | Codex | not started | No pickle load remains reachable from any retained root except through an explicitly named trusted API; `wall_surface.pkl` replaced by a non-executable container with identical coordinates and connectivity. |
@@ -238,6 +275,80 @@ every test we have, so it is both the one mandatory capability (decision 6) and
 the one with no working regression. Proving it before the refactor means the
 refactor has a gate; proving it after means the refactor is unguarded on
 exactly the code path the user made mandatory.
+
+---
+
+### M1.4 finalized design (Turn 7) — derived from the operator, not from trial
+
+**The operator.** `_affine_residual_projector` builds, per element, from the
+*baseline* polygon: centre, SVD to the best-fit plane, in-plane chart `(u, v)`,
+design matrix `[1, u, v]`, reduced QR giving `Q_e`, and
+`P_e = I - Q_e Q_e^T`, symmetrized and thresholded. `P_e` acts on the
+**n-vector of nodal values per spatial component**, not on 3-vectors. Therefore:
+
+> `null(P_e) = span{1, u, v}` — every nodal field that is an affine function of
+> the element's own baseline in-plane coordinates. `rank(P_e) = n - 3`, matching
+> `num_hourglass_modes += cell.size - 3`. Triangles are skipped
+> (`block.shape[1] < 4`), which is correct: a triangle has no hourglass mode.
+
+This is exactly `range(A_e) = range(Q_e) = 𝒜_e`, and it is why the Turn-3 quad
+gate measured 3.3e-16: a pure z-ramp is affine in `(u, v)`, so `r_e = 0`.
+
+**The construction: a regular planar hexagon and its alternating ring mode.**
+Vertices at angles `kπ/3`, `k = 0..5`, in the `z = 0` plane. The alternating
+nodal field `p = (+1, -1, +1, -1, +1, -1)` is **exactly** orthogonal to
+`span{1, u, v}` on a regular hexagon — verified in Turn 7:
+
+| Quantity | Measured |
+|---|---|
+| `P` symmetric / idempotent / rank | yes / yes / **3** (= n-3) |
+| `‖P·1‖`, `‖P·u‖`, `‖P·v‖`, `‖P·(2+3u-5v)‖` | 6.5e-16, 3.8e-16, 2.0e-16, 2.7e-15 |
+| `‖P·p‖ / ‖p‖` (retained fraction) | **1.000000** — fully non-affine |
+| Quad control: rank, retained fraction | 1, 1.000000 |
+
+The mode is *maximally* observable, not marginally: `h = P p = p`, `‖h‖ = √6`.
+
+**Both primal limits are analytic.** Single hexagon, prescribe nodes `{0, 2, 4}`
+to `(+δ, -δ, +δ)`, leave `{1, 3, 5}` free. Three prescribed values determine a
+unique affine `f(u,v) = a + bu + cv`, so:
+
+| λ | Free-node `z` | Character |
+|---|---|---|
+| `0` | `δ·(0, 0, 1)` | pure graph/harmonic on the 6-cycle |
+| `0.3` | `δ·(-0.0081·…)` shifted | **‖Δ‖∞ = 0.0465·δ** vs the quad gate's 3.3e-16 |
+| `→ ∞` | `δ·(-1/3, -1/3, +5/3)` | affine completion, `f = δ(1/3 + (2/3)u - 1.1547v)` |
+
+Neither endpoint is a golden number copied from the implementation; both are
+derived independently and must be asserted as such.
+
+**Three tests, separated for failure localization** (the user's stated
+preference, and justified here: `P_e` is symmetric, so an operator-level test
+*cannot* see a transpose error in the free/prescribed coupling block — only the
+FD test can):
+
+| Test | File | Budget | What only it can catch |
+|---|---|---|---|
+| **A — operator** | `tests/test_ngon_affine_operator.py` | < 1 s | Projector algebra: symmetry, idempotence, `rank = n-3`, nullspace `= {1,u,v}`, retained fraction `= 1`, hourglass-mode counts (3 for hexagon, 1 for quad, 0 for triangle) |
+| **B — primal observability** | `tests/test_ngon_affine_operator.py` | < 5 s | That λ *changes the answer*, and that both analytic limits are hit. Catches sign (λ→∞ would diverge from affine) and scale (thresholds pin it) |
+| **C — load-step VJP/FD** | `tests/test_ngon_affine_load_step.py` | < 20 s | Transpose/adjoint errors in the coupling block, and any N-gon term dropped from the VJP |
+
+**Acceptance thresholds** (binding):
+- A: nullspace residuals `< 1e-12`; `|retained_fraction - 1| < 1e-12`; `rank == n-3` exactly.
+- B: `λ=0` matches harmonic to `1e-12`; `λ=1e6` matches the affine completion to `1e-5`; `‖z(0.3) - z(0)‖∞ ≥ 0.04·δ`.
+- C: centered FD at `(1e-4, 1e-5, 1e-6)`, per-pair best-step then **worst-pair** aggregation (the Turn-3 convention), `< 1e-5`. Plus a guard that `d(objective)/dδ` at `λ>0` differs from `λ=0` by `≥ 1e-6`, so a VJP that silently drops the N-gon term cannot pass.
+- Total added runtime `< 30 s`, keeping the fast gate inside its budget.
+
+**Minimum M1.4 coverage:**
+
+| Case | Where | Note |
+|---|---|---|
+| Quad | Test A control + the existing derivative gate | The existing gate is hereby **reclassified as the affine-nullspace control**: its 3.3e-16 is the correct, expected answer, not a failure. Document that in the gate's docstring. |
+| True `polygon6` | Tests A, B, C | The core of M1.4 |
+| Small mixed-polygon | `tests/test_ngon_affine_load_step.py` | Synthetic quad + pentagon + hexagon; assert `num_hourglass_modes == Σ(n_e - 3)` |
+| Inversion / fold + quality | same mixed example | Zero folds and zero inversions after deformation at `λ > 0` |
+| `wall_surface.pkl` | `tests/test_curated_assets.py`, `@pytest.mark.integration` | Loads via the trusted API and assembles with the expected mode count. **No solve, no derivative** — it must not enter the fast gate. Pickle retirement stays M1.8. |
+
+No DAFoam. No new binary assets — the hexagon constructions are synthetic.
 
 ---
 
