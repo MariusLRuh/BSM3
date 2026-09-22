@@ -260,8 +260,8 @@ nothing in the end state and removes the risk of silently dropping live code.
 |----|------|-------|--------|------------|
 | M1.1 | Generalize config. `E175ModelFiles` -> `ModelFiles`; component/intersection specs become `list[ComponentSpec]` / `list[IntersectionSpec]`; geometry parameterization becomes a user-supplied protocol rather than the frozen `E175GeometryVariables`. | Codex | not started | E175 driver runs through the generic API with no `E175`-named type in the call path. |
 | M1.2 | Decompose `build_e175_mesh_motion_model` into stage functions matching the 5-step pipeline. Delete the ~50-line `LOCAL_ALIAS = config.field` block at lines 456-515. | Codex | not started | No function over 300 LOC in the pipeline module; derivative gate still passes. |
-| M1.3 | Delete `membrane` mode: 7 `membrane_*` fields, 6 `mode != "graph"` validation rules in `SurfaceMotionConfig.__post_init__`, and the branches at pipeline lines 1069 and 1521. Re-check `inversion_barrier.py` reachability afterward. **Turn-3 note:** Turn 2 added two tests that construct `SurfaceMotionConfig(mode="membrane", ...)` to assert graph-only validation — `test_quad_diagonal_weight_is_validated_as_graph_only` and `test_ngon_affine_weight_is_validated_as_graph_only`. These must be rewritten, not deleted: keep the `quad_bracing_mode` and negative-weight assertions, drop the membrane arm. | Codex | not started | `grep -ri membrane bsm3/` returns nothing in the live core; tests pass; the two validation tests survive in membrane-free form. |
-| M1.4 | **N-gon, mandatory (decision 6).** Requires a *true six-gon load-step/VJP regression*, not merely loading the mixed-N-gon asset. Turn-3 measurement: in the M0.3 gate, changing `lambda_ngon` from 0.0 to 0.3 moves the solution by 3.3e-16 and the derivative by 1.8e-15 — the deformation is a pure affine ramp on a uniform quad grid, which lies in the **nullspace** of the affine penalty. Formally, `range(A_e) = range(Q_e) = 𝒜_e`, and the residual projector `(I - Q_e Q_e^T)` annihilates any correction in that affine subspace. The N-gon path is *executed* (graph grows 2666 -> 3080 nodes) but its contribution is unobservable, so a sign, scale, or transpose error in its VJP would pass today. M1.4 must construct a polygon6 correction with a provably nonzero component in the orthogonal complement of `range(Q_e)`, giving a genuine hourglass mode whose primal response changes with `lambda_ngon` by construction. | Codex | **complete Turn 8** | Polygon6 projector, analytic primal limits, observable load-step VJP/centered-FD, mixed-polygon quality, and trusted wall-asset assembly all pass. `ngon_affine.py` required no change. |
+| M1.3 | Delete the configured `membrane` surface-motion mode: 7 `membrane_*` fields, 6 `mode != "graph"` validation rules in `SurfaceMotionConfig.__post_init__`, and the branches at pipeline lines 1069 and 1521. Re-check `inversion_barrier.py` reachability afterward. **Turn-3 note:** Turn 2 added two tests that construct the removed mode to assert graph-only validation; these must be rewritten, not deleted: keep the `quad_bracing_mode` and negative-weight assertions. **Turn-9 addition:** commit C2 brought in two standalone coupled-assembler tests that Turn 3 could not have seen. Judge them against surviving graph coverage rather than mechanically porting them. | Codex | **complete Turn 10** | No membrane setting or branch remains in the E175 config/pipeline, and tests contain no membrane reference. The one-valued `mode="graph"` field remains for tracked-call-site compatibility pending M1.1. The separately exported lower-level assembler/solver and its independently used inversion barrier remain outside this configured-mode removal. |
+| M1.4 | **N-gon, mandatory (decision 6).** Requires a *true six-gon load-step/VJP regression*, not merely loading the mixed-N-gon asset. Turn-3 measurement: in the M0.3 gate, changing `lambda_ngon` from 0.0 to 0.3 moves the solution by 3.3e-16 and the derivative by 1.8e-15 — the deformation is a pure affine ramp on a uniform quad grid, which lies in the **nullspace** of the affine penalty. Formally, `range(A_e) = range(Q_e) = 𝒜_e`, and the residual projector `(I - Q_e Q_e^T)` annihilates any correction in that affine subspace. The N-gon path is *executed* (graph grows 2666 -> 3080 nodes) but its contribution is unobservable, so a sign, scale, or transpose error in its VJP would pass today. M1.4 must construct a polygon6 correction with a provably nonzero component in the orthogonal complement of `range(Q_e)`, giving a genuine hourglass mode whose primal response changes with `lambda_ngon` by construction. | Codex | **COMPLETE** — implemented Turn 8, independently audited and accepted Turn 9 | Polygon6 projector, analytic primal limits, observable load-step VJP/centered-FD, mixed-polygon quality, and trusted wall-asset assembly all pass. `ngon_affine.py` required no change. |
 | M1.5 | Carve `bsm3.meshgen` out of the ~40k LOC of gmsh/OCC scripting. Keep one rudimentary path per the high-level plan; delete the rest. | Codex | not started | Core imports nothing from `meshgen`; one example regenerates a surface mesh from STEP. |
 | M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | not started | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
 | M1.8 | **New (Turn 5).** Retire the internal legacy polygon-pickle branch in the E175 pipeline. Turn 4 made the *public* importer safe by removing `.pkl` from suffix dispatch, but the pipeline retains an internal trusted-pickle path, and `bsm3/core/projections/refitted_fun_set.pkl` is an untracked executable pickle used as a warm-start default. Convert `wall_surface.pkl` to `.npz` per `ASSETS.md` and delete the branch. | Codex | not started | No pickle load remains reachable from any retained root except through an explicitly named trusted API; `wall_surface.pkl` replaced by a non-executable container with identical coordinates and connectivity. |
@@ -275,6 +275,65 @@ every test we have, so it is both the one mandatory capability (decision 6) and
 the one with no working regression. Proving it before the refactor means the
 refactor has a gate; proving it after means the refactor is unguarded on
 exactly the code path the user made mandatory.
+
+---
+
+### Turn-9 audit of M1.4 — **ACCEPTED**
+
+Every Turn-8 claim was reproduced independently. Both commits match the Turn-8
+allowlist exactly; `ngon_affine.py` was neither modified nor staged and is still
+byte-identical to the C1 substrate.
+
+| Reported | Independently measured |
+|---|---|
+| unregularized derivative 4.0 | **4.0000000000** — and derivable by hand: free `y = δ(0,0,1)`, weights `(1,2,4)` |
+| regularized derivative 4.3846153846 | **4.3846153846** = `57/13` |
+| observability 0.153846·δ | **0.1538461538** = `2/13`, threshold `0.04·δ` met with **3.85x** margin |
+| 117,267 assembled modes | **117,267** — 28,190 polygon6 + 7,891 polygon5 + 3,927 polygon7 + 126 polygon8 + 2 polygon9 + 565 quad |
+| clone 164 passed, 1 skipped | **164 passed, 1 skipped in 47.52 s**, empty `git status --porcelain`, 115 MB, R4 absent |
+
+**Why 0.1538 and not Turn 7's 0.0465.** Turn 7's estimate used a hand-built
+unit-weight 6-cycle Laplacian. The production `GraphLaplacianAssembler` is
+exactly **0.25x** that (solved for: `α = 0.2500` reproduces `2/13` to 10
+digits), so `λ·P` carries 4x the relative influence. The response moved *up*.
+This is the Turn-7 risk resolving favourably; Codex did not lower the threshold,
+which was the required behaviour.
+
+**Mutation testing of Test C.** Reading the test cannot establish that it would
+catch a broken adjoint, so four faults were injected into `compute_vjp` in a
+scratch tree and discarded:
+
+| Fault | Result |
+|---|---|
+| n-gon adjoint dropped | **FAIL** (caught) |
+| coupling adjoint transposed (`k_fp` for `k_fp.T`) | **FAIL** (caught) |
+| coupling adjoint sign flipped | **FAIL** (caught) |
+| adjoint-only scale x2 | **FAIL** (caught) |
+
+The transpose fault is the one no operator-level test can see, since `P_e` is
+symmetric — the Turn-7 argument for splitting the tests is vindicated. (A fifth
+attempt that scaled `strength` in *both* `solve` and `compute_vjp` passed, but
+that is a consistent `λ=0.6` run, not a fault.)
+
+**Three scope notes — accepted, not defects:**
+1. `solutions=()` makes `_set_exact_seams` a no-op, so prescribed rows are not
+   written into the output mesh. Correct here: the fixture has no intersection
+   seams, the drive still flows through `prescribed_deviations`, and the
+   objective weights only free rows. Verified: free rows move, prescribed do not.
+2. Test C's reprojection is **DV-inert**. The target is the static `z=0` plane
+   and the objective weights `y`; measured `z ≡ 0` for all rows, so reprojection
+   provably cannot change the objective. It runs as a production path but is not
+   under test. The affine-nullspace control gate covers DV-dependent
+   reprojection, because its projection surface translates with the design
+   variable. Division of labour, not a hole — but M1.7 should assert
+   reprojection sensitivity explicitly.
+3. Test C hardcodes `pair = (objective, amplitude)` rather than discovering
+   pairs from the simulator. Correct for one pair; it will not auto-extend.
+   `_SyntheticHexagonMotion` also overrides `__init__` without calling `super()`,
+   so the subclassing is cosmetic and M1.1/M1.2 could invalidate it silently.
+
+**Runtime:** 42.92 s before M1.4 -> 47.52 s after. **+6 tests, +4.60 s**,
+against a 30 s budget.
 
 ---
 

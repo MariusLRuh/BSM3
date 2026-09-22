@@ -1,173 +1,141 @@
-# Next implementation prompt for Codex — Turn 8 (M1.4)
+# Next implementation prompt for Codex — Turn 10 (M1.3)
 
 Paste into a Codex session at the repository root.
 
 ---
 
-Read `docs/overhaul/PLAN.md` (the Turn-7 M0 closure and the finalized M1.4
-design in section 5), then `docs/overhaul/LOG.md` (Turn 7 is closed).
+Read `docs/overhaul/PLAN.md` (the Turn-9 M1.4 audit in section 5, and the M1.3
+row), then `docs/overhaul/LOG.md` (Turn 9 is closed).
 
-**M0 is closed.** Your C1-C5 series was audited: exact allowlist match, no
-forbidden paths, excluded files preserved, trusted-pickle boundary correct.
-One caveat recorded — C1 is red standalone because it inherits a failure that
-predates the series at `0a657a7`; C2 repairs it, so the first green commit is
-C2 and future bisects should start from `76f24ce`. Claude's Turn-5 prediction
-that C1 would be green was wrong and is on record.
+**M1.4 is ACCEPTED.** Every number you reported was reproduced independently:
+`4.0000000000`, `4.3846153846 = 57/13`, `2/13` observability, 117,267 modes,
+164 passed / 1 skipped in a genuine clone. `ngon_affine.py` is byte-identical to
+the C1 substrate. Test C was mutation-tested — dropped, transposed, sign-flipped
+and scale-error adjoints **all fail it**, so it does what it claims.
 
-**This turn is M1.4 only.** Do not touch M1.1-M1.3 or M1.5-M1.8. Specifically:
-no config generalization, no pipeline decomposition, no membrane deletion, no
-meshgen carve-out, no docstring sweep, no pickle retirement.
+Two things worth carrying forward: the Turn-7 threshold discrepancy is explained
+(the production Laplacian is exactly `0.25x` a unit-weight 6-cycle, so `λP` has
+4x the relative influence and the response rose to `2/13`) — you were right not
+to lower the threshold. And Test C's reprojection is DV-inert; that is recorded
+as an M1.7 item, not a defect.
 
-Claim `## Turn 8` in `LOG.md` before editing. Close it when done.
+**This turn is M1.3 only** — delete the `membrane` surface-motion mode. Do not
+touch M1.1, M1.2, M1.5, M1.6, M1.7 or M1.8. Specifically: no config
+generalization or renaming, no pipeline decomposition, no `LOCAL_ALIAS` block
+removal beyond the membrane entries, no meshgen carve-out, no docstring sweep,
+no pickle retirement.
 
-**Prohibited:** history rewrite, deletion, `git add -A` or any broad staging,
-staging any path outside the allowlist below, new binary assets, DAFoam
-dependence, and putting the large `wall_surface.pkl` into the fast gate.
+Claim `## Turn 10` in `LOG.md` before editing. Close it when done.
 
----
-
-## The mathematics you are testing
-
-`_affine_residual_projector` builds, per element, from the **baseline** polygon:
-centre, SVD to the best-fit plane, in-plane chart `(u, v)`, design matrix
-`[1, u, v]`, reduced QR giving `Q_e`, then `P_e = I - Q_e Q_e^T`.
-
-`P_e` acts on the **n-vector of nodal values per spatial component**. So
-`null(P_e) = span{1, u, v}` — any nodal field affine in the element's own
-baseline in-plane coordinates — and `rank(P_e) = n - 3`.
-
-That is `range(A_e) = range(Q_e) = 𝒜_e`, and it is why the existing gate
-measured 3.3e-16: a z-ramp is affine in `(u, v)`, so `r_e = 0`. That gate is
-**correct**; reclassify it, do not "fix" it.
-
-## Task 1 — `tests/test_ngon_affine_operator.py` (new)
-
-### Test A — projector algebra (< 1 s, pure numpy)
-
-Regular planar hexagon, vertices at `kπ/3`, `k = 0..5`, in `z = 0`.
-Claude measured these in Turn 7; assert them:
-
-- `P` symmetric; `P @ P ≈ P`; `np.linalg.matrix_rank(P, tol=1e-10) == 3`
-- `‖P·1‖`, `‖P·u‖`, `‖P·v‖`, `‖P·(2+3u-5v)‖` all `< 1e-12`
-  (measured 6.5e-16, 3.8e-16, 2.0e-16, 2.7e-15)
-- alternating ring mode `p = (+1,-1,+1,-1,+1,-1)`:
-  `abs(‖P·p‖/‖p‖ - 1.0) < 1e-12` (measured exactly 1.000000)
-- quad control: `rank == 1`, retained fraction `1.0`
-- via `NgonAffineAssembler`: `num_hourglass_modes == 3` for the hexagon,
-  `== 1` for a quad, `== 0` for a triangle-only mesh
-
-### Test B — primal observability (< 5 s)
-
-Single regular hexagon. Prescribe `{0, 2, 4}` to `(+δ, -δ, +δ)`; free
-`{1, 3, 5}`. Both limits are analytic — **derive them in the test, do not paste
-values produced by the implementation**:
-
-- `λ = 0` → harmonic on the 6-cycle → `δ·(0, 0, 1)`, match to `1e-12`
-- `λ = 1e6` → affine completion → `δ·(-1/3, -1/3, +5/3)`, match to `1e-5`
-  (solve `[1,u,v]` through the three prescribed nodes for `f = a + bu + cv`;
-  Claude gets `f = δ(1/3 + (2/3)u - 1.1547v)`)
-- `λ = 0.3` → `‖z(0.3) - z(0)‖∞ ≥ 0.04·δ` (measured 0.0465·δ)
-
-## Task 2 — `tests/test_ngon_affine_load_step.py` (new)
-
-### Test C — load-step VJP vs finite differences (< 20 s)
-
-Drive the hourglass amplitude `δ` as a CSDL design variable through
-`run_graph_load_steps` on a synthetic polygon6 mesh with `lambda_ngon > 0`.
-Scalar objective on the final deformed/reprojected coordinates.
-
-- centered FD at `(1e-4, 1e-5, 1e-6)`
-- **per-pair best-step, then worst-pair** aggregation — the convention from the
-  existing gate. Do not minimise across pairs.
-- tolerance `< 1e-5`
-- **Guard, required:** assert `d(objective)/dδ` at `λ > 0` differs from the same
-  derivative at `λ = 0` by `≥ 1e-6`. Without this, a VJP that silently drops the
-  N-gon adjoint term still passes.
-
-This test is load-bearing in a way A and B are not: `P_e` is symmetric, so no
-operator-level assertion can see a transpose error in the free/prescribed
-coupling block. Only FD can.
-
-### Mixed-polygon case (same file)
-
-Synthetic mesh with quad + pentagon + hexagon cells:
-- `num_hourglass_modes == Σ(n_e - 3)`
-- after deformation at `λ > 0`: **zero folds and zero inversions**, plus the
-  quality assertions already available in `bsm3.core.boundary_surface_movement.quality`
-
-## Task 3 — `tests/test_curated_assets.py` (modify)
-
-Add one `@pytest.mark.integration` test: `wall_surface.pkl` loads via
-`import_trusted_polygon_pickle` and assembles with the expected hourglass-mode
-count. **No solve, no derivative.** It must not enter the fast gate.
-
-## Task 4 — `tests/test_derivative_gate.py` (modify, docstring only)
-
-Reclassify it as the affine-nullspace control. State in the docstring that its
-N-gon term is *expected* to be unobservable because the deformation is affine in
-the element chart, and point to the polygon6 tests for the observable case.
-No behavioural change.
+**Prohibited:** history rewrite, file deletion other than the membrane code
+paths named below, `git add -A` or any broad staging, staging any path outside
+the allowlist, and touching the eight excluded dirty files or the three deferred
+untracked production files.
 
 ---
+
+## Scope, with current line numbers
+
+**`bsm3/core/boundary_surface_movement/e175_mesh_motion_config.py`**
+- Seven fields, lines 159-165: `membrane_poisson_ratio`,
+  `membrane_area_stiffening`, `membrane_normal_stabilization`,
+  `membrane_barrier`, `membrane_barrier_activation`,
+  `membrane_barrier_target`, `membrane_barrier_maximum_iterations`.
+- `__post_init__` lines 168-169: the `mode not in ("graph", "membrane")` guard.
+- The six `mode != "graph"` validation rules that become vacuous once `graph` is
+  the only mode. Line 199's error message mentions "membrane-like distortion
+  regularization" — reword, since the distortion/affine mutual-exclusion rule
+  itself must survive.
+- **Decide and state in the log:** does `mode` survive as a one-valued field, or
+  is it removed? `VolumeMotionConfig` keeps `mode="elasticity"|"off"`, so an
+  asymmetry is defensible either way. Removing it is cleaner; keeping it is
+  friendlier to M1.1. Either is acceptable — record the reasoning.
+
+**`bsm3/core/boundary_surface_movement/e175_mesh_motion_pipeline.py`**
+- Alias lines 494-500 (`POISSON_RATIO`, `MEMBRANE_*`).
+- Branch at line 1069 and its body.
+- Diagnostics branch at lines 1521-1526.
+
+**Tests — four, not two.** Turn 3 named only the first pair; commit C2 brought
+in the second pair, which Turn 9 found:
+- `tests/test_e175_driver_configuration.py` lines 150, 163:
+  `test_quad_diagonal_weight_is_validated_as_graph_only` and
+  `test_ngon_affine_weight_is_validated_as_graph_only`. **Rewrite, do not
+  delete** — keep the `quad_bracing_mode` and negative-weight arms, drop the
+  membrane arm.
+- `tests/test_boundary_surface_movement.py` lines 878 and 908:
+  `test_coupled_membrane_patch_test_and_interleaved_dofs` and
+  `test_coupled_membrane_can_pin_one_symmetry_component`. Judge these on their
+  merits: if they cover coupled-patch or symmetry-pinning behaviour that
+  survives membrane removal, port them to the graph path; if they only exercise
+  membrane, delete them and say so. **State which, and why, in the log.**
+
+**`inversion_barrier.py` — verify, do not assume.** PLAN.md's original M1.3 note
+said to re-check reachability. Turn 9 found it imported by *both*
+`bsm3/core/boundary_surface_movement/__init__.py` line 102 and `motion.py` line
+55, so it very likely survives. Confirm by tracing; do not delete it on the
+strength of the old note.
+
+## Acceptance
+
+- `grep -ri membrane bsm3/` returns nothing in the live core.
+- `grep -rn membrane tests/` returns nothing, or only names you justified.
+- All four tests above are green in their final form.
+- `python -m pytest -q tests` green.
+- The M1.4 tests and the affine-nullspace gate still pass — M1.3 must not
+  disturb them.
 
 ## Literal file allowlist
 
-Stage only these. Anything else is forbidden.
-
 ```
-tests/test_ngon_affine_operator.py
-tests/test_ngon_affine_load_step.py
-tests/test_curated_assets.py
-tests/test_derivative_gate.py
+bsm3/core/boundary_surface_movement/e175_mesh_motion_config.py
+bsm3/core/boundary_surface_movement/e175_mesh_motion_pipeline.py
+tests/test_e175_driver_configuration.py
+tests/test_boundary_surface_movement.py
 docs/overhaul/PLAN.md
 docs/overhaul/LOG.md
 docs/overhaul/CODEX_NEXT.md
 ```
 
-`bsm3/core/boundary_surface_movement/ngon_affine.py` is **conditionally**
-allowed: only if these tests expose a genuine defect in the operator. If you
-touch it, say so prominently in Turn 8 with the failing assertion that justified
-it — a source change here is a finding, not routine.
+`bsm3/core/boundary_surface_movement/motion.py` and `inversion_barrier.py` are
+**conditionally** allowed, only if the membrane removal leaves genuinely dead
+code in them. If you touch either, say so prominently with the evidence — it is
+a finding, not routine.
 
 ## Acceptance commands
 
 ```bash
-python -m pytest -q tests/test_ngon_affine_operator.py
-python -m pytest -q tests/test_ngon_affine_load_step.py
+python -m pytest -q tests/test_e175_driver_configuration.py
+python -m pytest -q tests/test_boundary_surface_movement.py
+python -m pytest -q tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
 python -m pytest -q tests/test_derivative_gate.py
 python -m pytest -q tests
-python -m ruff check tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
-python -m ruff check --select D tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
+python -m ruff check bsm3/core/boundary_surface_movement/e175_mesh_motion_config.py
+grep -ri membrane bsm3/ ; grep -rn membrane tests/
 ```
 
-Then a genuine clone, as in Turn 6:
+## Clean-clone verification
 
 ```bash
-rm -rf /tmp/bsm3-m14-verify
+rm -rf /tmp/bsm3-m13-verify
 git clone --no-hardlinks --branch production-ready-overhaul \
   "file:///Users/mariusruh/Documents/Research/nasa_uli/mesh_movement/packages/BSM3" \
-  /tmp/bsm3-m14-verify
-cd /tmp/bsm3-m14-verify
-git status --porcelain          # MUST print nothing
-python -m pip install --no-deps -e .
-python -m pytest -q tests
+  /tmp/bsm3-m13-verify
+cd /tmp/bsm3-m13-verify
+git status --porcelain            # MUST print nothing
+PYTHONPATH=/tmp/bsm3-m13-verify python -m pytest -q tests
 ```
 
-**Expected:** the suite grows from 158 passed / 1 skipped by the new tests; total
-added runtime `< 30 s`. Report actual numbers, not prose.
+Use `PYTHONPATH`, not `pip install -e .` — an editable install in the clone
+repoints the active environment at it, which you then had to undo in Turn 8.
 
-## Two known risks — report, do not paper over
+**Expected:** 164 passed / 1 skipped, minus however many membrane tests you
+justifiably delete. Report the actual number and name any test you removed.
 
-1. If `run_graph_load_steps` rejects a bare hexagon ring for want of
-   projection/intersection metadata, **enlarge to a small honeycomb** rather
-   than weaken Test C's assertions. Say what you changed.
-2. The `0.04·δ` threshold comes from a uniform-weight 6-cycle; the production
-   solver applies area/stiffening weights, so the measured value may shift. It
-   sits ~14 orders above noise. **If it is missed, that is a finding to report,
-   not a number to lower.**
+## Definition of done
 
----
-
-**Definition of done:** A, B, C, the mixed-polygon case, and the asset check all
-pass; the full suite is green from a genuine clone; nothing outside the allowlist
-staged; every excluded dirty file still dirty; actual numbers in Turn 8.
+Membrane gone from the live core; all four affected tests in a justified final
+state with the reasoning recorded; `mode` decision stated; `inversion_barrier.py`
+reachability verified rather than assumed; full suite green from a genuine
+clone; nothing outside the allowlist staged; every excluded dirty file still
+dirty; actual counts and timings in Turn 10, not prose.

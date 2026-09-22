@@ -156,17 +156,10 @@ class SurfaceMotionConfig:
     wing_free_span_fraction: float = 0.3
     tail_free_span_fraction: float = 0.3
     fuselage_free_x_range: tuple[float, float] = (0.05, 0.97)
-    membrane_poisson_ratio: float = 0.4
-    membrane_area_stiffening: float = 0.0
-    membrane_normal_stabilization: float = 0.02
-    membrane_barrier: bool = True
-    membrane_barrier_activation: float = 0.6
-    membrane_barrier_target: float = 0.3
-    membrane_barrier_maximum_iterations: int = 500
 
     def __post_init__(self):
-        if self.mode not in ("graph", "membrane"):
-            raise ValueError("Surface motion mode must be graph or membrane.")
+        if self.mode != "graph":
+            raise ValueError("Surface motion mode must be graph.")
         if self.load_steps < 1:
             raise ValueError("Surface load_steps must be positive.")
         if (
@@ -185,23 +178,11 @@ class SurfaceMotionConfig:
                 "Surface quad_bracing_mode must be single_diagonal, "
                 "both_diagonals, or virtual_center."
             )
-        if self.mode != "graph" and self.load_steps != 1:
-            raise ValueError("Multiple surface steps require graph motion.")
-        if self.mode != "graph" and self.quad_diagonal_weight != 0.0:
-            raise ValueError("Quad diagonal bracing requires graph motion.")
-        if self.mode != "graph" and self.distortion.weight != 0.0:
-            raise ValueError("Distortion regularization requires graph motion.")
-        if self.mode != "graph" and self.ngon_affine.weight != 0.0:
-            raise ValueError("N-gon affine regularization requires graph motion.")
         if self.distortion.weight > 0.0 and self.ngon_affine.weight > 0.0:
             raise ValueError(
                 "The first-milestone n-gon study does not combine affine and "
-                "membrane-like distortion regularization."
+                "quadratic distortion regularization."
             )
-        if self.mode != "graph" and self.tangential_smoothing.enabled:
-            raise ValueError("Tangential smoothing requires graph motion.")
-        if self.graph_distance_weighting.enabled and self.mode != "graph":
-            raise ValueError("Graph-distance weighting requires graph motion.")
 
 
 @dataclass(frozen=True)

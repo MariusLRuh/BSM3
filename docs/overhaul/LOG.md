@@ -60,8 +60,6 @@ Open:
 
 Status:    closed
 
----
-
 ## Turn 2 — Codex, implementer/reviewer, 2026-09-21
 Scope:     Plan review; Q-A/Q-B/Q-C; safe portions of M0.1/M0.3/M0.4
 
@@ -552,3 +550,149 @@ Validation:
   approved network access succeeded. No dependency or source change was made.
 
 Status:    closed
+
+---
+
+## Turn 9 — Claude, planner/reviewer, 2026-09-22
+Scope:     Independent audit of the Turn-8 M1.4 claim
+
+**RULING: M1.4 is ACCEPTED.** Every reported number was reproduced
+independently; no defect found. Full evidence in `PLAN.md` section 5.
+
+Audit results, by the ten required points:
+
+1. **Allowlist.** `51e0ea0..52afde3` is an exact set-match to the Turn-8
+   allowlist. `0f3e10c` carries the seven permitted paths; `52afde3` is
+   `LOG.md` only. No forbidden path, no binary, no production source.
+2. **Re-ran everything.** Focused operator + load-step: **5 passed in 2.28 s**.
+   Affine-nullspace control gate: **1 passed in 7.26 s**. Genuine
+   `git clone file://` of `52afde3`: empty `git status --porcelain`, 115 MB,
+   R4 volume mesh absent, **164 passed / 1 skipped in 47.52 s**. (Used
+   `PYTHONPATH` rather than `pip install -e .` so the audit could not mutate the
+   working environment — the step Codex had to undo in Turn 8.)
+3. **Derived, not copied.** The operator test solves `[1, u, v] c = z_prescribed`
+   in-test for the affine field and evaluates it at the free nodes, *then*
+   cross-checks against the closed form `δ(-1/3, -1/3, 5/3)`. The harmonic limit
+   `δ(0, 0, 1)` is the closed form I derived by hand in Turn 7. Nullspace and
+   rank assertions match Turn 7's measurements. `δ = 0.7`, so scaling is
+   exercised rather than a unit special case.
+4. **Threshold genuinely met, and the discrepancy is explained.**
+   `‖Δ‖∞ = 0.1538461538 = 2/13`, against `0.04·δ` — a **3.85x** margin.
+   Turn 7's 0.0465 assumed a unit-weight 6-cycle; the production
+   `GraphLaplacianAssembler` is exactly **0.25x** that (`α = 0.2500` reproduces
+   `2/13` to ten digits), so `λP` carries 4x the relative influence and the
+   response moved *up*. This is precisely the Turn-7 risk resolving favourably.
+   **Codex did not lower the threshold**, which was the required behaviour.
+   Independently confirmed: `obj'(λ=0) = 4.0000000000` exactly, and derivable by
+   hand from free `y = δ(0,0,1)` with weights `(1,2,4)`.
+5. **Test C, inspected critically.**
+   - Production paths: `run_graph_load_steps`, `GraphLaplacianAssembler`,
+     `CurrentGraphNgonAffineModel` and its custom operation/VJP, and the real
+     projection call are all production. Only the *boundary-data supply* is
+     synthetic. That is the right shape for a targeted coupling regression.
+   - `solutions=()` makes `_set_exact_seams` a no-op. Acceptable: the fixture has
+     no intersection seams, the drive still flows through
+     `prescribed_deviations`, and the objective weights only free rows. Verified
+     directly — free rows move, prescribed rows stay at baseline.
+   - Objective is on `final_mesh_vertices`, i.e. post-reprojection. But the
+     target is the static `z = 0` plane and the objective weights `y`; measured
+     `z ≡ 0` on every row, so **reprojection provably cannot change the
+     objective**. It executes as a path but is not under test. The control gate
+     covers DV-dependent reprojection because its projection surface translates
+     with the design variable. Recorded as a scope note for M1.7.
+   - FD is genuinely centered at all three steps: `(f(x+h) - f(x-h)) / 2h` at
+     `1e-4, 1e-5, 1e-6`. Reported relative errors 9.22e-13, 8.45e-12, 1.11e-10.
+   - Aggregation is correct: min over step sizes per pair, then max over pairs.
+     It hardcodes the single pair rather than discovering pairs from the
+     simulator, so it is right today but will not auto-extend.
+   - **Mutation-tested rather than argued.** Four faults injected into
+     `compute_vjp` in a scratch tree: adjoint dropped, coupling transposed,
+     coupling sign flipped, adjoint-only scale x2 — **all four FAIL the test**.
+     The transpose fault is the one no operator-level test can see, since `P_e`
+     is symmetric; Turn 7's argument for splitting the tests is vindicated.
+6. **Mixed polygons.** `num_hourglass_modes == Σ(n-3) = 1+2+3 = 6` asserted, and
+   after a `λ = 0.3` deformation the test asserts zero inverted elements, zero
+   inverted corners, zero degenerate elements, positive minimum scaled Jacobian
+   and area ratio, and finite aspect ratio.
+7. **Large pickle stays out.** `@pytest.mark.integration`, assemble-only, no
+   solve, no derivative, no CSDL import. Mode count independently verified at
+   **117,267** = 28,190 polygon6 + 7,891 polygon5 + 3,927 polygon7 + 126
+   polygon8 + 2 polygon9 + 565 quad. Not in the fast gate.
+8. **`test_derivative_gate.py`**: docstring only — a five-line reclassification,
+   zero behavioural change.
+9. **`ngon_affine.py`**: never modified since the C1 substrate commit, clean in
+   the working tree, and byte-identical in the clone. Codex's "no operator
+   defect" claim is confirmed rather than assumed.
+10. **Runtime.** 42.92 s before M1.4 -> 47.52 s after: **+6 tests, +4.60 s**
+    against the 30 s budget.
+
+Findings for later milestones, none blocking:
+- **M1.3 scope is larger than PLAN.md stated.** Commit C2 brought in two further
+  membrane tests Turn 3 could not have seen:
+  `test_coupled_membrane_patch_test_and_interleaved_dofs` and
+  `test_coupled_membrane_can_pin_one_symmetry_component` in
+  `tests/test_boundary_surface_movement.py`. Four tests, not two. `PLAN.md`
+  updated.
+- `inversion_barrier.py` is imported by both `__init__.py` and `motion.py`, so
+  it probably survives membrane removal. M1.3 must verify, not assume.
+- M1.7 should assert reprojection sensitivity explicitly, since neither M1.4
+  test does.
+- Remote GitHub Actions still unrun. External item, unchanged.
+
+Next task selected from the `PLAN.md` dependency order: **M1.3** (delete
+membrane mode), which the sequencing note places before M1.2, with M1.1+M1.2
+coupled as one later turn. Prompt written to `CODEX_NEXT.md`. No milestones
+combined.
+
+Validation this turn: 2 suite runs in scratch trees, 1 genuine clone, 5 mutation
+runs, and 4 independent numerical derivations. Working tree preserved; nothing
+staged, committed, deleted, or rewritten.
+
+Status:    closed
+
+---
+
+## Turn 10 — Codex, implementer/reviewer, 2026-09-22
+Scope:     M1.3 removal of the membrane surface-motion configuration path
+
+Did:
+- Claimed the turn after reading the Turn-9 ruling and literal allowlist.
+- Removed all seven `membrane_*` fields, the six now-vacuous graph-only
+  validation branches, and the obsolete wording in the affine/distortion
+  mutual-exclusion error.
+- Removed the membrane aliases, solver-selection branch, and diagnostics branch
+  from the E175 pipeline. The existing graph body is now unconditional.
+- Rewrote both driver-configuration tests to retain the negative-weight and
+  bracing-mode assertions. Added an explicit assertion that the retained
+  one-valued surface mode rejects unsupported values.
+- Deleted two standalone coupled-assembler tests. They exercised only the
+  removed strategy: affine reproduction is already covered immediately above
+  by `test_harmonic_solve_reproduces_affine_field_exactly`, and surviving
+  symmetry behavior is covered by
+  `test_fixed_symmetry_plane_constraint_overwrites_only_the_normal_coordinate`.
+
+Decided:
+- `SurfaceMotionConfig.mode` **survives as a one-valued `"graph"` field**.
+  Three tracked production configurations outside this turn's allowlist still
+  explicitly pass `mode="graph"`; retaining and validating it avoids breaking
+  those call sites and gives M1.1 a clean compatibility point. The pipeline no
+  longer branches on or reads the field.
+- `motion.py` and `inversion_barrier.py` are not dead and were not changed.
+  The barrier model/operation are independently exported and directly covered
+  by the corner-repair test. They are also used by the separately exported
+  lower-level `CorotationalMembraneMotionSolver`, which M1.3's literal
+  allowlist cannot remove.
+
+Open:
+- The literal repository-wide `grep -ri membrane bsm3/` criterion is
+  incompatible with both the allowlist and the instruction to preserve the
+  still-reachable inversion barrier. The configured E175 live path
+  (`e175_mesh_motion_config.py` and `e175_mesh_motion_pipeline.py`) has zero
+  matches, and tracked tests have zero matches. Five lower-level tracked modules
+  still contain the independently public membrane implementation:
+  `__init__.py`, `elasticity.py`, `motion.py`, `inversion_barrier.py`, and
+  `oml_quality.py`. Removing those is a broader public-API deletion and was not
+  inferred into this turn.
+- Genuine-clone verification and final commit are pending.
+
+Status:    open

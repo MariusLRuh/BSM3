@@ -15,7 +15,6 @@ from bsm3.core.boundary_surface_movement import (
     ComponentReevaluation,
     CornerInversionBarrierModel,
     CornerInversionBarrierOperation,
-    CorotationalMembraneAssembler,
     CurrentGraphDistortionModel,
     CurrentGraphNgonAffineModel,
     CurrentGraphModel,
@@ -873,56 +872,6 @@ def test_harmonic_solve_reproduces_affine_field_exactly():
     # A constant field (partition of unity) is likewise reproduced exactly.
     constant = system.factor.solve(-(system.coupling @ np.ones((system.num_prescribed, 3))))
     np.testing.assert_allclose(constant, 1.0, atol=1e-9)
-
-
-def test_coupled_membrane_patch_test_and_interleaved_dofs():
-    mesh, free_ids, prescribed_ids = _grid_strip(7, 5)
-    system = CorotationalMembraneAssembler(
-        poisson_ratio=0.4,
-        normal_stabilization=0.02,
-    ).assemble(
-        mesh,
-        free_ids=free_ids,
-        prescribed_ids=prescribed_ids,
-    )
-    assert system.coupling.shape == (3 * free_ids.size, 3 * prescribed_ids.size)
-    np.testing.assert_array_equal(
-        system.active_free_dofs,
-        np.arange(3 * free_ids.size, dtype=np.int64),
-    )
-
-    # A regular CST patch must reproduce an affine in-plane field.  The weak
-    # 3D stabilization also reproduces the affine normal component on this
-    # regular grid, while removing the membrane's out-of-plane nullspace.
-    gradient = np.array(
-        [[0.3, -0.2, 0.0], [0.1, 0.4, 0.0], [0.05, -0.08, 0.0]]
-    )
-    offset = np.array([1.5, -0.7, 0.25])
-    affine = mesh.vertices @ gradient.T + offset
-    rhs = -(system.coupling @ affine[prescribed_ids].reshape(-1))
-    active = system.factor.solve(rhs)
-    full = np.asarray(system.scatter @ active).reshape((-1, 3))
-    np.testing.assert_allclose(full, affine[free_ids], atol=2e-9)
-
-
-def test_coupled_membrane_can_pin_one_symmetry_component():
-    mesh, free_ids, prescribed_ids = _grid_strip(5, 5)
-    constrained = np.asarray((1,), dtype=np.int64)  # y DOF of free vertex row 0
-    system = CorotationalMembraneAssembler(
-        poisson_ratio=0.3,
-        normal_stabilization=0.02,
-    ).assemble(
-        mesh,
-        free_ids=free_ids,
-        prescribed_ids=prescribed_ids,
-        constrained_free_dofs=constrained,
-    )
-    assert system.num_active_free_dofs == 3 * free_ids.size - 1
-    active = system.factor.solve(
-        np.zeros(system.num_active_free_dofs, dtype=float)
-    )
-    full = np.asarray(system.scatter @ active).reshape(-1)
-    assert full[1] == 0.0
 
 
 def test_corner_barrier_repairs_quad_and_ift_vjp_matches_finite_difference():

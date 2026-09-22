@@ -468,7 +468,6 @@ def build_e175_mesh_motion_model(
     STIFFENING_EXPONENT = surface.stiffening_exponent
     QUAD_DIAGONAL_WEIGHT = surface.quad_diagonal_weight
     QUAD_BRACING_MODE = surface.quad_bracing_mode
-    ELASTIC_STRATEGY = surface.mode
     GRAPH_LOAD_STEPS = surface.load_steps
     DISTORTION_LAMBDA = distortion.weight
     DISTORTION_MODE = distortion.mode
@@ -491,13 +490,6 @@ def build_e175_mesh_motion_model(
     GRAPH_DISTANCE_DECAY = distance.decay
     GRAPH_DISTANCE_POWER = distance.power
     GRAPH_DISTANCE_SEEDS = distance.seeds
-    POISSON_RATIO = surface.membrane_poisson_ratio
-    MEMBRANE_AREA_STIFFENING = surface.membrane_area_stiffening
-    MEMBRANE_NORMAL_STABILIZATION = surface.membrane_normal_stabilization
-    MEMBRANE_BARRIER = surface.membrane_barrier
-    MEMBRANE_BARRIER_ACTIVATION = surface.membrane_barrier_activation
-    MEMBRANE_BARRIER_TARGET = surface.membrane_barrier_target
-    MEMBRANE_BARRIER_MAX_ITER = surface.membrane_barrier_maximum_iterations
     FINAL_QUALITY_STRATEGY = final_quality.mode
     OML_QUALITY_LAYERS = final_quality.layers
     OML_QUALITY_BARRIER_FLOOR = final_quality.barrier_floor
@@ -1066,38 +1058,23 @@ def build_e175_mesh_motion_model(
         use_query_seam_reference=config.query_seam_reference,
         symmetry_plane_ids=symmetry_plane_vertex_ids,
     )
-    if ELASTIC_STRATEGY == "membrane":
-        motion = (
-            bsm3.core.boundary_surface_movement.CorotationalMembraneMotionSolver(
-                **motion_common,
-                poisson_ratio=POISSON_RATIO,
-                area_stiffening_exponent=MEMBRANE_AREA_STIFFENING,
-                normal_stabilization=MEMBRANE_NORMAL_STABILIZATION,
-                use_inversion_barrier=MEMBRANE_BARRIER,
-                graph_fallback_stiffening_exponent=STIFFENING_EXPONENT,
-                barrier_activation_margin=MEMBRANE_BARRIER_ACTIVATION,
-                barrier_target_margin=MEMBRANE_BARRIER_TARGET,
-                barrier_max_iterations=MEMBRANE_BARRIER_MAX_ITER,
+    graph_prescribed_ids = None
+    if DISTORTION_LAMBDA > 0.0 or NGON_AFFINE_LAMBDA > 0.0:
+        graph_prescribed_ids = (
+            bsm3.core.boundary_surface_movement.element_neighbors(
+                mesh, free_ids
             )
         )
-    else:
-        graph_prescribed_ids = None
-        if DISTORTION_LAMBDA > 0.0 or NGON_AFFINE_LAMBDA > 0.0:
-            graph_prescribed_ids = (
-                bsm3.core.boundary_surface_movement.element_neighbors(
-                    mesh, free_ids
-                )
-            )
-        motion = bsm3.core.boundary_surface_movement.ElasticityMotionSolver(
-            **motion_common,
-            stiffening_exponent=STIFFENING_EXPONENT,
-            use_corotational_reference=True,
-            prescribed_ids=graph_prescribed_ids,
-            symmetry_use_element_neighbors=(NGON_AFFINE_LAMBDA > 0.0),
-            distance_weighting=distance_weighting,
-            quad_diagonal_weight=QUAD_DIAGONAL_WEIGHT,
-            quad_bracing_mode=QUAD_BRACING_MODE,
-        )
+    motion = bsm3.core.boundary_surface_movement.ElasticityMotionSolver(
+        **motion_common,
+        stiffening_exponent=STIFFENING_EXPONENT,
+        use_corotational_reference=True,
+        prescribed_ids=graph_prescribed_ids,
+        symmetry_use_element_neighbors=(NGON_AFFINE_LAMBDA > 0.0),
+        distance_weighting=distance_weighting,
+        quad_diagonal_weight=QUAD_DIAGONAL_WEIGHT,
+        quad_bracing_mode=QUAD_BRACING_MODE,
+    )
 
     # -------------------------------------------------------------------------
     # 7. Put every mesh node on the deformed OML.
@@ -1518,48 +1495,40 @@ def build_e175_mesh_motion_model(
         centroid = final_np[surface_cells[int(element_id)]].mean(axis=0)
         if float(np.min(np.linalg.norm(seam_all - centroid, axis=1))) < 1.0:
             near_seam += 1
-    if ELASTIC_STRATEGY == "membrane":
+    print(
+        f"[diagnostics] elasticity=graph chi={STIFFENING_EXPONENT} "
+        f"quad_bracing_mode={QUAD_BRACING_MODE} "
+        f"quad_diagonal_weight={QUAD_DIAGONAL_WEIGHT:g} "
+        f"surface_load_steps={GRAPH_LOAD_STEPS} "
+        f"volume_load_mode={VOLUME_LOAD_MODE} "
+        f"distortion_lambda={DISTORTION_LAMBDA:g} "
+        f"distortion_mode={DISTORTION_MODE} "
+        f"ngon_affine_lambda={NGON_AFFINE_LAMBDA:g}"
+    )
+    if load_step_result.distortion_normalization_scale is not None:
         print(
-            "[diagnostics] elasticity=membrane "
-            f"nu={POISSON_RATIO} area_chi={MEMBRANE_AREA_STIFFENING} "
-            f"normal_stabilization={MEMBRANE_NORMAL_STABILIZATION} "
-            f"barrier={int(MEMBRANE_BARRIER)}"
+            "[diagnostics] distortion "
+            f"normalization={load_step_result.distortion_normalization_scale:.6g} "
+            f"redundancy={load_step_result.distortion_redundancy:.6f} "
+            f"ear_clipped={load_step_result.distortion_num_ear_clipped} "
+            f"max_warp={load_step_result.distortion_maximum_warp_ratio:.6g}"
         )
-    else:
+    if load_step_result.ngon_affine_normalization_scale is not None:
         print(
-            f"[diagnostics] elasticity=graph chi={STIFFENING_EXPONENT} "
-            f"quad_bracing_mode={QUAD_BRACING_MODE} "
-            f"quad_diagonal_weight={QUAD_DIAGONAL_WEIGHT:g} "
-            f"surface_load_steps={GRAPH_LOAD_STEPS} "
-            f"volume_load_mode={VOLUME_LOAD_MODE} "
-            f"distortion_lambda={DISTORTION_LAMBDA:g} "
-            f"distortion_mode={DISTORTION_MODE} "
-            f"ngon_affine_lambda={NGON_AFFINE_LAMBDA:g}"
+            "[diagnostics] ngon_affine "
+            f"normalization={load_step_result.ngon_affine_normalization_scale:.6g} "
+            f"elements={load_step_result.ngon_affine_num_elements} "
+            f"modes={load_step_result.ngon_affine_num_modes} "
+            f"max_warp={load_step_result.ngon_affine_maximum_warp_ratio:.6g}"
         )
-        if load_step_result.distortion_normalization_scale is not None:
-            print(
-                "[diagnostics] distortion "
-                f"normalization={load_step_result.distortion_normalization_scale:.6g} "
-                f"redundancy={load_step_result.distortion_redundancy:.6f} "
-                f"ear_clipped={load_step_result.distortion_num_ear_clipped} "
-                f"max_warp={load_step_result.distortion_maximum_warp_ratio:.6g}"
-            )
-        if load_step_result.ngon_affine_normalization_scale is not None:
-            print(
-                "[diagnostics] ngon_affine "
-                f"normalization={load_step_result.ngon_affine_normalization_scale:.6g} "
-                f"elements={load_step_result.ngon_affine_num_elements} "
-                f"modes={load_step_result.ngon_affine_num_modes} "
-                f"max_warp={load_step_result.ngon_affine_maximum_warp_ratio:.6g}"
-            )
-        print(
-            "[diagnostics] tangential_smoothing="
-            f"{int(TANGENTIAL_SMOOTHING)} "
-            f"active={tangential_smoothing_ids.size} "
-            f"layers={TANGENTIAL_SMOOTHING_LAYERS} "
-            f"iterations={TANGENTIAL_SMOOTHING_ITERATIONS} "
-            f"relaxation={TANGENTIAL_SMOOTHING_RELAXATION:g}"
-        )
+    print(
+        "[diagnostics] tangential_smoothing="
+        f"{int(TANGENTIAL_SMOOTHING)} "
+        f"active={tangential_smoothing_ids.size} "
+        f"layers={TANGENTIAL_SMOOTHING_LAYERS} "
+        f"iterations={TANGENTIAL_SMOOTHING_ITERATIONS} "
+        f"relaxation={TANGENTIAL_SMOOTHING_RELAXATION:g}"
+    )
     print(f"[diagnostics] final_quality={FINAL_QUALITY_STRATEGY}")
     print(
         "[diagnostics] symmetry-plane max |y| "

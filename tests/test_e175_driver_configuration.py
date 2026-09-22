@@ -142,28 +142,18 @@ def test_final_only_tangential_reprojection_is_a_supported_fixed_option():
     assert config.tangential_smoothing.reprojection == "final_only"
 
 
-def test_quad_diagonal_weight_is_validated_as_graph_only():
+def test_quad_diagonal_controls_are_validated():
+    with pytest.raises(ValueError, match="must be graph"):
+        SurfaceMotionConfig(mode="unsupported")
     with pytest.raises(ValueError, match="finite and non-negative"):
         SurfaceMotionConfig(quad_diagonal_weight=-0.1)
-    with pytest.raises(ValueError, match="requires graph motion"):
-        SurfaceMotionConfig(
-            mode="membrane",
-            load_steps=1,
-            quad_diagonal_weight=1.0,
-        )
     with pytest.raises(ValueError, match="quad_bracing_mode"):
         SurfaceMotionConfig(quad_bracing_mode="unknown")
 
 
-def test_ngon_affine_weight_is_validated_as_graph_only():
+def test_ngon_affine_weight_is_validated():
     with pytest.raises(ValueError, match="finite and nonnegative"):
         NgonAffineRegularizationConfig(weight=-0.1)
-    with pytest.raises(ValueError, match="requires graph motion"):
-        SurfaceMotionConfig(
-            mode="membrane",
-            load_steps=1,
-            ngon_affine=NgonAffineRegularizationConfig(weight=0.1),
-        )
 
 
 def test_invalid_synchronized_name_is_rejected():
