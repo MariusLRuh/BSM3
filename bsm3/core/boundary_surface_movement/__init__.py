@@ -91,6 +91,14 @@ from .quadratic_distortion import (
     QuadraticDistortionSystem,
     SubtriangleRecord,
 )
+from .ngon_affine import (
+    CurrentGraphNgonAffineModel,
+    CurrentGraphNgonAffineSolveOperation,
+    CurrentGraphNgonAffineSolveVJP,
+    NgonAffineAssembler,
+    NgonAffineConfig,
+    NgonAffineSystem,
+)
 from .inversion_barrier import (
     BarrierSolveInfo,
     CornerInversionBarrierModel,
@@ -169,6 +177,9 @@ __all__ = [
     "ComponentReevaluation",
     "CorotationalMembraneAssembler",
     "CorotationalMembraneMotionSolver",
+    "CurrentGraphNgonAffineModel",
+    "CurrentGraphNgonAffineSolveOperation",
+    "CurrentGraphNgonAffineSolveVJP",
     "CurrentGraphModel",
     "CurrentGraphSolveOperation",
     "CurrentGraphSolveVJP",
@@ -198,6 +209,9 @@ __all__ = [
     "MeshMotionField",
     "MeshMotionSolver",
     "MeshQualityReport",
+    "NgonAffineAssembler",
+    "NgonAffineConfig",
+    "NgonAffineSystem",
     "OMLQualityModel",
     "OMLQualityOperation",
     "OMLQualitySolveInfo",
