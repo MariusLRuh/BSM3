@@ -1,43 +1,53 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-
 name: Tests
 
-# Whenever there is a pull request (PR) or push to the "main" branch, the jobs specified below will run.
-on: 
+on:
   push:
-    branches: [ "main" ]
+    branches: [main, production-ready-overhaul]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
 
-# Here, we specify the automatic cloud based testing that will be ran on pushes/PRs to "main"
 jobs:
-  build:
-
-    # The tests will run on ubuntu with python versions 3.8, 3.9, and 3.10.
-    # Add other OSes like windows and macOS if needed as well as other Python versions  
+  test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.8", "3.9", "3.10"]
+    timeout-minutes: 20
 
     steps:
-      # The steps here are essentially command-line arguments that will be ran on the cloud with the above configurations  
-    - uses: actions/checkout@v3
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
+      - uses: actions/checkout@v4
 
-      # Here we install the package of this repositories as well as other required packages 
-    - name: Install dependencies
-      run: | 
-        python -m pip install --upgrade pip
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-        pip install -e .
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
 
-      # Finally, we run the package unit-tests on the specified OS and python versions.
-    - name: Test with pytest
-      run: |
-        pytest
+      - name: Install the validated geometry stack
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-ci.txt
+          python -m pip install --no-deps \
+            "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git@bf70dbb8181c5e3fe09f20e30ed0c94b78d333c7"
+          python -m pip install --no-deps -e .
+
+      - name: Critical static checks
+        run: |
+          python -m ruff check \
+            bsm3/preprocessing/mesh_io.py \
+            bsm3/preprocessing/__init__.py \
+            tests/test_derivative_gate.py \
+            tests/test_curated_assets.py \
+            tests/test_e175_driver_configuration.py
+
+      - name: Numpydoc checks for the M0 public surface
+        run: |
+          python -m ruff check --select D \
+            bsm3/preprocessing/mesh_io.py \
+            bsm3/preprocessing/__init__.py \
+            tests/test_derivative_gate.py \
+            tests/test_curated_assets.py
+
+      - name: Fast derivative gate
+        run: python -m pytest -q tests/test_derivative_gate.py
+
+      - name: Test suite
+        run: python -m pytest -q tests

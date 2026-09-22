@@ -1,0 +1,23 @@
+# Versions validated in the central_geom environment on 2026-09-21.
+numpy==2.0.2
+scipy==1.13.1
+jax[cpu]==0.4.30
+h5py
+sympy
+rustworkx
+pydot
+joblib
+pandas
+scikit-learn==1.6.1
+pyvista==0.46.5
+meshio==5.3.5
+pytest
+pytest-timeout==2.4.0
+ruff==0.9.10
+
+# CSDL uses the CustomExplicitOperationBeta API from this validated fork.
+csdl_alpha @ git+https://github.com/HgXe/CSDL_alpha.git@8526875410b7d0ebdd24daec35aa0a4da7cf20c8
+lsdo_b_splines_cython @ git+https://github.com/LSDOlab/lsdo_b_splines_cython.git@9444ea81f6fc58dabd68559323b13f0d549a383d
+
+# lsdo_function_spaces is installed separately with --no-deps in CI so its
+# unpinned CSDL dependency cannot replace the validated fork above.

@@ -1,0 +1,11 @@
+target-version = "py39"
+line-length = 88
+
+[lint]
+# M0 gates syntax and high-confidence runtime errors. Full style/docstring
+# enforcement becomes repo-wide after the live public surface is documented in
+# M1.6.
+select = ["E9", "F63", "F7", "F82"]
+
+[lint.pydocstyle]
+convention = "numpy"
