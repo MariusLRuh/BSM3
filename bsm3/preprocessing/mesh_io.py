@@ -47,7 +47,6 @@ class MeshData:
     @property
     def nodes(self) -> np.ndarray:
         """Compatibility alias used by geometry and panel-method scripts."""
-
         return self.vertices
 
     @nodes.setter
@@ -73,7 +72,6 @@ def import_mesh(mesh_file: str | Path) -> MeshData:
     If ``meshio`` is installed, it is used for ``.msh`` files. Otherwise,
     ASCII Gmsh 2.x files are handled by the built-in parser.
     """
-
     path = Path(mesh_file)
     suffix = path.suffix.lower()
     if suffix == ".msh":
@@ -84,12 +82,14 @@ def import_mesh(mesh_file: str | Path) -> MeshData:
         from .stl import _import_stl
 
         return _import_stl(path)
-    raise ValueError(f"Unsupported mesh format {suffix!r}. Supported formats: .msh, .stl.")
+    raise ValueError(
+        f"Unsupported mesh format {suffix!r}. Supported formats: "
+        ".msh, .stl."
+    )
 
 
 def read_mesh(mesh_file: str | Path) -> MeshData:
     """Alias for :func:`import_mesh`."""
-
     return import_mesh(mesh_file)
 
 
@@ -104,7 +104,6 @@ def export_mesh(mesh, mesh_file: str | Path) -> None:
         Output path. Currently only Gmsh 2.2 ASCII ``.msh`` files are
         supported.
     """
-
     mesh_data = _as_mesh_data(mesh)
     path = Path(mesh_file)
     suffix = path.suffix.lower()
@@ -133,6 +132,72 @@ def _as_mesh_data(mesh) -> MeshData:
             metadata=dict(getattr(mesh, "metadata", {}) or {}),
         )
     raise TypeError("mesh must be a MeshData object, MeshData-like object, or mesh file path.")
+
+
+def import_trusted_polygon_pickle(mesh_file: str | Path) -> MeshData:
+    """Read the trusted legacy polygon-surface dictionary format.
+
+    Parameters
+    ----------
+    mesh_file : str or Path
+        Pickle containing ``points`` and a sequence of variable-width
+        ``connectivity`` rows. Because pickle can execute arbitrary code, this
+        reader must only be used with trusted local assets.
+
+    Returns
+    -------
+    MeshData
+        Polygonal surface grouped into triangle, quad, and ``polygonN`` cell
+        blocks without triangulating higher-order polygons.
+
+    Raises
+    ------
+    ValueError
+        If the stored points or connectivity do not describe a valid surface
+        mesh.
+    """
+    import pickle
+
+    path = Path(mesh_file)
+    with path.open("rb") as stream:
+        data = pickle.load(stream)
+    if not isinstance(data, dict) or not {"points", "connectivity"} <= data.keys():
+        raise ValueError(
+            "A polygon pickle must contain 'points' and 'connectivity'."
+        )
+
+    vertices = np.asarray(data["points"], dtype=float)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError("Polygon-pickle points must have shape (n_vertices, 3).")
+
+    cells = [
+        np.asarray(cell, dtype=np.int64).reshape(-1)
+        for cell in data["connectivity"]
+    ]
+    if not cells or any(cell.size < 3 for cell in cells):
+        raise ValueError("Polygon-pickle cells must each contain at least 3 nodes.")
+    if any(np.any(cell < 0) or np.any(cell >= vertices.shape[0]) for cell in cells):
+        raise ValueError("Polygon-pickle connectivity contains an invalid node ID.")
+
+    cell_blocks = {}
+    sizes = np.asarray([cell.size for cell in cells], dtype=np.int64)
+    for size in np.unique(sizes):
+        cell_type = {3: "triangle", 4: "quad"}.get(
+            int(size), f"polygon{int(size)}"
+        )
+        cell_blocks[cell_type] = np.asarray(
+            [cell for cell in cells if cell.size == size],
+            dtype=np.int64,
+        )
+
+    return _make_mesh_data(
+        vertices=vertices,
+        cell_blocks=cell_blocks,
+        node_ids=None,
+        element_ids=None,
+        element_tags=None,
+        metadata={"reader": "bsm3_polygon_pickle", "source": str(path)},
+    )
 
 
 def _make_mesh_data(

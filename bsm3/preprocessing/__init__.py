@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from .components import DEFAULT_STEP_FILE, available_components, create_components
 from .intersections import identify_intersection_vertices
-from .mesh_io import MeshData, export_mesh, import_mesh, read_mesh
+from .mesh_io import (
+    MeshData,
+    export_mesh,
+    import_mesh,
+    import_trusted_polygon_pickle,
+    read_mesh,
+)
 from .movement import (
     ComponentProjectionData,
     ProjectionMetadata,
@@ -50,6 +56,7 @@ __all__ = [
     "identify_reevaluated_vertices",
     "identify_vertices_by_components",
     "import_mesh",
+    "import_trusted_polygon_pickle",
     "quad_quality_gates",
     "read_mesh",
     "project_mesh_onto_geometry",
