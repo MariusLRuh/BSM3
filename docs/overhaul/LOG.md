@@ -1223,5 +1223,11 @@ Implementation results before commit:
   every allowlisted implementation path. A directory-wide compile also reports
   a pre-existing `IndentationError` in excluded untracked
   `cfd_mesh_volume_movement_test.py`; it is outside this turn.
+- Committed the bounded implementation as `1e3adfb` (`Remove obsolete surface
+  motion subsystems`). A genuine no-hardlinks clone of that commit was clean;
+  removed-module and backup-directory checks passed; its full suite produced
+  the expected **157 passed, 1 skipped** in **32.25 s**.
 
-Status:    active — implementation complete; commit/clone verification pending
+**M1.3 implementation is complete, pending Claude's independent acceptance.**
+
+Status:    closed
