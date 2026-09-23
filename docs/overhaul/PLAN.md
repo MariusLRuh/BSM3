@@ -258,9 +258,9 @@ nothing in the end state and removes the risk of silently dropping live code.
 
 | ID | Task | Owner | Status | Acceptance |
 |----|------|-------|--------|------------|
-| M1.1 | Generalize config. `E175ModelFiles` -> `ModelFiles`; component/intersection specs become `list[ComponentSpec]` / `list[IntersectionSpec]`; geometry parameterization becomes a user-supplied protocol rather than the frozen `E175GeometryVariables`. | Codex | not started | E175 driver runs through the generic API with no `E175`-named type in the call path. |
-| M1.2 | Decompose `build_e175_mesh_motion_model` into stage functions matching the 5-step pipeline. Delete the ~50-line `LOCAL_ALIAS = config.field` block at lines 456-515. | Codex | not started | No function over 300 LOC in the pipeline module; derivative gate still passes. |
-| M1.3 | Delete the configured `membrane` surface-motion mode: 7 `membrane_*` fields, 6 `mode != "graph"` validation rules in `SurfaceMotionConfig.__post_init__`, and the branches at pipeline lines 1069 and 1521. Re-check `inversion_barrier.py` reachability afterward. **Turn-3 note:** Turn 2 added two tests that construct the removed mode to assert graph-only validation; these must be rewritten, not deleted: keep the `quad_bracing_mode` and negative-weight assertions. **Turn-9 addition:** commit C2 brought in two standalone coupled-assembler tests that Turn 3 could not have seen. Judge them against surviving graph coverage rather than mechanically porting them. | Codex | **IMPLEMENTED TURN 18 — pending Claude acceptance** (`1e3adfb`; genuine clone 157 passed, 1 skipped) | No **live/package** source or test contains a membrane implementation, an optimization barrier, the tangential-smoothing API, or a one-valued compatibility field. All acceptance greps are scoped to `-- bsm3/ tests/` (Turn 17); `docs/overhaul/` records are append-only history and are exempt by design. `inversion_barrier.py`, `oml_quality.py`, `tangential_smoothing.py` and `_dafoam_mpi_refactor_backups/` deleted. Permitted survivors: MPI `Barrier` at four files, KS/SDF logarithms, and `tangential_smoothing_step` in `analytical_SDF_anchor_attraction_noarg.py`. |corotational|tangential_smooth' -- bsm3/ tests/` empty; `git grep -i barrier -- bsm3/ tests/` returns only MPI `comm.Barrier()`; `inversion_barrier.py`, `oml_quality.py`, `tangential_smoothing.py` deleted; no stale exports, dead imports, or orphaned helpers. |
+| M1.1 | Generalize config. `E175ModelFiles` -> `ModelFiles`; `E175PipelineConfig` -> `PipelineConfig`; `E175MeshMotionResult` -> `MeshMotionResult`; `build_e175_mesh_motion_model` -> `build_mesh_motion_model`; `E175GeometryVolumeBackend` -> `MeshMotionVolumeBackend` (**Turn 21** — the name `GeometryVolumeBackend` is already a Protocol at `geometry_volume_backend.py:39`). `E175GeometryVariables` is replaced by a user-supplied `GeometryParameterization` protocol, delivered to the generic backend through a **driver-supplied `parameterization_factory` callback**. Component/intersection specs become `list[ComponentSpec]` / `list[IntersectionSpec]`. | Codex | **IMPLEMENTED** — `872c0f1`, awaiting Claude review Turn 23 | E175 driver runs through the generic API with no `E175`-named type in the call path. |
+| M1.2 | Decompose `build_e175_mesh_motion_model` into stage functions matching the 5-step pipeline. Delete the ~50-line `LOCAL_ALIAS = config.field` block at lines 456-515. | Codex | **IMPLEMENTED** — `872c0f1`, awaiting Claude review Turn 23 | No function over 300 LOC in the pipeline module; derivative gate still passes. |
+| M1.3 | Delete the configured `membrane` surface-motion mode: 7 `membrane_*` fields, 6 `mode != "graph"` validation rules in `SurfaceMotionConfig.__post_init__`, and the branches at pipeline lines 1069 and 1521. Re-check `inversion_barrier.py` reachability afterward. **Turn-3 note:** Turn 2 added two tests that construct the removed mode to assert graph-only validation; these must be rewritten, not deleted: keep the `quad_bracing_mode` and negative-weight assertions. **Turn-9 addition:** commit C2 brought in two standalone coupled-assembler tests that Turn 3 could not have seen. Judge them against surviving graph coverage rather than mechanically porting them. | Codex | **COMPLETE** — implemented `1e3adfb`, audited and accepted Turn 19 | No **live/package** source or test contains a membrane implementation, an optimization barrier, the tangential-smoothing API, or a one-valued compatibility field. All acceptance greps are scoped to `-- bsm3/ tests/` (Turn 17); `docs/overhaul/` records are append-only history and are exempt by design. `inversion_barrier.py`, `oml_quality.py`, `tangential_smoothing.py` and `_dafoam_mpi_refactor_backups/` deleted. Permitted survivors: MPI `Barrier` at four files, KS/SDF logarithms, and `tangential_smoothing_step` in `analytical_SDF_anchor_attraction_noarg.py`. |corotational|tangential_smooth' -- bsm3/ tests/` empty; `git grep -i barrier -- bsm3/ tests/` returns only MPI `comm.Barrier()`; `inversion_barrier.py`, `oml_quality.py`, `tangential_smoothing.py` deleted; no stale exports, dead imports, or orphaned helpers. |
 | M1.4 | **N-gon, mandatory (decision 6).** Requires a *true six-gon load-step/VJP regression*, not merely loading the mixed-N-gon asset. Turn-3 measurement: in the M0.3 gate, changing `lambda_ngon` from 0.0 to 0.3 moves the solution by 3.3e-16 and the derivative by 1.8e-15 — the deformation is a pure affine ramp on a uniform quad grid, which lies in the **nullspace** of the affine penalty. Formally, `range(A_e) = range(Q_e) = 𝒜_e`, and the residual projector `(I - Q_e Q_e^T)` annihilates any correction in that affine subspace. The N-gon path is *executed* (graph grows 2666 -> 3080 nodes) but its contribution is unobservable, so a sign, scale, or transpose error in its VJP would pass today. M1.4 must construct a polygon6 correction with a provably nonzero component in the orthogonal complement of `range(Q_e)`, giving a genuine hourglass mode whose primal response changes with `lambda_ngon` by construction. | Codex | **COMPLETE** — implemented Turn 8, independently audited and accepted Turn 9 | Polygon6 projector, analytic primal limits, observable load-step VJP/centered-FD, mixed-polygon quality, and trusted wall-asset assembly all pass. `ngon_affine.py` required no change. |
 | M1.5 | Carve `bsm3.meshgen` out of the ~40k LOC of gmsh/OCC scripting. Keep one rudimentary path per the high-level plan; delete the rest. | Codex | not started | Core imports nothing from `meshgen`; one example regenerates a surface mesh from STEP. |
 | M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | not started | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
@@ -275,6 +275,83 @@ every test we have, so it is both the one mandatory capability (decision 6) and
 the one with no working regression. Proving it before the refactor means the
 refactor has a gate; proving it after means the refactor is unguarded on
 exactly the code path the user made mandatory.
+
+---
+
+### Turn-21 ruling: Turn-20 stop upheld; M1.1 allowlist corrected 10 -> 13
+
+Fourth correct stop, fourth Claude planning defect. The 10-path allowlist
+omitted live consumers of the symbols M1.1 renames. Added, as the user directed:
+`geometry_volume_backend.py`, `e175_derivative_ladder.py`,
+`DAFOAM_MPI_RANK0_HANDOFF.md`.
+
+**Principled line, settling Codex's "is it driver-specific?" question:**
+
+> **The core must be configuration-agnostic; drivers may be E175-specific.**
+
+`E175GeometryVolumeBackend` is **core** — it lives in a generic module and two
+different drivers import it — so it generalizes.
+`cfd_mesh_movement_test.py`, `cfd_mesh_dafoam_analysis.py` and
+`e175_derivative_ladder.py` are drivers and keep their names.
+
+**Two defects found by Claude's Turn-21 audit, beyond Codex's three:**
+
+1. **`GeometryVolumeBackend` is already taken** — a `Protocol` at
+   `geometry_volume_backend.py:39`, which the E175 class implements; the module
+   `__all__` lists both. Renaming into it would collide. Ruling:
+   **`MeshMotionVolumeBackend`**. Uncaught, this was a fifth stop.
+2. **`tests/test_geometry_volume_mpi.py` is a collection-time tripwire.** It
+   imports `e175_derivative_ladder` (507), which top-level-imports
+   `E175GeometryVolumeBackend` (ladder:56). The test needs no edit and stays
+   prohibited, but it breaks at collection unless the ladder is renamed in
+   lockstep.
+
+**Architecture for the generic backend.** It already takes `model_files: Any`
+and `pipeline_config: Any`; the only E175 coupling is
+`E175GeometryVariables(**design_variables)` at line 310 inside `_build_model`
+(299-314). The constructor gains a driver-supplied
+`parameterization_factory: Callable[[Mapping[str, csdl.Variable]], GeometryParameterization]`,
+and the generic backend imports and constructs no E175 type.
+
+`build_e175_mesh_motion_model` joins the rename set and the acceptance grep. The
+grep is **widened, never narrowed** — no stale reference is hidden by scoping.
+
+---
+
+### Turn-19 audit: **M1.3 ACCEPTED**
+
+Independently reproduced in `central_geom`. Allowlist compliance perfect: 33
+files across `8289884..1c5a860`, **zero violations**, all ten prohibited files
+untouched. Net source+test delta **+73 / -11,075 = 11,002 lines removed**.
+
+| Claim | Independently measured |
+|---|---|
+| all removed-API greps empty | 8/8 **EMPTY** over `bsm3/` `tests/` |
+| barrier = permitted MPI only | **exactly 7 sites, 4 files** |
+| import smoke + `__all__` | 86 entries, **every one resolves** |
+| full suite (working tree) | **171 passed / 31.53 s** |
+| genuine clone | **157 passed, 1 skipped / 32.04 s**, empty `git status` |
+
+**`use_corotational_reference` removal — in scope and correct.** Not named in
+the prompt, but it lived only in two allowlisted files, only `True` was ever
+passed, and definition-of-done item 9 bars one-valued compatibility fields
+generally. The surviving path is the owner-reference formulation
+(`_assemble_free_reference` + per-component deviation solve, unconditional at
+`motion.py:496`/`:545`). The deleted `else` arm was self-documented as
+*"Kept for comparison; it folds the free/rigid boundary."* Public API break —
+`use_corotational_reference=False` no longer exists — accepted under the clean
+break.
+
+**One residual defect, Claude's.** `elasticity.py:301` `_validate_partition` is
+now orphaned: its only caller was `CorotationalMembraneAssembler`, and
+`ngon_affine.py` / `quadratic_distortion.py` carry independent copies. Claude's
+prompt listed it under PRESERVE without checking its sole caller was the class
+being deleted. ~20 dead lines, no behavioural effect. **Carried into the
+M1.1+M1.2 turn as a cleanup item**, not grounds to reopen M1.3.
+
+Ruff is unavailable in `central_geom`; an AST equivalent (dead imports,
+references to removed symbols, orphaned privates) found no surviving import of
+any removed symbol.
 
 ---
 

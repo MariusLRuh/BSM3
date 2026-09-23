@@ -1231,3 +1231,297 @@ Implementation results before commit:
 **M1.3 implementation is complete, pending Claude's independent acceptance.**
 
 Status:    closed
+
+---
+
+## Turn 19 — Claude, planner/reviewer, 2026-09-22
+Scope:     Independent audit of the M1.3 implementation (1e3adfb, 1c5a860)
+
+**RULING: M1.3 is ACCEPTED.** Every claim reproduced independently. One residual
+defect found — and it is Claude's, not Codex's. Details below.
+
+**Allowlist compliance: perfect.** 33 files touched across `8289884..1c5a860`;
+14 of them the backup directory, the rest exactly the 19 named paths.
+**Zero violations.** All ten prohibited files verified untouched, including
+`current_graph_solve.py`, `ngon_affine.py`, `quality.py`,
+`quadratic_distortion.py`, `analytical_SDF_anchor_attraction_noarg.py`,
+`geometry_volume_mpi.py` and `run_dafoam_gmsh.py`. `1c5a860` is docs-only.
+Net source+test delta: **+73 / -11,075 = 11,002 lines removed.**
+
+**The unauthorized-looking change was in fact in scope and correct.** Codex
+removed `use_corotational_reference`, which was not named in the prompt. Audited:
+it lived only at `motion.py` 182/192/602/924 and
+`e175_mesh_motion_pipeline.py:1071` — **both allowlisted** — and only `True` was
+ever passed, so it is exactly the "one-valued compatibility field" that
+definition-of-done item 9 prohibits generally. Codex applied the general rule
+correctly rather than only the three named instances.
+
+More importantly, the **correct branch survived**. The deleted `else` arm
+carried its own verdict in its comment: *"Absolute formulation … **Kept for
+comparison**; it **folds** the free/rigid boundary of a moving component because
+a graph-harmonic field cannot reproduce that component's affine
+(planform-scaling) motion on a non-uniform mesh."* It was a documented
+fold-producing path. The surviving formulation is the owner-reference
+(co-rotational) one: `_assemble_free_reference` + per-component deviation solve,
+now unconditional at `motion.py:496` and `:545`. `_assemble_absolute_prescribed`
+is gone. This is a **public API break** — `ElasticityMotionSolver(
+use_corotational_reference=False)` no longer exists — accepted under the clean
+break.
+
+**Acceptance greps — all eight EMPTY** over `bsm3/` and `tests/`: membrane,
+corotational, tangential API (narrowed), deleted modules, parameterized
+projection, `mode="graph"`, `ELASTIC_STRATEGY`, backups directory.
+
+**Barrier: exactly the seven permitted MPI sites in four files** —
+`cfd_mesh_dafoam_analysis.py:337` (line shifted from 346 by the 9-line removal,
+expected), `geometry_volume_mpi.py:77`, `run_dafoam_gmsh.py:653/656/911/954`,
+`tests/test_geometry_volume_mpi.py:69`. Nothing else.
+
+**Permitted survivors intact**: `tangential_smoothing_step` still has 4 hits in
+`analytical_SDF_anchor_attraction_noarg.py`; its test and the MPI test pass.
+`docs/overhaul/` retains its historical record, as required.
+
+**Imports and exports**: import smoke OK; `__all__` is 86 entries and **every
+one resolves**; `bsm3.preprocessing.__all__` likewise. All 16 spot-checked
+preserved public symbols present (graph assembler, motion solvers,
+`run_graph_load_steps`, N-gon, distortion, ordinary projection quartet, quality
+diagnostics).
+
+**Defect found (Claude's): one orphaned private helper.**
+`elasticity.py:301` `_validate_partition` is now **defined and never called**.
+Traced: before the deletion its *only* caller was
+`CorotationalMembraneAssembler` (line 305 at `8289884`); `ngon_affine.py:453`
+and `quadratic_distortion.py:732` each carry their own independent copies. This
+violates definition-of-done item 8 ("no orphaned private helpers"). **The cause
+is Claude's prompt**, which listed `_validate_partition` under PRESERVE for
+`elasticity.py` without checking that its sole caller was the class being
+deleted — the same failure mode as the three stop-rule defects. Codex followed
+the instruction correctly. ~20 dead lines; no import error, no test failure, no
+behavioural effect. Folded into the next turn as a one-line cleanup rather than
+reopening M1.3.
+
+**Static review.** Ruff is not installed in `central_geom` (confirmed
+independently), so an AST-based equivalent was run over the eleven edited source
+and test files, checking F401-style dead imports, F821-style references to
+removed symbols, and orphaned module-level privates. **No surviving import
+references any removed symbol** — the only genuine finding is the
+`_validate_partition` orphan above. Remaining flags were `__future__` imports
+and legitimate `__init__`/test re-exports.
+
+**Validation, all re-run in `central_geom`:**
+- derivative gate + M1.4 polygon6 operator/load-step: **6 passed in 7.41 s**
+- boundary surface + drivers + projection: **53 passed in 19.35 s**
+- permitted-survivor tests (SDF anchor, MPI): **29 passed in 1.85 s**
+- full suite, working tree: **171 passed in 31.53 s** (matches Codex exactly)
+- **genuine clone of `1c5a860`**: empty `git status --porcelain`; all three
+  modules and the backup directory absent; scoped greps empty;
+  **157 passed, 1 skipped in 32.04 s** — exactly the predicted count and exactly
+  Codex's result
+- `MANIFEST.md` carries zero rows for the three deleted modules
+- eight excluded dirty files still dirty; nothing staged
+
+**M1.3 is COMPLETE.** `PLAN.md` updated. Next: the combined **M1.1 + M1.2**
+turn (generalize the config API and decompose `build_e175_mesh_motion_model`),
+which the sequencing note requires be done as one turn. Prompt written to
+`CODEX_NEXT.md`; the `_validate_partition` cleanup rides along.
+
+Status:    closed
+
+## Turn 20 — Codex, implementer/reviewer, 2026-09-22
+
+Claimed the combined M1.1 + M1.2 implementation and audited the public call
+path and acceptance greps before editing production code.
+
+**STOP RULE invoked before production edits.** The 10-path allowlist omits a
+live core consumer that must change for the requested clean API break:
+
+- `bsm3/core/boundary_surface_movement/geometry_volume_backend.py:299-314`
+  imports `E175GeometryVariables`, constructs it from the rank-0 backend's
+  design-variable mapping, and passes it to `build_e175_mesh_motion_model`.
+  This is not a documentation-only reference: the allowlisted DAFoam driver
+  imports and uses `E175GeometryVolumeBackend`, so renaming/removing the frozen
+  type without updating this file breaks the live geometry-to-volume call path.
+- The same prohibited file's line 286 docstring names
+  `E175MeshMotionResult`. The prompt's repository-scoped type-name grep cannot
+  be empty while that reference remains.
+- The live class is itself named `E175GeometryVolumeBackend`. That name is not
+  included in the prompt's four-symbol grep, but it conflicts with the broader
+  definition "no `E175`-named type in the core call path" unless Claude
+  explicitly rules it driver-specific or includes its rename/generalization.
+- `bsm3/core/boundary_surface_movement/e175_derivative_ladder.py:57,120,123`
+  imports, annotates, and constructs `E175GeometryVolumeBackend`; generalizing
+  the backend therefore requires this second prohibited live consumer.
+- `bsm3/core/boundary_surface_movement/DAFOAM_MPI_RANK0_HANDOFF.md:25,78,91`
+  also names the E175 backend/result types. This is documentation rather than
+  executable call-path code, but the literal `-- bsm3/ tests/` acceptance grep
+  still matches it and the file is outside the allowlist.
+
+The first dependency is architectural and cannot be handled by narrowing the
+grep: the rank-0 backend must receive or construct the new user-supplied
+parameterization object. Claude must add `geometry_volume_backend.py` to the
+implementation allowlist and specify how the driver's concrete E175
+parameterization is supplied to it (a driver-provided factory is one clean
+option). It must also add `e175_derivative_ladder.py` if it generalizes
+`E175GeometryVolumeBackend`, and either add the handoff document for terminology
+cleanup or scope the type-name grep to Python sources. No
+production or test file was modified, staged, or committed; only this append-only
+Turn-20 record changed.
+
+**M1.1 + M1.2 remain OPEN.**
+
+Status:    closed — stopped on an out-of-allowlist live API consumer
+
+---
+
+## Turn 21 — Claude, planner/reviewer, 2026-09-22
+Scope:     Rule on the Turn-20 stop; full consumer audit of every renamed symbol
+
+**Turn-20 stop upheld.** Fourth correct stop-rule invocation, fourth Claude
+planning defect. The 10-path allowlist omitted live consumers of the very
+symbols M1.1 renames.
+
+**Full consumer audit** — every E175-named symbol traced across `bsm3/` and
+`tests/`, not just the ones Codex named:
+
+| Symbol | Consumer files | Allowlisted before? |
+|---|---|---|
+| `E175ModelFiles` | config, pipeline, 2 drivers, driver test | yes |
+| `E175PipelineConfig` | config, pipeline, 2 drivers, driver test | yes |
+| `E175GeometryVariables` | config, pipeline, 2 drivers, **`geometry_volume_backend.py:300,310`** | **NO** |
+| `E175MeshMotionResult` | config, pipeline, dafoam driver, **backend:286**, **handoff:91** | **NO** |
+| `E175GeometryVolumeBackend` | **backend:257,361**, dafoam driver, **ladder:57,120,123**, **handoff:25,78** | **NO** |
+| `build_e175_mesh_motion_model` | pipeline, 2 drivers, **backend:303,311**, **handoff:24,189** | **NO** |
+
+Codex's three missing paths are confirmed exactly:
+`geometry_volume_backend.py`, `e175_derivative_ladder.py`,
+`DAFOAM_MPI_RANK0_HANDOFF.md`. **Allowlist 10 -> 13.**
+
+**Two further defects found this turn that Codex had not yet reached:**
+
+1. **The obvious rename target is already taken.**
+   `geometry_volume_backend.py:39` already defines
+   `class GeometryVolumeBackend(Protocol)` — the interface that
+   `E175GeometryVolumeBackend` implements. Renaming to `GeometryVolumeBackend`
+   would collide. Module `__all__` currently lists **both**. Ruling: rename to
+   **`MeshMotionVolumeBackend`** — it says what the class does, keeps the
+   Protocol intact, and drops the E175 prefix. Had this not been caught it would
+   have produced a fifth stop.
+
+2. **`tests/test_geometry_volume_mpi.py` is a tripwire, not an edit target.**
+   It imports `e175_derivative_ladder` at line 507; the ladder does a
+   **top-level** import of `E175GeometryVolumeBackend` at line 56. If the ladder
+   is not updated in lockstep with the rename, that test fails at **collection**
+   — and it is one of the 29 tests verified green in Turn 19. The test file
+   itself imports only `CSDLRecorderBackend`, so it needs no edit and **stays
+   prohibited**; the ladder being allowlisted is sufficient. Flagged explicitly
+   in the prompt so it is not discovered as a mystery failure.
+
+**Architecture ruling for `geometry_volume_backend.py`.** The backend already
+takes `model_files: Any` and `pipeline_config: Any`; the *only* E175 coupling is
+`E175GeometryVariables(**design_variables)` at line 310, inside `_build_model`
+(299-314). The fix is surgical and matches the user's recommendation: the
+constructor gains a **driver-supplied `parameterization_factory`** callback,
+`Callable[[Mapping[str, csdl.Variable]], GeometryParameterization]`, and
+`_build_model` calls it instead of naming an E175 type. The generic backend then
+imports and constructs no E175 configuration type at all. Both E175 drivers
+(`cfd_mesh_dafoam_analysis.py`, `e175_derivative_ladder.py`) supply their own
+factory.
+
+**Principled line drawn, to settle Codex's "is it driver-specific?" question:**
+
+> **The core must be configuration-agnostic; drivers may be E175-specific.**
+
+- **Core, must generalize:** `e175_mesh_motion_config.py`,
+  `e175_mesh_motion_pipeline.py`, and the types in `geometry_volume_backend.py`.
+  `E175GeometryVolumeBackend` is **core**, not driver-specific — it lives in a
+  generic module and is imported by two different drivers — so it generalizes.
+- **Drivers, may keep E175 names:** `cfd_mesh_movement_test.py`,
+  `cfd_mesh_dafoam_analysis.py`, `e175_derivative_ladder.py`. These are
+  configuration-specific by design; renaming them is out of scope.
+
+`build_e175_mesh_motion_model` is added to the rename set
+(-> `build_mesh_motion_model`) and to the acceptance grep: it is the central
+core entry point, and all its consumers are now allowlisted, so leaving it
+E175-named would defeat the clean break. **The grep is widened, never narrowed**
+— per the user's instruction, no stale reference is hidden by scoping.
+
+**Unchanged:** combined M1.1 + M1.2 scope; the 1,076-LOC builder decomposition
+(lines 432-1507); the 300-LOC function ceiling; removal of the 27-line alias
+block (466-492); removal of `search_names=["wing", "HT", "fuselage"]` (571-572);
+deletion of the orphaned `elasticity._validate_partition` (301); derivative gate
+and M1.4 polygon6 tests preserved **exactly**; expected clone count
+**157 passed / 1 skipped**; all unrelated dirty-tree files untouched.
+
+**Turn 21 changed no production or test code.** Only `PLAN.md`, `LOG.md` and
+`CODEX_NEXT.md` were edited; nothing staged or committed.
+
+**M1.1 + M1.2 remain OPEN.**
+
+Status:    closed
+
+---
+
+## Turn 22 — Codex, implementer/reviewer, 2026-09-22
+Scope:     Combined M1.1 + M1.2 implementation
+
+Claimed the turn after auditing the corrected 13-path allowlist and the six
+renamed-symbol consumer map. No additional out-of-allowlist live consumer was
+found during preflight.
+
+Implemented and committed the combined change as **`872c0f1`**
+(`Generalize and decompose mesh motion pipeline`). The explicitly permitted
+core-module renames were taken:
+
+- `e175_mesh_motion_config.py` -> `mesh_motion_config.py`
+- `e175_mesh_motion_pipeline.py` -> `mesh_motion_pipeline.py`
+
+The rename was necessary, not cosmetic: the generic rank-0 backend's acceptance
+criterion forbids every `E175` string, including an import path. The pipeline
+module is now 1,572 LOC (1,588 before); the public builder is **98 LOC** (1,076
+before). Its five named stages are geometry/setup, parameterization/deformation,
+intersections + graph construction, reprojection/reevaluation, and volume
+handoff. The largest function is the preserved `_run_volume_motion` at 271 LOC;
+the largest new stage is `_setup_geometry_and_mesh` at 243 LOC.
+
+**M1.1.** The six old public symbols are absent from tracked `bsm3/` and
+`tests/`. The core now exports `ModelFiles`, `PipelineConfig`,
+`MeshMotionResult`, `GeometryParameterization`, `ComponentSpec`,
+`IntersectionSpec`, `build_mesh_motion_model`, and
+`MeshMotionVolumeBackend`. E175 design-variable names and coefficient builders
+live in the two E175 drivers. The generic backend accepts the ruled
+`parameterization_factory`; the DAFoam driver and derivative ladder pass it
+explicitly. `GeometryVolumeBackend` and `CSDLRecorderBackend` survive unchanged.
+
+**M1.2.** The 27-line uppercase alias block and hardcoded component search are
+gone. Component ownership, free regions, projection behavior, independent
+intersection curves, and coefficient construction are driven by the ordered
+spec lists. The graph-Laplacian, N-gon affine, quadratic-distortion, projection,
+symmetry, volume-motion, quality, and MPI paths retain the same production
+operators. `elasticity._validate_partition` was deleted; its two independent
+copies were untouched. Static AST review found no dead imports or orphaned
+module-level private helpers in the touched files. Ruff remains unavailable in
+the `central_geom` environment, as previously recorded.
+
+**Driver test rewrite.** `tests/test_e175_driver_configuration.py` retained all
+tests and assertions; only the clean-break type imports and the two
+`isinstance` assertions changed from the removed E175 names to
+`PipelineConfig` / `ModelFiles`. No test was added or deleted, so the tracked
+suite count is unchanged.
+
+**Validation (`central_geom`):**
+
+- all six structural greps: empty as required
+- backend protocol/base/new-class import and `__all__`: all resolve
+- package `__all__`: **108/108 resolve**
+- derivative gate + M1.4 polygon6 guard + MPI tripwire + driver tests:
+  **41 passed in 8.65 s**
+- full dirty-tree suite: **171 passed in 30.67 s**
+- genuine clone of `872c0f1`: empty status, empty six-symbol grep,
+  **157 passed / 1 skipped in 32.08 s**
+
+Only the authorized implementation paths were staged. The eight excluded dirty
+files and all unrelated untracked files remain untouched. M1.1 + M1.2 are
+implemented and await Claude's Turn-23 independent review before being marked
+complete.
+
+Status:    closed

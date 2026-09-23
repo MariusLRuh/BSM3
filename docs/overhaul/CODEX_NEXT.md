@@ -1,55 +1,135 @@
-# Review prompt for Claude — Turn 19 (M1.3 acceptance)
+# Review prompt for Claude — Turn 23 (M1.1 + M1.2)
 
-Read `docs/overhaul/PLAN.md` and `docs/overhaul/LOG.md` through Turn 18. Review
-the M1.3 implementation at commit `1e3adfb` and the following documentation
-close commit at `HEAD`.
+Paste into Claude at the repository root.
 
-## Review scope
+---
 
-Independently verify that Codex implemented the Turn-18 prompt without widening
-the approved architecture:
+Review Codex Turn 22 in `docs/overhaul/LOG.md` and independently audit commit
+`872c0f1` (`Generalize and decompose mesh motion pipeline`). Claim
+`## Turn 23 — Claude, planner/reviewer` in `LOG.md` before making any review
+edits and close the turn when finished.
 
-1. Confirm complete removal of the membrane/corotational implementation,
-   inversion penalty, OML log-barrier optimizer, tangential-smoothing API,
-   parameterized-projection path, one-valued surface mode, and obsolete
-   `_dafoam_mpi_refactor_backups/` directory.
-2. Review the additional collapse of `use_corotational_reference=True` in
-   `ElasticityMotionSolver`. Codex found that the required `corotational` grep
-   also covered this one-valued graph-solver option. Verify that making the
-   owner-reference formulation unconditional and deleting its unreachable
-   absolute-formulation branch preserves the active behavior.
-3. Confirm that ordinary `project_onto_oml`, `reevaluate_vertices`,
-   `combine_vertices`, `VertexBatch`, `_project_group`, and
-   `_coefficient_subset` remain; likewise preserve graph Laplacian motion,
-   quadratic distortion, N-gon affine regularization, STEP-to-aerodynamic-mesh
-   support, surface/volume quality diagnostics, and MPI barriers.
-4. Audit `elasticity.py`, `motion.py`, `projection.py`, and `load_stepping.py`
-   for stale imports, exports, fields, and orphaned private helpers.
-5. Check that no excluded dirty or untracked user file entered either commit.
+This is an implementation review, not the M1.5 implementation turn. You may
+make narrowly necessary corrections within the implementation paths below, but
+do not begin mesh-generation work.
 
-## Re-run acceptance
+## What Codex changed
 
-Use the live-code-scoped greps from the Turn-18 prompt. The barrier grep must
-contain exactly seven MPI sites across the four documented files, while
-`tangential_smoothing_step` in the independent SDF implementation must remain.
-Run import/`__all__` smoke checks, focused M1.4 and derivative tests, and the
-full suite in the `central_geom` environment. Ruff was unavailable locally;
-perform an equivalent static review or run Ruff if your environment has it.
+- Renamed the two E175-named core modules:
+  - `e175_mesh_motion_config.py` -> `mesh_motion_config.py`
+  - `e175_mesh_motion_pipeline.py` -> `mesh_motion_pipeline.py`
+- Replaced the six stale public symbols with `ModelFiles`, `PipelineConfig`,
+  `MeshMotionResult`, `GeometryParameterization`, `build_mesh_motion_model`, and
+  `MeshMotionVolumeBackend`.
+- Added driver-owned `list[ComponentSpec]` and `list[IntersectionSpec]`
+  declarations and driver-supplied coefficient builders.
+- Added the ruled `parameterization_factory` callback to the generic rank-0
+  backend and wired both DAFoam consumers.
+- Split the 1,076-LOC builder into five stages. The public builder is 98 LOC;
+  no function in the module exceeds 300 LOC.
+- Removed the alias block, hardcoded core component search, and orphaned
+  `elasticity._validate_partition`.
 
-Codex recorded:
+## Review priorities
 
-- focused suites: 41 + 8 + 10 + 29 passed;
-- dirty working tree: 171 passed in 33.49 s, including excluded untracked tests;
-- genuine no-hardlinks clone: 157 passed, 1 skipped in 32.25 s;
-- implementation commit: `1e3adfb`.
+1. **API generality.** Confirm the generic config, pipeline, and rank-0 backend
+   contain no E175-named type or design-variable dependency. E175-specific
+   names may remain in the three driver modules and their filenames.
+2. **Protocol boundary.** Confirm `GeometryParameterization`, `ComponentSpec`,
+   and `IntersectionSpec` are sufficient for a user-provided configuration;
+   the backend must construct one only through its supplied factory.
+3. **Numerical equivalence.** Compare the new stages against the parent of
+   `872c0f1`. Pay special attention to component ordering, deformation-vertex
+   ordering, intersection ordering, free-region selection, graph-distance
+   seeds, projection metadata, load-step coefficient maps, symmetry
+   reconstruction, volume handoff, and diagnostics. A moved derivative or
+   changed operator is a defect, not a result to reconcile.
+4. **Module rename.** Confirm every tracked import/export was updated and the
+   old modules are genuinely absent. The pipeline appears as delete/add rather
+   than a detected rename because the decomposition reduced textual similarity;
+   judge content, not Git's similarity label.
+5. **Code quality.** Check touched files for dead imports, stale exports,
+   orphaned helpers, accidental public aliases, mutable-state hazards, and
+   functions over 300 LOC. Judge whether the two driver-local parameterization
+   factories are acceptable duplication or require a driver-level shared home;
+   do not move E175 logic back into core.
+6. **Dirty-tree safety.** Confirm commit `872c0f1` contains only the authorized
+   implementation paths and none of the eight excluded dirty files.
 
-## Deliverable
+## Authorized review paths
 
-Append Turn 19 to `docs/overhaul/LOG.md` with findings and the exact commands
-and counts you verified. If M1.3 is accepted, mark it **COMPLETE** in
-`docs/overhaul/PLAN.md` and replace this file with the next bounded Codex prompt.
-Per the established sequence, M1.1 and M1.2 open together next; do not start
-their implementation during review. If you find a defect, leave M1.3 open and
-write a literal corrective allowlist and acceptance criteria. Do not silently
-edit production code unless the review finding itself requires a narrowly
-scoped correction, and report any such edit prominently.
+```
+bsm3/core/boundary_surface_movement/DAFOAM_MPI_RANK0_HANDOFF.md
+bsm3/core/boundary_surface_movement/__init__.py
+bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py
+bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py
+bsm3/core/boundary_surface_movement/e175_derivative_ladder.py
+bsm3/core/boundary_surface_movement/mesh_motion_config.py
+bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py
+bsm3/core/boundary_surface_movement/elasticity.py
+bsm3/core/boundary_surface_movement/geometry_volume_backend.py
+tests/test_e175_driver_configuration.py
+docs/overhaul/PLAN.md
+docs/overhaul/LOG.md
+docs/overhaul/CODEX_NEXT.md
+```
+
+The deleted old module paths are authorized only for verifying their absence.
+`tests/test_geometry_volume_mpi.py`, derivative-gate tests, M1.4 tests, numerical
+kernels, and all unrelated dirty files remain prohibited edit targets. If a
+real defect requires one, invoke the stop rule and report it rather than
+widening scope silently.
+
+## Required checks
+
+Run in the existing `central_geom` environment; the base environment carries an
+incompatible `csdl_alpha` checkout.
+
+```bash
+# Stale API and core coupling: all empty.
+git grep -nE "E175ModelFiles|E175PipelineConfig|E175GeometryVariables|E175MeshMotionResult|E175GeometryVolumeBackend|build_e175_mesh_motion_model" -- bsm3/ tests/
+git grep -n "E175" -- bsm3/core/boundary_surface_movement/geometry_volume_backend.py
+git grep -n 'search_names=\["wing"' -- bsm3/
+git grep -nE "^\s{4}[A-Z][A-Z0-9_]+ = (surface|volume|config|distance|smoothing|distortion|ngon|final)" -- bsm3/core/boundary_surface_movement/
+git grep -n "_validate_partition" -- bsm3/core/boundary_surface_movement/elasticity.py
+git grep -n "e175_mesh_motion_config\|e175_mesh_motion_pipeline" -- bsm3/ tests/
+
+# Public exports.
+conda run -n central_geom python -c "import bsm3.core.boundary_surface_movement.geometry_volume_backend as g; assert hasattr(g,'GeometryVolumeBackend'); assert hasattr(g,'CSDLRecorderBackend'); assert hasattr(g,'MeshMotionVolumeBackend'); assert not [n for n in g.__all__ if not hasattr(g,n)]"
+conda run -n central_geom python -c "import bsm3.core.boundary_surface_movement as m; [getattr(m,n) for n in m.__all__]; print(len(m.__all__))"
+
+# Function-size ceiling.
+python - <<'PY'
+import ast, glob
+for path in glob.glob("bsm3/core/boundary_surface_movement/*mesh_motion_pipeline.py"):
+    tree = ast.parse(open(path).read())
+    over = [(node.name, node.end_lineno-node.lineno+1) for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.end_lineno-node.lineno+1 > 300]
+    print(path, over if over else "none")
+PY
+
+# Numerical guards and read-only MPI tripwire.
+conda run -n central_geom python -m pytest -q tests/test_derivative_gate.py
+conda run -n central_geom python -m pytest -q tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
+conda run -n central_geom python -m pytest -q tests/test_geometry_volume_mpi.py
+conda run -n central_geom python -m pytest -q tests
+```
+
+Independently repeat the genuine-clone validation from commit `872c0f1`. The
+clone must be clean, the six-symbol grep empty, and the result exactly
+**157 passed / 1 skipped**. Codex measured **32.08 s**. The dirty working tree
+contains an additional untracked test and should remain **171 passed**; do not
+confuse that expected difference with test-count drift.
+
+## Deliverables
+
+- Append the complete review, commands, counts, timings, and any corrections to
+  Turn 23 in `LOG.md`.
+- If the implementation is sound, mark M1.1 and M1.2 **COMPLETE** in `PLAN.md`.
+- If it is not sound, leave them open and write one exact corrective prompt.
+- Replace `CODEX_NEXT.md` with one complete, paste-ready next prompt. If the
+  review passes, that prompt should open M1.5, but first audit its retained
+  mesh-generation roots, tests, assets, and literal allowlist so Codex is not
+  forced into another avoidable stop.
+- Do not implement M1.5 during this review turn.
