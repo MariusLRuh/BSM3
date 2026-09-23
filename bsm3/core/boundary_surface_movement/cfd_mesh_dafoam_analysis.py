@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 # Support module execution and direct execution by absolute file path.
 if __package__ in (None, ""):
@@ -21,6 +21,16 @@ if __package__ in (None, ""):
 import csdl_alpha as csdl
 import numpy as np
 
+from bsm3.component_parameters import (
+    FuselageParameters,
+    TailParameters,
+    WingParameters,
+)
+from bsm3.core.boundary_surface_movement import (
+    AxisRange,
+    ComponentFreeRegion,
+    deform_geometry,
+)
 from bsm3.core.boundary_surface_movement.dafoam_csdl import (
     DAFoamAnalysisOperation,
     PYDAFoamBackend,
@@ -28,7 +38,7 @@ from bsm3.core.boundary_surface_movement.dafoam_csdl import (
     make_patch_velocity,
 )
 from bsm3.core.boundary_surface_movement.geometry_volume_backend import (
-    E175GeometryVolumeBackend,
+    MeshMotionVolumeBackend,
     read_gmsh_volume_point_count,
 )
 from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
@@ -38,20 +48,22 @@ from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
 from bsm3.core.boundary_surface_movement.geometry_volume_operation import (
     GeometryVolumeOperation,
 )
-from bsm3.core.boundary_surface_movement.e175_mesh_motion_config import (
-    E175GeometryVariables,
-    E175MeshMotionResult,
-    E175ModelFiles,
-    E175PipelineConfig,
+from bsm3.core.boundary_surface_movement.mesh_motion_config import (
+    ComponentSpec,
+    DeclarativeGeometryParameterization,
     FiniteDifferenceConfig,
     GraphDistanceWeightingConfig,
+    IntersectionSpec,
+    MeshMotionResult,
     MeshQualityOutputConfig,
+    ModelFiles,
+    PipelineConfig,
     SurfaceMotionConfig,
     VisualizationConfig,
     VolumeMotionConfig,
 )
-from bsm3.core.boundary_surface_movement.e175_mesh_motion_pipeline import (
-    build_e175_mesh_motion_model,
+from bsm3.core.boundary_surface_movement.mesh_motion_pipeline import (
+    build_mesh_motion_model,
     run_fd_sweep,
     select_fd_objective,
 )
@@ -75,7 +87,7 @@ OPENVSP_MESH_DIRECTORY = ASSET_DIRECTORY / "openvsp_euler_volume_mesh"
 # ---------------------------------------------------------------------------
 # 1. Geometry and matching mesh files
 # ---------------------------------------------------------------------------
-MODEL_FILES = E175ModelFiles(
+MODEL_FILES = ModelFiles(
     geometry_step_file=ASSET_DIRECTORY / "embraer_175_no_winglets.stp",
     surface_mesh_file=OPENVSP_MESH_DIRECTORY / "e175_openvsp_aircraft_wall.msh",
     volume_mesh_file=OPENVSP_MESH_DIRECTORY / "e175_euler_volume.msh",
@@ -102,38 +114,181 @@ GEOMETRY_VALUES = {
 }
 
 
-def create_geometry_design_variables() -> E175GeometryVariables:
-    variables = E175GeometryVariables(
-        **{
-            name: csdl.Variable(name=name, value=value)
-            for name, value in GEOMETRY_VALUES.items()
-        }
+def create_geometry_parameterization_from_variables(
+    variables: Mapping[str, csdl.Variable],
+) -> DeclarativeGeometryParameterization:
+    """Bind E175 design variables to declarative component behavior.
+
+    Parameters
+    ----------
+    variables
+        Named CSDL variables owned by the calling recorder.
+
+    Returns
+    -------
+    DeclarativeGeometryParameterization
+        Driver-owned component, intersection, and deformation declarations.
+    """
+
+    variables = dict(variables)
+
+    def wing_coefficients(component, fraction, intersections):
+        vertices = intersections["wing_fuse"]
+        leading = vertices[int(np.argmin(vertices[:, 0]))]
+        trailing = vertices[int(np.argmax(vertices[:, 0]))]
+        pivot = leading + 0.25 * (trailing - leading)
+        pivot[1] = 0.0
+        return deform_geometry(
+            component=component,
+            parameters=WingParameters(
+                translation_x=fraction * variables["wing_translation_x"],
+                rotation_y_degrees=(
+                    fraction * variables["wing_rotation_degrees"]
+                ),
+                area=70.0 + fraction * (variables["wing_area"] - 70.0),
+                aspect_ratio=(
+                    8.4 + fraction * (variables["wing_aspect_ratio"] - 8.4)
+                ),
+                reference_area=70.0,
+                reference_aspect_ratio=8.4,
+                pivot=pivot.reshape((1, 3)),
+                spanwise_scaling_root=float(
+                    np.median(np.abs(vertices[:, 1]))
+                ),
+            ),
+        )
+
+    def tail_coefficients(component, fraction, intersections):
+        vertices = intersections["tail_fuse"]
+        leading = vertices[int(np.argmin(vertices[:, 0]))]
+        trailing = vertices[int(np.argmax(vertices[:, 0]))]
+        pivot = leading + 0.25 * (trailing - leading)
+        pivot[1] = 0.0
+        return deform_geometry(
+            component=component,
+            parameters=TailParameters(
+                rotation_y_degrees=(
+                    fraction * variables["tail_rotation_degrees"]
+                ),
+                pivot=pivot.reshape((1, 3)),
+            ),
+        )
+
+    def fuselage_coefficients(component, fraction, intersections):
+        del intersections
+        control_points = np.vstack(
+            [
+                np.asarray(
+                    component.functions[key].coefficients.value, dtype=float
+                ).reshape((-1, 3))
+                for key in sorted(component.functions)
+            ]
+        )
+        pivot = 0.5 * (
+            control_points.min(axis=0) + control_points.max(axis=0)
+        )
+        pivot[1] = 0.0
+        return deform_geometry(
+            component=component,
+            parameters=FuselageParameters(
+                diameter_scale=(
+                    1.0
+                    + fraction
+                    * (variables["fuselage_diameter_scale"] - 1.0)
+                ),
+                pivot=pivot.reshape((1, 3)),
+            ),
+        )
+
+    return DeclarativeGeometryParameterization(
+        design_variables=variables,
+        component_specs=[
+            ComponentSpec(
+                name="wing",
+                search_name="wing",
+                coefficient_builder=wing_coefficients,
+                free_region_factory=lambda component: ComponentFreeRegion(
+                    component=component,
+                    y=AxisRange(upper=0.3, mode="abs"),
+                ),
+                projection_mode="lifting_surface",
+            ),
+            ComponentSpec(
+                name="tail",
+                search_name="HT",
+                coefficient_builder=tail_coefficients,
+                free_region_factory=lambda component: ComponentFreeRegion(
+                    component=component,
+                    y=AxisRange(upper=0.3, mode="abs"),
+                ),
+                projection_name="horizontal_tail",
+                projection_mode="lifting_surface",
+            ),
+            ComponentSpec(
+                name="fuselage",
+                search_name="fuselage",
+                coefficient_builder=fuselage_coefficients,
+                free_region_factory=lambda component: ComponentFreeRegion(
+                    component=component,
+                    x=AxisRange(lower=0.05, upper=0.97, mode="extent"),
+                ),
+            ),
+        ],
+        intersection_specs=[
+            IntersectionSpec(
+                name="wing_fuse",
+                driving_component="wing",
+                query_component="fuselage",
+                solver_name="wing_fuselage",
+            ),
+            IntersectionSpec(
+                name="tail_fuse",
+                driving_component="tail",
+                query_component="fuselage",
+                solver_name="tail_fuselage",
+            ),
+        ],
     )
-    variables.wing_translation_x.set_as_design_variable(
+
+
+def create_geometry_parameterization() -> DeclarativeGeometryParameterization:
+    """Instantiate and register every E175 geometry design variable.
+
+    Returns
+    -------
+    DeclarativeGeometryParameterization
+        Driver-owned variables, components, intersections, and deformations.
+    """
+
+    variables = {
+        name: csdl.Variable(name=name, value=value)
+        for name, value in GEOMETRY_VALUES.items()
+    }
+    variables["wing_translation_x"].set_as_design_variable(
         lower=-4.0, upper=4.0, scaler=1.0 / 3.0
     )
-    variables.wing_rotation_degrees.set_as_design_variable(
+    variables["wing_rotation_degrees"].set_as_design_variable(
         lower=-5.0, upper=5.0, scaler=1.0 / 5.0
     )
-    variables.tail_rotation_degrees.set_as_design_variable(
+    variables["tail_rotation_degrees"].set_as_design_variable(
         lower=-8.0, upper=8.0, scaler=1.0 / 8.0
     )
-    variables.wing_area.set_as_design_variable(
+    variables["wing_area"].set_as_design_variable(
         lower=56.0, upper=84.0, scaler=1.0 / 70.0
     )
-    variables.wing_aspect_ratio.set_as_design_variable(
+    variables["wing_aspect_ratio"].set_as_design_variable(
         lower=6.3, upper=10.08, scaler=1.0 / 8.4
     )
-    variables.fuselage_diameter_scale.set_as_design_variable(
+    variables["fuselage_diameter_scale"].set_as_design_variable(
         lower=0.8, upper=1.25, scaler=1.0
     )
-    return variables
+    return create_geometry_parameterization_from_variables(variables)
 
 
 # ---------------------------------------------------------------------------
 # 3. Surface and volume deformation settings
 # ---------------------------------------------------------------------------
-MESH_MOTION = E175PipelineConfig(
+MESH_MOTION = PipelineConfig(
     surface_motion=SurfaceMotionConfig(
         load_steps=2,
         stiffening_exponent=1.5,
@@ -142,7 +297,6 @@ MESH_MOTION = E175PipelineConfig(
             beta=2.0,
             length_scale=4.0,
             decay="exp",
-            seeds="both",
         ),
     ),
     volume_motion=VolumeMotionConfig(
@@ -274,7 +428,7 @@ END_TO_END_DERIVATIVE_CHECK = EndToEndDerivativeCheckConfig(
 
 @dataclass
 class E175DAFoamResult:
-    mesh_motion: E175MeshMotionResult
+    mesh_motion: MeshMotionResult
     flow_outputs: dict[str, csdl.Variable]
     cl: csdl.Variable
     cd: csdl.Variable
@@ -291,7 +445,7 @@ def _require_case_directory(config: OpenFOAMCaseConfig) -> Path:
 
 def prepare_openfoam_case(
     config: OpenFOAMCaseConfig,
-    model_files: E175ModelFiles,
+    model_files: ModelFiles,
     flow: FlowConfig,
     comm,
 ) -> Path:
@@ -341,7 +495,7 @@ def prepare_openfoam_case(
 def create_dafoam_backend(
     flow: FlowConfig,
     case: OpenFOAMCaseConfig,
-    model_files: E175ModelFiles,
+    model_files: ModelFiles,
     comm,
 ) -> PYDAFoamBackend:
     case_directory = prepare_openfoam_case(case, model_files, flow, comm)
@@ -372,9 +526,9 @@ def create_dafoam_backend(
 
 def build_cfd_analysis(
     recorder: csdl.Recorder,
-    model_files: E175ModelFiles,
-    geometry_variables: E175GeometryVariables,
-    mesh_motion: E175PipelineConfig,
+    model_files: ModelFiles,
+    geometry_parameterization: DeclarativeGeometryParameterization,
+    mesh_motion: PipelineConfig,
     flow: FlowConfig,
     backend: PYDAFoamBackend,
 ) -> E175DAFoamResult:
@@ -411,10 +565,10 @@ def build_cfd_analysis(
             variable.add_name(f"dafoam_{name}")
         return outputs
 
-    motion_result = build_e175_mesh_motion_model(
+    motion_result = build_mesh_motion_model(
         recorder=recorder,
         model_files=model_files,
-        geometry_variables=geometry_variables,
+        geometry_parameterization=geometry_parameterization,
         config=mesh_motion,
         aerodynamic_analysis=aerodynamic_analysis,
         aerodynamic_volume_method="elasticity",
@@ -430,9 +584,9 @@ def build_cfd_analysis(
 
 def build_cfd_analysis_rank0(
     recorder: csdl.Recorder,
-    model_files: E175ModelFiles,
-    geometry_variables: E175GeometryVariables,
-    mesh_motion: E175PipelineConfig,
+    model_files: ModelFiles,
+    geometry_parameterization: DeclarativeGeometryParameterization,
+    mesh_motion: PipelineConfig,
     flow: FlowConfig,
     backend: PYDAFoamBackend,
     comm,
@@ -444,7 +598,7 @@ def build_cfd_analysis_rank0(
     """Build the rank-0 geometry->volume + distributed-DAFoam graph.
 
     The whole geometry -> surface -> volume pipeline is encapsulated in an
-    ``E175GeometryVolumeBackend`` that lives only on rank 0.  The outer CSDL
+    ``MeshMotionVolumeBackend`` that lives only on rank 0.  The outer CSDL
     graph is the two-custom-operation chain ``d -> X -> (CL, CD)``:
     ``GeometryVolumeOperation`` runs the mesh motion on rank 0 and broadcasts the
     global coordinates; ``DAFoamAnalysisOperation`` extracts each rank's local
@@ -472,7 +626,7 @@ def build_cfd_analysis_rank0(
     num_points = comm.bcast(num_points, root=0)
     output_shape = (int(num_points), 3)
 
-    design_variable_map = geometry_variables.as_dict()
+    design_variable_map = dict(geometry_parameterization.design_variables)
     # Derive the declared shapes from the actual CSDL variables (scalar design
     # variables are shape (1,), not ()), so the VJP cotangent shapes match.
     design_variable_specs = {
@@ -482,10 +636,13 @@ def build_cfd_analysis_rank0(
 
     geometry_backend = None
     if is_root(comm):
-        geometry_backend = E175GeometryVolumeBackend(
+        geometry_backend = MeshMotionVolumeBackend(
             model_files=model_files,
             geometry_values=geometry_values,
             pipeline_config=mesh_motion,
+            parameterization_factory=(
+                create_geometry_parameterization_from_variables
+            ),
             aerodynamic_volume_method="elasticity",
         )
 
@@ -556,7 +713,7 @@ def run_end_to_end_derivative_check(
 
 
 def _quality_payload(
-    result: E175MeshMotionResult,
+    result: MeshMotionResult,
     config: MeshQualityOutputConfig,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
@@ -596,12 +753,12 @@ def main() -> E175DAFoamResult:
 
     recorder = csdl.Recorder(inline=True)
     recorder.start()
-    geometry_variables = create_geometry_design_variables()
+    geometry_parameterization = create_geometry_parameterization()
     if GEOMETRY_VOLUME_MODE == "rank0":
         result = build_cfd_analysis_rank0(
             recorder,
             MODEL_FILES,
-            geometry_variables,
+            geometry_parameterization,
             MESH_MOTION,
             FLOW,
             backend,
@@ -614,7 +771,7 @@ def main() -> E175DAFoamResult:
         result = build_cfd_analysis(
             recorder,
             MODEL_FILES,
-            geometry_variables,
+            geometry_parameterization,
             MESH_MOTION,
             FLOW,
             backend,
@@ -680,7 +837,9 @@ def main() -> E175DAFoamResult:
             "mpi_ranks": int(comm.size),
             "geometry_design_variables": {
                 name: np.asarray(variable.value).tolist()
-                for name, variable in geometry_variables.as_dict().items()
+                for name, variable in (
+                    geometry_parameterization.design_variables.items()
+                )
             },
             "flow_config": asdict(FLOW),
             "mesh_quality": _quality_payload(

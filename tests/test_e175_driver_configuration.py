@@ -11,10 +11,10 @@ from bsm3.core.boundary_surface_movement.cfd_mesh_dafoam_analysis import (
     configure_end_to_end_derivative_check,
     run_end_to_end_derivative_check,
 )
-from bsm3.core.boundary_surface_movement.e175_mesh_motion_config import (
-    E175ModelFiles,
-    E175PipelineConfig,
+from bsm3.core.boundary_surface_movement.mesh_motion_config import (
+    ModelFiles,
     NgonAffineRegularizationConfig,
+    PipelineConfig,
     SurfaceMotionConfig,
     VolumeMotionConfig,
 )
@@ -50,7 +50,7 @@ def test_public_e175_drivers_do_not_use_cli_configuration():
 
 
 def test_default_volume_motion_is_final_only_and_differentiable():
-    config = E175PipelineConfig()
+    config = PipelineConfig()
     assert config.surface_motion.graph_distance_weighting.enabled
     assert config.volume_motion.mode == "elasticity"
     assert config.volume_motion.load_mode == "final"
@@ -64,7 +64,7 @@ def test_public_drivers_expose_explicit_matching_model_files():
     )
 
     movement_files = cfd_mesh_movement_test.MODEL_FILES
-    assert isinstance(movement_files, E175ModelFiles)
+    assert isinstance(movement_files, ModelFiles)
     assert movement_files.geometry_step_file.name == "embraer_175_no_winglets.stp"
     assert (
         movement_files.surface_mesh_file.name
@@ -87,7 +87,7 @@ def test_public_drivers_expose_explicit_matching_model_files():
     assert cfd_mesh_movement_test.MESH_MOTION.symmetry
 
     dafoam_files = cfd_mesh_dafoam_analysis.MODEL_FILES
-    assert isinstance(dafoam_files, E175ModelFiles)
+    assert isinstance(dafoam_files, ModelFiles)
     assert dafoam_files.geometry_step_file.name == "embraer_175_no_winglets.stp"
     assert dafoam_files.surface_mesh_file.name == "e175_openvsp_aircraft_wall.msh"
     assert dafoam_files.volume_mesh_file.name == "e175_euler_volume.msh"
@@ -105,8 +105,6 @@ def test_public_drivers_expose_explicit_matching_model_files():
     ).read_text(encoding="utf-8")
     assert "mesh_file=model_files.volume_mesh_file" in dafoam_source
     assert "read_gmsh22_volume(model_files.volume_mesh_file)" in dafoam_source
-
-
 @pytest.mark.integration
 def test_local_r4_driver_assets_exist_when_available():
     """Validate the local R4 asset set without requiring it in fresh clones."""

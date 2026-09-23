@@ -21,8 +21,8 @@ d  ── GeometryVolumeOperation ──▶  X(d)  ── DAFoamAnalysisOperatio
        broadcasts global X)                extracts local volCoord)
 ```
 
-* **Geometry → surface → volume** (`build_e175_mesh_motion_model`) is wrapped in
-  `E175GeometryVolumeBackend`, which lives **only on rank 0**. It builds the
+* **Geometry → surface → volume** (`build_mesh_motion_model`) is wrapped in
+  `MeshMotionVolumeBackend`, which lives **only on rank 0**. It builds the
   existing differentiable mesh-motion model once (CAD import, baseline projection
   ownership, seams, elasticity assembly/factorization) and reuses it for every
   forward and reverse evaluation.
@@ -75,7 +75,7 @@ Collectives:
 | File | Purpose |
 |---|---|
 | `geometry_volume_mpi.py` | `SerialComm` fallback, `run_on_root`, typed `broadcast_array`, forward/reverse scatter (`extract_local_coordinates`/`assemble_local_gradient`), `reduce_gradient` (root/replicated), `verify_replicated_values`. mpi4py imported lazily. |
-| `geometry_volume_backend.py` | `CSDLRecorderBackend` (matrix-free forward/VJP engine, forward caching + DV-match invalidation), `E175GeometryVolumeBackend`, `read_gmsh_volume_point_count`. |
+| `geometry_volume_backend.py` | `CSDLRecorderBackend` (matrix-free forward/VJP engine, forward caching + DV-match invalidation), `MeshMotionVolumeBackend`, `read_gmsh_volume_point_count`. |
 | `geometry_volume_operation.py` | `GeometryVolumeOperation` (rank-0 forward + broadcast) and `GeometryVolumeVJP` (rank-0 VJP + DV-cotangent broadcast), CustomExplicitOperationBeta contract. |
 | `forward_only_fd_checker.py` | FD-first checker; stage markers; fd-level `"Solving Linear Equation"` guard; scale-aware steps; degree/radian check. |
 | `e175_derivative_ladder.py` | Levels 0–6, cluster-run. |
@@ -88,7 +88,7 @@ Collectives:
 |---|---|
 | `dafoam_csdl.py` | `volume_gradient_ownership` (replicated/root) via shared helpers; deterministic FD mode (`set_deterministic_baseline`, `deterministic_fd_mode`, `reset_primal_state`); adjoint preconditioner invalidation (`invalidate_adjoint_on_primal`). |
 | `cfd_mesh_dafoam_analysis.py` | `GEOMETRY_VOLUME_MODE` (`rank0`/`replicated`), `build_cfd_analysis_rank0`, gradient-ownership pass-through, main() dispatch, guards against the legacy CSDL FD paths in rank-0 mode. |
-| `geometry_volume_backend.py` | — (retains last `E175MeshMotionResult` for the driver's quality JSON). |
+| `geometry_volume_backend.py` | — (retains the last `MeshMotionResult` for the driver's quality JSON). |
 | `tests/test_dafoam_csdl.py` | set `volume_gradient_ownership` on the hand-built backend. |
 
 ## 4. What was validated locally
@@ -186,7 +186,7 @@ Lustre scratch, with `run_metadata.txt` (git commit, rank count, host) and an
 
 ## 8. Known limitations / follow-ups
 
-1. The surface/volume mesh-quality gate in `build_e175_mesh_motion_model` runs
+1. The surface/volume mesh-quality gate in `build_mesh_motion_model` runs
    once, when the backend recorder is built (at the baseline design point), not
    on every perturbed forward. It still guards the analysis point; perturbed FD
    samples are not re-gated.

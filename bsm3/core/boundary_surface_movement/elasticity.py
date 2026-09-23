@@ -298,20 +298,6 @@ def element_neighbors(mesh, vertex_ids: np.ndarray) -> np.ndarray:
     return np.asarray(sorted(neighbors), dtype=np.int64)
 
 
-def _validate_partition(
-    free_ids: np.ndarray, prescribed_ids: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    free_ids = np.asarray(free_ids, dtype=np.int64).reshape(-1)
-    prescribed_ids = np.asarray(prescribed_ids, dtype=np.int64).reshape(-1)
-    if np.intersect1d(free_ids, prescribed_ids).size:
-        raise ValueError("free_ids and prescribed_ids must be disjoint.")
-    if np.unique(free_ids).size != free_ids.size:
-        raise ValueError("free_ids must not contain duplicates.")
-    if np.unique(prescribed_ids).size != prescribed_ids.size:
-        raise ValueError("prescribed_ids must not contain duplicates.")
-    return free_ids, prescribed_ids
-
-
 def _edge_weights(
     mesh_data,
     points: np.ndarray,

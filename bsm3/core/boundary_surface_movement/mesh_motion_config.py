@@ -1,17 +1,17 @@
-"""Configuration and result types for the E175 mesh-motion examples."""
+"""Configuration, parameterization, and result types for mesh motion."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping, Protocol
 
 import csdl_alpha as csdl
 import numpy as np
 
 
 @dataclass(frozen=True)
-class E175ModelFiles:
+class ModelFiles:
     """Geometry and surface/optional-volume mesh inputs for one analysis.
 
     When volume motion is enabled, ``surface_mesh_file`` must be the
@@ -52,15 +52,24 @@ class GraphDistanceWeightingConfig:
     cap: float = np.inf
     decay: str = "exp"
     power: float = 1.0
-    seeds: str = "both"
+    seed_intersections: tuple[str, ...] | None = None
 
     def __post_init__(self):
         if self.beta < 0.0 or self.length_scale <= 0.0 or self.cap < 1.0:
             raise ValueError("Invalid graph-distance weighting parameters.")
         if self.decay not in ("exp", "rational"):
             raise ValueError("Distance decay must be exp or rational.")
-        if self.seeds not in ("wing", "tail", "both"):
-            raise ValueError("Distance seeds must be wing, tail, or both.")
+        if self.seed_intersections is not None:
+            names = tuple(str(name) for name in self.seed_intersections)
+            if not names or any(not name for name in names):
+                raise ValueError(
+                    "Distance seed_intersections must contain nonempty names."
+                )
+            if len(set(names)) != len(names):
+                raise ValueError(
+                    "Distance seed_intersections must not contain duplicates."
+                )
+            object.__setattr__(self, "seed_intersections", names)
 
 
 @dataclass(frozen=True)
@@ -108,9 +117,6 @@ class SurfaceMotionConfig:
     ngon_affine: NgonAffineRegularizationConfig = field(
         default_factory=NgonAffineRegularizationConfig
     )
-    wing_free_span_fraction: float = 0.3
-    tail_free_span_fraction: float = 0.3
-    fuselage_free_x_range: tuple[float, float] = (0.05, 0.97)
 
     def __post_init__(self):
         if self.load_steps < 1:
@@ -210,7 +216,7 @@ class FiniteDifferenceConfig:
 
 
 @dataclass(frozen=True)
-class E175PipelineConfig:
+class PipelineConfig:
     surface_motion: SurfaceMotionConfig = field(
         default_factory=SurfaceMotionConfig
     )
@@ -249,29 +255,117 @@ class E175PipelineConfig:
 
 
 @dataclass(frozen=True)
-class E175GeometryVariables:
-    wing_translation_x: csdl.Variable
-    wing_rotation_degrees: csdl.Variable
-    tail_rotation_degrees: csdl.Variable
-    wing_area: csdl.Variable
-    wing_aspect_ratio: csdl.Variable
-    fuselage_diameter_scale: csdl.Variable
+class ComponentSpec:
+    """Describe one geometry component without embedding aircraft-specific logic.
 
-    def as_dict(self) -> dict[str, csdl.Variable]:
-        return {
-            "wing_translation_x": self.wing_translation_x,
-            "wing_rotation_degrees": self.wing_rotation_degrees,
-            "tail_rotation_degrees": self.tail_rotation_degrees,
-            "wing_area": self.wing_area,
-            "wing_aspect_ratio": self.wing_aspect_ratio,
-            "fuselage_diameter_scale": self.fuselage_diameter_scale,
-        }
+    Parameters
+    ----------
+    name
+        Stable identifier used in mappings and cache keys.
+    search_name
+        Name supplied to the geometry importer's component search.
+    coefficient_builder
+        Driver-supplied callable returning the component coefficients for one
+        load fraction. It receives the imported component, the load fraction,
+        and the baseline intersection-vertex mapping.
+    free_region_factory
+        Driver-supplied callable creating the component's graph free region.
+    projection_name
+        Diagnostic name used by projection and reevaluation metadata.
+    projection_mode
+        ``"lifting_surface"`` uses the configured patch-side restriction;
+        ``"all"`` projects against every patch on the component.
+    """
+
+    name: str
+    search_name: str
+    coefficient_builder: Callable[[Any, float, Mapping[str, np.ndarray]], Any]
+    free_region_factory: Callable[[Any], Any]
+    projection_name: str | None = None
+    projection_mode: str = "all"
+
+    def __post_init__(self):
+        if not self.name or not self.name.isidentifier():
+            raise ValueError("ComponentSpec.name must be a nonempty identifier.")
+        if not self.search_name:
+            raise ValueError("ComponentSpec.search_name cannot be empty.")
+        if self.projection_mode not in ("lifting_surface", "all"):
+            raise ValueError(
+                "ComponentSpec.projection_mode must be lifting_surface or all."
+            )
+        if self.projection_name is None:
+            object.__setattr__(self, "projection_name", self.name)
+
+
+@dataclass(frozen=True)
+class IntersectionSpec:
+    """Describe one independent closed component-intersection curve."""
+
+    name: str
+    driving_component: str
+    query_component: str
+    bisection_search_direction: str = "u"
+    solver_name: str | None = None
+
+    def __post_init__(self):
+        if not self.name or not self.name.isidentifier():
+            raise ValueError(
+                "IntersectionSpec.name must be a nonempty identifier."
+            )
+        if self.driving_component == self.query_component:
+            raise ValueError(
+                "An intersection must use different driving and query components."
+            )
+        if self.solver_name is None:
+            object.__setattr__(self, "solver_name", self.name)
+
+
+class GeometryParameterization(Protocol):
+    """User-supplied geometry variables and declarative component behavior."""
+
+    design_variables: Mapping[str, csdl.Variable]
+    component_specs: list[ComponentSpec]
+    intersection_specs: list[IntersectionSpec]
+
+
+@dataclass(frozen=True)
+class DeclarativeGeometryParameterization:
+    """Simple concrete implementation of :class:`GeometryParameterization`."""
+
+    design_variables: Mapping[str, csdl.Variable]
+    component_specs: list[ComponentSpec]
+    intersection_specs: list[IntersectionSpec]
+
+    def __post_init__(self):
+        design_variables = dict(self.design_variables)
+        component_specs = list(self.component_specs)
+        intersection_specs = list(self.intersection_specs)
+        if not design_variables:
+            raise ValueError("At least one geometry design variable is required.")
+        component_names = [spec.name for spec in component_specs]
+        if not component_names or len(set(component_names)) != len(component_names):
+            raise ValueError("ComponentSpec names must be nonempty and unique.")
+        intersection_names = [spec.name for spec in intersection_specs]
+        if len(set(intersection_names)) != len(intersection_names):
+            raise ValueError("IntersectionSpec names must be unique.")
+        known = set(component_names)
+        for spec in intersection_specs:
+            referenced = {spec.driving_component, spec.query_component}
+            if not referenced.issubset(known):
+                missing = ", ".join(sorted(referenced.difference(known)))
+                raise ValueError(
+                    f"IntersectionSpec {spec.name!r} references unknown "
+                    f"components: {missing}."
+                )
+        object.__setattr__(self, "design_variables", design_variables)
+        object.__setattr__(self, "component_specs", component_specs)
+        object.__setattr__(self, "intersection_specs", intersection_specs)
 
 
 @dataclass
-class E175MeshMotionResult:
-    model_files: E175ModelFiles
-    geometry_variables: E175GeometryVariables
+class MeshMotionResult:
+    model_files: ModelFiles
+    geometry_parameterization: GeometryParameterization
     initial_surface_coordinates: np.ndarray
     preprojected_surface_coordinates: csdl.Variable
     surface_coordinates: csdl.Variable
@@ -285,15 +379,18 @@ class E175MeshMotionResult:
 
 
 __all__ = [
+    "ComponentSpec",
+    "DeclarativeGeometryParameterization",
     "DistortionRegularizationConfig",
-    "E175GeometryVariables",
-    "E175MeshMotionResult",
-    "E175ModelFiles",
-    "E175PipelineConfig",
     "FiniteDifferenceConfig",
+    "GeometryParameterization",
     "GraphDistanceWeightingConfig",
+    "IntersectionSpec",
+    "MeshMotionResult",
     "MeshQualityOutputConfig",
+    "ModelFiles",
     "NgonAffineRegularizationConfig",
+    "PipelineConfig",
     "SurfaceMotionConfig",
     "VisualizationConfig",
     "VolumeMotionConfig",

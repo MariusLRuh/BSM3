@@ -34,6 +34,8 @@ import numpy as np
 
 import csdl_alpha as csdl
 
+from .mesh_motion_config import GeometryParameterization
+
 
 @runtime_checkable
 class GeometryVolumeBackend(Protocol):
@@ -252,12 +254,12 @@ class CSDLRecorderBackend:
 
 
 # ---------------------------------------------------------------------------
-# E175 reference backend
+# Mesh-motion pipeline backend
 # ---------------------------------------------------------------------------
-class E175GeometryVolumeBackend(CSDLRecorderBackend):
-    """Live E175 geometry -> surface -> volume backend for rank 0.
+class MeshMotionVolumeBackend(CSDLRecorderBackend):
+    """Live geometry -> surface -> volume backend for rank 0.
 
-    Builds the existing differentiable E175 mesh-motion model (without any
+    Builds a differentiable mesh-motion model (without any
     downstream aerodynamic analysis) inside a private recorder and exposes its
     final elasticity volume coordinates as ``X(d)``.  The heavy one-time setup
     (CAD import, baseline projection ownership, seam identification, elasticity
@@ -271,19 +273,23 @@ class E175GeometryVolumeBackend(CSDLRecorderBackend):
         geometry_values: Mapping[str, float],
         pipeline_config: Any,
         *,
+        parameterization_factory: Callable[
+            [Mapping[str, csdl.Variable]], GeometryParameterization
+        ],
         aerodynamic_volume_method: str = "elasticity",
         build_eagerly: bool = False,
     ):
         self._model_files = model_files
         self._geometry_values = dict(geometry_values)
         self._pipeline_config = pipeline_config
+        self._parameterization_factory = parameterization_factory
         self._aerodynamic_volume_method = str(aerodynamic_volume_method)
         self._last_mesh_motion_result: Any = None
         super().__init__(self._build_model, build_eagerly=build_eagerly)
 
     @property
     def last_mesh_motion_result(self) -> Any:
-        """The most recent :class:`E175MeshMotionResult` (root rank only).
+        """The most recent :class:`MeshMotionResult` (root rank only).
 
         Populated when the private recorder is first built (which runs one
         inline forward, including the surface/volume mesh-quality gates) so the
@@ -296,22 +302,21 @@ class E175GeometryVolumeBackend(CSDLRecorderBackend):
         self, recorder: csdl.Recorder
     ) -> "tuple[dict[str, csdl.Variable], csdl.Variable]":
         # Imported here so the module imports without the mesh-motion stack.
-        from bsm3.core.boundary_surface_movement.e175_mesh_motion_config import (
-            E175GeometryVariables,
-        )
-        from bsm3.core.boundary_surface_movement.e175_mesh_motion_pipeline import (
-            build_e175_mesh_motion_model,
+        from bsm3.core.boundary_surface_movement.mesh_motion_pipeline import (
+            build_mesh_motion_model,
         )
 
         design_variables = {
             name: csdl.Variable(name=name, value=float(value))
             for name, value in self._geometry_values.items()
         }
-        geometry_variables = E175GeometryVariables(**design_variables)
-        result = build_e175_mesh_motion_model(
+        geometry_parameterization = self._parameterization_factory(
+            design_variables
+        )
+        result = build_mesh_motion_model(
             recorder=recorder,
             model_files=self._model_files,
-            geometry_variables=geometry_variables,
+            geometry_parameterization=geometry_parameterization,
             config=self._pipeline_config,
             aerodynamic_analysis=None,
             aerodynamic_volume_method=self._aerodynamic_volume_method,
@@ -358,6 +363,6 @@ def read_gmsh_volume_point_count(volume_mesh_file: Any) -> int:
 __all__ = [
     "GeometryVolumeBackend",
     "CSDLRecorderBackend",
-    "E175GeometryVolumeBackend",
+    "MeshMotionVolumeBackend",
     "read_gmsh_volume_point_count",
 ]

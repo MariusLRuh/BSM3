@@ -49,12 +49,9 @@ if __package__ in (None, ""):
 from bsm3.core.boundary_surface_movement import cfd_mesh_dafoam_analysis as driver
 from bsm3.core.boundary_surface_movement.forward_only_fd_checker import (
     check_derivatives_forward_first,
-    run_forward_only_fd_sweep,
-    run_analytical_once,
-    compare_and_report,
 )
 from bsm3.core.boundary_surface_movement.geometry_volume_backend import (
-    E175GeometryVolumeBackend,
+    MeshMotionVolumeBackend,
     read_gmsh_volume_point_count,
 )
 from bsm3.core.boundary_surface_movement.geometry_volume_mpi import (
@@ -117,13 +114,16 @@ def _coordinate_checksum(coordinates: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 # Backend construction
 # ---------------------------------------------------------------------------
-def _make_geometry_backend(comm) -> E175GeometryVolumeBackend | None:
+def _make_geometry_backend(comm) -> MeshMotionVolumeBackend | None:
     if not is_root(comm):
         return None
-    return E175GeometryVolumeBackend(
+    return MeshMotionVolumeBackend(
         model_files=MODEL_FILES,
         geometry_values=GEOMETRY_VALUES,
         pipeline_config=MESH_MOTION,
+        parameterization_factory=(
+            driver.create_geometry_parameterization_from_variables
+        ),
         aerodynamic_volume_method="elasticity",
     )
 
