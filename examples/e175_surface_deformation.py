@@ -28,6 +28,8 @@ triangle-only surface simply has no polygon modes for it to constrain.
 from pathlib import Path
 import tempfile
 
+import csdl_alpha as csdl
+
 import bsm3.mesh_motion as mm
 
 ASSETS = (
@@ -78,12 +80,16 @@ def main(
     )
 
     # 2. Define design variables and component motion
+    # The recorder is created, started, and stopped here: BSM3 never owns
+    # global CSDL state, so this script composes inside a larger graph.
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
     geometry = mm.GeometryModel()
-    wing_shift = geometry.design_variable("wing_shift", 0.35)
-    wing_incidence = geometry.design_variable("wing_incidence", 0.75)
-    wing_area = geometry.design_variable("wing_area", 71.5)
-    tail_incidence = geometry.design_variable("tail_incidence", 1.2)
-    fuselage_width = geometry.design_variable("fuselage_width", 1.02)
+    wing_shift = geometry.design_variable("wing_shift", 0.005)
+    wing_incidence = geometry.design_variable("wing_incidence", 0.01)
+    wing_area = geometry.design_variable("wing_area", 70.02)
+    tail_incidence = geometry.design_variable("tail_incidence", 0.015)
+    fuselage_width = geometry.design_variable("fuselage_width", 1.0002)
 
     geometry.add_lifting_surface(
         name="wing",
@@ -139,7 +145,15 @@ def main(
     )
 
     # 4. Run the differentiable mesh-motion model
-    result = mm.run(inputs=inputs, geometry=geometry, motion=motion)
+    try:
+        result = mm.run(
+            inputs=inputs,
+            geometry=geometry,
+            motion=motion,
+            recorder=recorder,
+        )
+    finally:
+        recorder.stop()
 
     # 5. Inspect the result
     result.print_summary()
