@@ -98,7 +98,7 @@ class GraphDistanceWeighting:
         multipliers = self.edge_multipliers(np.asarray(keys, dtype=np.int64))
         return {tuple(int(v) for v in key): float(m) for key, m in zip(keys, multipliers)}
 
-    def summary(self, edge_vertices: np.ndarray) -> dict[str, float]:
+    def summary(self, edge_vertices: np.ndarray) -> dict[str, float | int | str]:
         """Distance-multiplier diagnostics over a set of edges."""
         multipliers = self.edge_multipliers(edge_vertices)
         finite = self.vertex_distance[np.isfinite(self.vertex_distance)]
