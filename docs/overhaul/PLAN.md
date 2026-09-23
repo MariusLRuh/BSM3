@@ -265,7 +265,7 @@ nothing in the end state and removes the risk of silently dropping live code.
 | M1.5 | Decide the `bsm3.meshgen` boundary without adopting untested local scripts. The only credible STEP-to-surface implementation is a circular, untracked 4,758-LOC pair, so implementation is deferred to M3 pending a minimal API, fixture, and end-to-end test. | Codex | **COMPLETE** — disposition: defer adoption to M3 (Turn 24), accepted Turn 25 | Core imports nothing from mesh-generation scripts; the candidate closure and prerequisites for later adoption are recorded in `MANIFEST.md`. |
 | M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | **slice 1 of 3 COMPLETE** (`1c402e9`, accepted Turn 29 — 132/132); slices 2-3 OPEN | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
 | M1.8 | **New (Turn 5).** Retire the internal legacy polygon-pickle branch in the E175 pipeline. Turn 4 made the *public* importer safe by removing `.pkl` from suffix dispatch, but the pipeline retains an internal trusted-pickle path, and `bsm3/core/projections/refitted_fun_set.pkl` is an untracked executable pickle used as a warm-start default. Convert `wall_surface.pkl` to `.npz` per `ASSETS.md` and delete the branch. | Codex | not started | No pickle load remains reachable from any retained root except through an explicitly named trusted API; `wall_surface.pkl` replaced by a non-executable container with identical coordinates and connectivity. |
-| M1.7a | Runnable, documented E175 surface-deformation example using only the generalized API and tracked curated assets, protected by an end-to-end integration smoke test. | Codex | **IMPLEMENTED** — `476b10d`, awaiting Claude review | Clean-clone tri run completes with zero folds/inversions; quad switch enables the real-mesh n-gon affine path; integration test and documentation checks pass. |
+| M1.7a | Runnable, documented E175 surface-deformation example using only the generalized API and tracked curated assets, protected by an end-to-end integration smoke test. | Codex | **IMPLEMENTED** — `476b10d` + cache containment `a9c2830`, awaiting Claude review | Clean-clone tri run completes with zero folds/inversions and leaves the checkout clean; quad switch enables the real-mesh n-gon affine path; integration test and documentation checks pass. |
 | M1.7 | Acceptance run. Must exercise a **STEP-to-VortexAD path** if practical, alongside the surface-motion path — the VortexAD root is the one the Turn-1 trace missed entirely, so it is the least protected by existing tests. **Turn-27 carry-ins:** (a) consider a `TypedDict` for `GraphDistanceWeighting.summary` instead of the ruled `dict[str, float | int | str]`; (b) the `"decay"` key in that return value is dead payload — the only caller (`mesh_motion_pipeline.py:941`) never reads it — so removing it would allow `dict[str, float | int]`. Both are public-return changes, deliberately out of scope for the M1.6 docstring slices. | Codex | not started | Generalized driver reproduces current R4 output within tolerance; derivative gate passes; quad and mixed-N-gon examples clean; a STEP-to-VortexAD path runs end to end or is recorded as impractical with the reason. |
 
 **Turn-28 user steering.** After M1.6 slice 1 is reviewed, prioritize a
@@ -328,12 +328,15 @@ all remain required.
 ### Turn-30 implementation: M1.7a ready for review
 
 Commit `476b10d` adds the top-level flagship example and its integration test
-without changing `bsm3/`. The cold tri run completed in **105.8 s** in the
-working tree and **100.7 s** in a genuine clone, with 16,400 vertices, 32,522
-triangles, zero folds, zero inversions, and zero degenerate elements. The
-quad-dominant switch completed in **66.3 s** with `ngon_affine.weight=0.3` and
-zero normal-flip folds. Its curated input has 116 pre-existing corner-
-orientation inversions, unchanged after deformation (116 pre / 116 post).
+without changing `bsm3/`; `a9c2830` contains the third-party STEP-import cache
+under the configured external setup-cache directory. The cold tri run completed
+in **105.8 s** in the working tree and **105.9 s** in the final genuine clone,
+with 16,400 vertices, 32,522 triangles, zero folds, zero inversions, and zero
+degenerate elements. The clone remains clean after both the example and the
+suite. The quad-dominant switch completed in **66.3 s** with
+`ngon_affine.weight=0.3` and zero normal-flip folds. Its curated input has 116
+pre-existing corner-orientation inversions, unchanged after deformation (116
+pre / 116 post).
 
 The derivative gate remains 1/1 and the M1.4 tests remain 5/5. The full dirty
 suite is **173 passed**; a genuine clone is **159 passed / 1 skipped**. The

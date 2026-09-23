@@ -4,13 +4,14 @@ Paste this entire prompt into Claude at the repository root.
 
 ---
 
-Review Codex Turn 30 and commit `476b10d` against the Turn-30 M1.7a contract
-recorded in `docs/overhaul/LOG.md` and `docs/overhaul/PLAN.md`. This is an
-independent audit, not an implementation turn.
+Review Codex Turn 30 and implementation commits `476b10d` and `a9c2830`
+against the Turn-30 M1.7a contract recorded in `docs/overhaul/LOG.md` and
+`docs/overhaul/PLAN.md`. This is an independent audit, not an implementation
+turn.
 
 ## Scope and allowlist
 
-The implementation commit must contain exactly:
+The implementation commits may contain only:
 
 ```
 examples/e175_surface_deformation.py
@@ -32,7 +33,7 @@ an explicit ACCEPTED or REJECTED ruling and the evidence.
 ## Implementation claims to verify independently
 
 - The example runs as a direct script from a genuine clone using tracked assets
-  only, with no editable source-tree assumption.
+  only, with no editable source-tree assumption, and leaves the clone clean.
 - It uses the generalized API and contains none of the retired E175-prefixed
   API names.
 - All five pipeline stages are explained in the module docstring and every
@@ -45,12 +46,12 @@ an explicit ACCEPTED or REJECTED ruling and the evidence.
   the expected public result fields, zero folds, and zero inversions. Its
   600-second timeout is justified by the measured 105.8-second cold run and
   the turn's ten-minute hard stop.
-- No library change was needed and no file under `bsm3/` was changed by
-  `476b10d`.
+- No library change was needed and no file under `bsm3/` was changed by either
+  implementation commit.
 
-Codex reports: cold tri **105.8 s** in the working tree and **100.7 s** in the
-clone, cached tri **55.5 s**, each with 16,400 vertices / 32,522 cells and zero
-folds/inversions/degeneracies. The quad run was **66.3 s**, used
+Codex reports: cold tri **105.8 s** in the working tree and **105.9 s** in the
+final clone, cached tri **55.5 s**, each with 16,400 vertices / 32,522 cells and
+zero folds/inversions/degeneracies. The quad run was **66.3 s**, used
 `ngon_affine.weight=0.3`, and had zero normal-flip folds. It reported 116
 orientation inversions both before and after deformation; determine whether
 the evidence supports Codex's statement that these belong to the curated
@@ -67,8 +68,9 @@ made peak memory optional.
 Run at least:
 
 ```bash
-git show --stat --oneline 476b10d
+git show --stat --oneline 476b10d a9c2830
 git diff-tree --no-commit-id --name-only -r 476b10d
+git diff-tree --no-commit-id --name-only -r a9c2830
 
 grep -nE "E175ModelFiles|E175PipelineConfig|E175GeometryVariables|E175MeshMotionResult|build_e175_mesh_motion_model" examples/e175_surface_deformation.py
 grep -nE "ModelFiles|PipelineConfig|ComponentSpec|IntersectionSpec|GeometryParameterization|build_mesh_motion_model" examples/e175_surface_deformation.py
@@ -105,6 +107,7 @@ cd /tmp/bsm3-m17a-claude-review
 git status --porcelain
 PYTHONPATH=/tmp/bsm3-m17a-claude-review python examples/e175_surface_deformation.py
 PYTHONPATH=/tmp/bsm3-m17a-claude-review python -m pytest -q tests
+git status --porcelain            # MUST still print nothing after both runs
 ```
 
 Expected clone count is **159 passed / 1 skipped**. The existing full-suite CI

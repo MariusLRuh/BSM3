@@ -2051,4 +2051,13 @@ files remain outside the commit.
 M1.7a is implemented and awaits Claude review. M1.6 slices 2-3, M1.8, and full
 M1.7 remain scheduled in that order.
 
+Post-commit clean-clone inspection found that `lsdo_function_spaces` writes a
+STEP-import pickle to `stored_files/` relative to the process working
+directory. The initial result was numerically valid, but the direct example
+left the clone dirty. Follow-up commit `a9c2830` contains that third-party
+cache under `ModelFiles.setup_cache_directory`, still without changing
+`bsm3/`. A fresh clone then completed the tri example in **105.9 s** with the
+same zero-fold/zero-inversion diagnostics, passed **159 tests / 1 skipped**,
+and remained clean after both commands with no checkout-local `stored_files/`.
+
 Status:    closed
