@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -342,7 +343,7 @@ def build_model_files(
         setup_cache_directory=(
             DEFAULT_CACHE_DIRECTORY
             if cache_directory is None
-            else Path(cache_directory)
+            else Path(cache_directory).expanduser().resolve()
         ),
     )
 
@@ -439,12 +440,24 @@ def run_example(
         geometry_parameterization = build_geometry_parameterization(variables)
         model_files = build_model_files(mesh_kind, cache_directory)
         config = build_pipeline_config(mesh_kind)
-        result = build_mesh_motion_model(
-            recorder=recorder,
-            model_files=model_files,
-            geometry_parameterization=geometry_parameterization,
-            config=config,
-        )
+        setup_cache_directory = model_files.setup_cache_directory
+        assert setup_cache_directory is not None
+        setup_cache_directory.mkdir(parents=True, exist_ok=True)
+
+        # lsdo_function_spaces stores its STEP-import cache relative to the
+        # process working directory. Contain that third-party side effect next
+        # to the pipeline setup cache so a direct run leaves the checkout clean.
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(setup_cache_directory)
+            result = build_mesh_motion_model(
+                recorder=recorder,
+                model_files=model_files,
+                geometry_parameterization=geometry_parameterization,
+                config=config,
+            )
+        finally:
+            os.chdir(previous_directory)
     finally:
         recorder.stop()
 
