@@ -60,6 +60,8 @@ Open:
 
 Status:    closed
 
+---
+
 ## Turn 2 — Codex, implementer/reviewer, 2026-09-21
 Scope:     Plan review; Q-A/Q-B/Q-C; safe portions of M0.1/M0.3/M0.4
 
@@ -1930,5 +1932,123 @@ and **157 passed / 1 skipped**.
 No second defect was found, no test or untracked mesh-generation file was
 touched, and every pre-existing excluded tracked file remains dirty and outside
 the commits. M1.6 slice 1 is implemented and awaits Claude review.
+
+Status:    closed
+
+---
+
+## Turn 29 — Claude, planner/reviewer, 2026-09-23
+Scope:     Review of M1.6 slice 1 (03a4f54, 1c402e9)
+
+**RULING: M1.6 slice 1 is ACCEPTED.** Every check re-run independently in
+`central_geom`; no defect found. The two-commit structure was followed exactly.
+
+**Allowlist: 20 files across `0dbcc75..1c402e9`, zero violations.** `03a4f54` is
+a **single line in a single file** — the ruled annotation and nothing else.
+`1c402e9` covers all 16 slice-1 modules plus `actions.yml` and the three docs.
+`tests/` untouched; `preprocessing/intersections.py` (the same-basename trap)
+untouched; the three untracked manifest files untouched.
+
+| Check | Result |
+|---|---|
+| slice-1 numpydoc coverage | **132/132 = 100%** (target 118; was 2) |
+| non-docstring AST drift, baselined on `03a4f54` | **none** ✓ |
+| `summary` annotation + `Returns` section agree | `dict[str, float \| int \| str]` both places ✓ |
+| CI third lint step | exactly the 16 files; two existing steps unchanged ✓ |
+| numeric guards | modes 3, `obj'(0)` 4.0, `obj'(0.3)` 57/13, obs 2/13 — **unchanged to 1e-12** |
+| full dirty-tree suite | **171 passed / 30.14 s** |
+| genuine clone of `1c402e9` | empty status, **157 passed / 1 skipped / 30.34 s** |
+
+**Docstring quality spot-checked, not just counted.** 100% coverage can be
+boilerplate, so the two modules the prompt singled out were read.
+`_affine_residual_projector` now documents exactly the property M1.4 tests:
+*"The affine design matrix has columns ``[1, u, v]``. Its range is the
+three-dimensional affine subspace, so ``I - Q Q.T`` annihilates every affine
+field and has rank ``n - 3``."* That is correct, matches the Turn-7 measurements,
+and is real documentation rather than a restated signature.
+
+**Finding that reshapes the next turn — and it supports the user's steering.**
+Two facts measured this turn:
+
+1. **The E175 driver cannot run from a clean clone.** `cfd_mesh_movement_test.py`
+   points at `fluent_R4_tet_euler_volume_mesh/…_wall_tri.msh` and
+   `…_tet_euler_volume.msh`, both **untracked** (the latter 100.9 MB, explicitly
+   excluded since M0.1).
+2. **No tracked test exercises `build_mesh_motion_model` end to end.**
+   `git grep -l build_mesh_motion_model -- tests` is empty. The driver-config
+   tests assert configuration only; the derivative gate and M1.4 tests use
+   synthetic fixtures.
+
+So the generalized API delivered in M1.1/M1.2 has **never been run on real
+geometry inside the tracked repository.** Every guarantee to date is either
+synthetic or config-level. That is a real gap, and the user's instruction to
+prioritize a runnable, documented E175 example is the right way to close it.
+
+The curated M0.1 assets — chosen in Turn 3 for exactly this and unused since —
+make it feasible today: `embraer_175_no_winglets.stp` (0.8 MB),
+`e175_fluent_R1_aircraft_wall_tri.msh` (**16,400 vertices / 32,522 triangles**,
+1.8 MB) with its volume map, and
+`embraer_175_quad_dominant_symmetric_no_winglets.msh` (**14,411 vertices,
+13,696 quads + 1,426 triangles**, 1.0 MB), which is the n-gon path on a *real*
+mesh rather than a synthetic hexagon.
+
+**Next turn is re-prioritized as M1.7a — the runnable E175 example — ahead of
+M1.6 slices 2/3 and M1.8.** Rationale beyond the user's instruction: it
+front-loads the risk. If the pipeline cannot run on the curated R1 wall, that
+must surface now, not during M1.7 final acceptance. Nothing is dropped —
+`PLAN.md` records that M1.6 slices 2/3, M1.8, and full M1.7 acceptance (R4
+reproduction, STEP-to-VortexAD) all remain required.
+
+**Turn 29 changed no production code.** Only `PLAN.md`, `LOG.md` and
+`CODEX_NEXT.md`; nothing staged; the six pre-existing excluded dirty files
+untouched.
+
+Status:    closed
+
+---
+
+## Turn 30 — Codex, implementer, 2026-09-23
+Scope:     M1.7a — runnable E175 example and end-to-end smoke test
+
+Claimed the six-path allowlist from the Turn-30 prompt. All files under
+`bsm3/` remain prohibited; if the public API cannot support this external
+example unchanged, this turn will stop and record that dependency as its
+finding.
+
+Implemented `476b10d` with exactly two source paths:
+`examples/e175_surface_deformation.py` and `tests/test_e175_example.py`. The
+example uses the generalized `ModelFiles`, `PipelineConfig`,
+`GeometryParameterization`, `ComponentSpec`, `IntersectionSpec`, and
+`build_mesh_motion_model` API. It resolves tracked assets relative to the
+repository, keeps volume motion and visualization off, places reusable setup
+data in the operating-system temporary directory, and documents both the
+default tri wall and the quad-dominant switch with
+`ngon_affine.weight=0.3`. All 7 public definitions have numpydoc sections.
+
+Measured runs:
+
+- cold working-tree tri: **105.8 s**, 16,400 vertices / 32,522 cells, zero
+  folds, zero inversions, zero degenerate elements;
+- cached working-tree tri: **55.5 s**, with identical diagnostics;
+- cold genuine-clone tri: **100.7 s**, with identical diagnostics;
+- working-tree quad: **66.3 s**, 14,411 output vertices / 15,122 cells, zero
+  normal-flip folds, and the nonzero n-gon affine path active. The curated
+  panel already has 116 corner-orientation inversions and retains exactly 116
+  after deformation; the deformation introduced none.
+
+Peak memory was not recorded: `/usr/bin/time -l` completed the example but its
+post-run `sysctl kern.clockrate` query is prohibited by the sandbox. No memory
+number is inferred from that failed probe.
+
+Verification: derivative gate **1 passed**; M1.4 operator/load-step tests
+**5 passed**; new example tests **2 passed**; full dirty-tree suite
+**173 passed**. A genuine clone had empty status, ran the example from tracked
+assets alone, and passed **159 tests with 1 skipped**. `actions.yml` required
+no change because its existing full-suite step collects the new integration
+test. No file under `bsm3/` changed during this turn; all pre-existing dirty
+files remain outside the commit.
+
+M1.7a is implemented and awaits Claude review. M1.6 slices 2-3, M1.8, and full
+M1.7 remain scheduled in that order.
 
 Status:    closed

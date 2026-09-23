@@ -1,182 +1,123 @@
-# Review prompt for Claude — Turn 29 (M1.6 slice 1)
+# Review prompt for Claude — Turn 31 (audit M1.7a)
 
-Paste into a Claude session at the repository root.
+Paste this entire prompt into Claude at the repository root.
 
 ---
 
-Review Codex Turn 28 in `docs/overhaul/LOG.md`, the defect-fix commit
-`03a4f54`, and its immediate documentation successor at the current branch
-tip. Read the updated M1.6 status and Turn-28 user steering in
-`docs/overhaul/PLAN.md`.
+Review Codex Turn 30 and commit `476b10d` against the Turn-30 M1.7a contract
+recorded in `docs/overhaul/LOG.md` and `docs/overhaul/PLAN.md`. This is an
+independent audit, not an implementation turn.
 
-## Required ruling
+## Scope and allowlist
 
-Rule independently on both commits:
-
-1. `03a4f54` must change only
-   `GraphDistanceWeighting.summary`'s return annotation from
-   `dict[str, float]` to `dict[str, float | int | str]`. Its returned mapping,
-   including the dead `"decay"` payload, must be byte-identical.
-2. The successor must contain only docstrings in the 16 slice-1 source files,
-   the new 16-path CI step, and collaboration documentation. No callable
-   signature, executable AST, test, or excluded dirty file may change.
-
-If both pass, mark **M1.6 slice 1 complete**. M1.6 as a whole remains open.
-
-## Literal Turn-28 allowlist
+The implementation commit must contain exactly:
 
 ```
-.github/workflows/actions.yml
-bsm3/core/boundary_surface_movement/mesh_motion_config.py
-bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py
-bsm3/core/boundary_surface_movement/motion.py
-bsm3/core/boundary_surface_movement/elasticity.py
-bsm3/core/boundary_surface_movement/load_stepping.py
-bsm3/core/boundary_surface_movement/current_graph_solve.py
-bsm3/core/boundary_surface_movement/ngon_affine.py
-bsm3/core/boundary_surface_movement/quadratic_distortion.py
-bsm3/core/boundary_surface_movement/projection.py
-bsm3/core/boundary_surface_movement/quality.py
-bsm3/core/boundary_surface_movement/graph_distance.py
-bsm3/core/boundary_surface_movement/free_region.py
-bsm3/core/boundary_surface_movement/constraints.py
-bsm3/core/boundary_surface_movement/spd_solve_custom_op.py
-bsm3/core/boundary_surface_movement/geometry.py
-bsm3/core/boundary_surface_movement/intersections.py
+examples/e175_surface_deformation.py
+tests/test_e175_example.py
+```
+
+For your review turn, you may edit only:
+
+```
 docs/overhaul/PLAN.md
 docs/overhaul/LOG.md
 docs/overhaul/CODEX_NEXT.md
 ```
 
-Confirm that all eight pre-existing tracked edits outside this list remain
-dirty and uncommitted.
+Do not edit the example, tests, `bsm3/`, CI, or any pre-existing dirty file.
+Claim `## Turn 31` by appending to `LOG.md` before the audit, then close it with
+an explicit ACCEPTED or REJECTED ruling and the evidence.
 
-## Independent checks
+## Implementation claims to verify independently
 
-Run the Turn-28 coverage check. Expected: **132/132 (100%)**, zero
-undocumented definitions. Ruff and pydocstyle are absent from `central_geom`;
-do not install them into the user's environment.
+- The example runs as a direct script from a genuine clone using tracked assets
+  only, with no editable source-tree assumption.
+- It uses the generalized API and contains none of the retired E175-prefixed
+  API names.
+- All five pipeline stages are explained in the module docstring and every
+  public function/class has a genuine numpydoc section.
+- Tri is the default; volume and visualization are off; the setup cache is
+  outside the repository.
+- `--mesh quad` selects the tracked quad-dominant panel and a nonzero
+  `ngon_affine.weight`.
+- The integration test executes the tri path and checks stable vertex count,
+  the expected public result fields, zero folds, and zero inversions. Its
+  600-second timeout is justified by the measured 105.8-second cold run and
+  the turn's ten-minute hard stop.
+- No library change was needed and no file under `bsm3/` was changed by
+  `476b10d`.
 
-Verify the defect commit directly:
+Codex reports: cold tri **105.8 s** in the working tree and **100.7 s** in the
+clone, cached tri **55.5 s**, each with 16,400 vertices / 32,522 cells and zero
+folds/inversions/degeneracies. The quad run was **66.3 s**, used
+`ngon_affine.weight=0.3`, and had zero normal-flip folds. It reported 116
+orientation inversions both before and after deformation; determine whether
+the evidence supports Codex's statement that these belong to the curated
+input rather than being introduced by motion. Do not silently strengthen
+M1.7a's acceptance criterion: Turn 30 required zero inversions for the tri
+smoke test, while final M1.7 still owns the broader “quad clean” acceptance.
+
+Peak memory is intentionally unreported because the sandbox denied the
+post-run macOS `sysctl` query. That is not by itself a failure because Task 3
+made peak memory optional.
+
+## Mechanical audit
+
+Run at least:
 
 ```bash
-git diff --name-status 0dbcc75..03a4f54
-git diff 0dbcc75..03a4f54 -- \
-  bsm3/core/boundary_surface_movement/graph_distance.py
-```
+git show --stat --oneline 476b10d
+git diff-tree --no-commit-id --name-only -r 476b10d
 
-Then compare executable ASTs against the fix commit, not `0dbcc75`:
+grep -nE "E175ModelFiles|E175PipelineConfig|E175GeometryVariables|E175MeshMotionResult|build_e175_mesh_motion_model" examples/e175_surface_deformation.py
+grep -nE "ModelFiles|PipelineConfig|ComponentSpec|IntersectionSpec|GeometryParameterization|build_mesh_motion_model" examples/e175_surface_deformation.py
 
-```bash
 python - <<'PY'
 import ast
-import subprocess
 from pathlib import Path
-
-base = Path("bsm3/core/boundary_surface_movement")
-files = """mesh_motion_config mesh_motion_pipeline motion elasticity
-load_stepping current_graph_solve ngon_affine quadratic_distortion projection
-quality graph_distance free_region constraints spd_solve_custom_op geometry
-intersections""".split()
-
-class StripDocstrings(ast.NodeTransformer):
-    def strip(self, node):
-        if (
-            node.body
-            and isinstance(node.body[0], ast.Expr)
-            and isinstance(node.body[0].value, ast.Constant)
-            and isinstance(node.body[0].value.value, str)
-        ):
-            node.body = node.body[1:] or [ast.Pass()]
-        return self.generic_visit(node)
-
-    visit_Module = strip
-    visit_ClassDef = strip
-    visit_FunctionDef = strip
-    visit_AsyncFunctionDef = strip
-
-drift = []
-for name in files:
-    path = str(base / f"{name}.py")
-    old = subprocess.run(
-        ["git", "show", f"03a4f54:{path}"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    before = ast.dump(
-        StripDocstrings().visit(ast.parse(old)), include_attributes=False
-    )
-    after = ast.dump(
-        StripDocstrings().visit(ast.parse(Path(path).read_text())),
-        include_attributes=False,
-    )
-    if before != after:
-        drift.append(path)
-print("non-docstring AST drift:", drift or "none")
+t = ast.parse(Path("examples/e175_surface_deformation.py").read_text())
+assert ast.get_docstring(t)
+public = [n for n in ast.walk(t) if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and not n.name.startswith("_")]
+sectioned = [n for n in public if (ast.get_docstring(n) or "") and ("\n---" in ast.get_docstring(n) or "Parameters\n" in ast.get_docstring(n) or "Returns\n" in ast.get_docstring(n))]
+print(f"example public defs {len(public)}; numpydoc-sectioned {len(sectioned)}")
+assert len(sectioned) == len(public)
 PY
+
+python -m pytest -q tests/test_derivative_gate.py
+python -m pytest -q tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
+python -m pytest -q tests/test_e175_example.py
+python -m pytest -q tests
 ```
 
-Expected: `none`.
+Use the validated `central_geom` environment. Review the code itself for API
+clarity, truthful documentation, engineering choices, and whether the test is
+a meaningful end-to-end guard rather than merely checking configuration.
 
-Confirm `.github/workflows/actions.yml` adds exactly one new lint step covering
-the 16 paths, without changing either existing lint step. Then run:
-
-```bash
-conda run -n central_geom python -m pytest -q tests/test_derivative_gate.py
-conda run -n central_geom python -m pytest -q \
-  tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
-conda run -n central_geom python -m pytest -q tests
-```
-
-Expected counts: **1**, **5**, and **171 passed**. Re-measure the seven M1.4
-values rather than treating passing assertions as proof of numerical identity.
-
-## Genuine-clone verification
-
-Use a fresh temporary directory rather than deleting an uncertain path:
+For clean-clone verification, use a fresh explicit directory (or safely remove
+the old verified target first), then run:
 
 ```bash
-VERIFY_DIR=$(mktemp -d /tmp/bsm3-m16-s1-claude.XXXXXX)
 git clone --no-hardlinks --branch production-ready-overhaul \
   "file:///Users/mariusruh/Documents/Research/nasa_uli/mesh_movement/packages/BSM3" \
-  "$VERIFY_DIR/repo"
-cd "$VERIFY_DIR/repo"
+  /tmp/bsm3-m17a-claude-review
+cd /tmp/bsm3-m17a-claude-review
 git status --porcelain
-git grep -n "float | int | str" -- \
-  bsm3/core/boundary_surface_movement/graph_distance.py
-conda run -n central_geom python -m pytest -q tests
+PYTHONPATH=/tmp/bsm3-m17a-claude-review python examples/e175_surface_deformation.py
+PYTHONPATH=/tmp/bsm3-m17a-claude-review python -m pytest -q tests
 ```
 
-Expected: empty status and **157 passed / 1 skipped**.
+Expected clone count is **159 passed / 1 skipped**. The existing full-suite CI
+step already collects the new test, so leaving `actions.yml` unchanged is the
+expected result.
 
-## Next-task steering from the user
+## Ruling and next prompt
 
-After the review, do **not** automatically issue M1.6 slice 2 as another broad
-documentation batch. The user wants the work steered toward a runnable,
-well-documented E175 example using the generalized API without discarding the
-remaining milestones.
+If M1.7a is accepted, mark it accepted in `PLAN.md`, record the measured audit
+evidence in Turn 31, and replace this file with the next concrete Codex prompt:
+**M1.6 slice 2 (projections + preprocessing)**. Preserve the remaining order
+M1.6 slice 2, M1.6 slice 3, M1.8, then full M1.7 acceptance.
 
-Audit the existing tracked E175 entry points and prepare the next concrete
-Codex prompt around the smallest useful vertical deliverable:
-
-- a clearly named E175 example using `ModelFiles`, `PipelineConfig`,
-  `DeclarativeGeometryParameterization` or a driver-supplied parameterization
-  factory, and `build_mesh_motion_model`;
-- local user-provided paths, with the existing E175 files as the initial case;
-- a documented command/configuration path that a new user can actually run;
-- analytical derivatives of the final deformed and reprojected mesh with
-  respect to design variables, retaining the existing scalar FD gate;
-- VortexAD integration if practical; no DAFoam test requirement;
-- graph Laplacian plus n-gon regularization only;
-- no revival of removed membrane, barrier, or tangential-smoothing paths.
-
-Use that example as the organizing integration path for the remaining driver
-documentation and early M1.7 acceptance work. Keep preprocessing/projection
-documentation and M1.8 explicitly scheduled, with M1.8 still completed before
-final M1 acceptance.
-
-Append Claude Turn 29 to `docs/overhaul/LOG.md`, update `PLAN.md` with the
-accepted status and concrete revised sequencing, then replace this file with a
-literal allowlisted Codex prompt. Preserve the stop rule: Codex must report
-rather than widen scope silently.
+If rejected, record the exact defect and replace this file with the smallest
+corrective Codex prompt, including a literal path allowlist and stop rule. Do
+not fix implementation files yourself and do not widen scope silently.
