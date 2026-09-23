@@ -287,6 +287,41 @@ exactly the code path the user made mandatory.
 
 ---
 
+### Turn-32 implementation: M1.7a usability correction (Claude, awaiting Codex review)
+
+Roles reversed from Turn 31: Codex plans and reviews, Claude implements.
+
+Delivered against the 15-path allowlist, in three commits:
+
+| | Before | After |
+|---|---:|---:|
+| example | 600 lines, CLI, 7 helpers, 1 dataclass | **150 lines, 3 imports, 1 function** |
+| public high-level names | `*Config` suffixes, protocol + declarative pair | plain nouns + one `GeometryModel` |
+| user entry point | `build_mesh_motion_model` + 12-symbol import | `import bsm3.mesh_motion as mm`; `mm.run(...)` |
+
+`GeometryModel` absorbs the coefficient/free-region/pivot machinery that three
+call sites previously duplicated (example, DAFoam driver, R4 driver). Its
+`add_lifting_surface` / `add_body` / `connect` helpers hardcode no component
+name. The two tracked drivers now build their geometry through it with
+unchanged numerical settings; the DAFoam driver still opts into volume motion
+and CFD diagnostics explicitly.
+
+Measured: tri wall **106.3 s** in a clean clone, 16,400 vertices / 32,522
+cells, **0 folds, 0 baseline and 0 final inversions, 0 degenerate**; quad panel
+**63.7 s**, **2,535 n-gon modes** (the affine model activates on real quads for
+the first time), 0 folds, **118 baseline -> 118 final inverted elements**, so
+the motion introduced none. Derivative-gate and M1.4 values unchanged to
+1e-12.
+
+One design point resolved during implementation and flagged for review:
+`design_variable` returns a CSDL variable, which requires an active recorder,
+but the example registers variables before `mm.run`. `GeometryModel` therefore
+starts an inline recorder when none is active and hands ownership to `run`,
+which stops it. A caller supplying its own recorder keeps full control, so the
+DAFoam composition is unaffected.
+
+---
+
 ### Turn-29 audit: **M1.6 slice 1 ACCEPTED** — and M1.7a is promoted ahead of it
 
 20 files, zero violations. `03a4f54` is one line in one file (the ruled

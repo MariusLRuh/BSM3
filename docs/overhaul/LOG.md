@@ -2082,3 +2082,96 @@ and wrote Claude's bounded Turn-32 implementation prompt in `CODEX_NEXT.md`.
 No implementation file changed in this turn.
 
 Status:    closed
+
+---
+
+## Turn 32 — Claude, implementer, 2026-09-23
+Scope:     M1.7a usability correction — high-level mesh-motion API + simplified example
+
+Roles reversed per Turn 31: Codex plans and reviews, Claude implements. Guard
+values were captured before any edit and compared afterwards.
+
+**Delivered in three commits**, `987b8cf` (API), `37e3028` (example and tests),
+and this documentation commit. Every touched path is inside the 15-path
+allowlist; the tracked-reference closure was traced first and matched the
+allowlist exactly, so no widening was needed.
+
+**Public vocabulary.** All ten high-level types renamed to plain nouns, with no
+deprecated aliases. `build_mesh_motion_model` deleted in favour of
+`run_mesh_motion`. The protocol/declarative pair is replaced by one concrete
+`GeometryModel`; `ComponentSpec` and `IntersectionSpec` became the private
+`_ComponentRecord` and `_IntersectionRecord`. The rejected-name grep over
+tracked `*.py` is empty. Low-level solver names and the `ngon_affine` module
+were left alone — an early over-broad rename briefly hit that module path and
+was reverted.
+
+**`GeometryModel`.** `add_lifting_surface`, `add_body`, and `connect` absorb
+the coefficient-builder, free-region, and pivot arithmetic that three call
+sites previously duplicated. No component name is hardcoded in library code.
+Both tracked drivers now build geometry through it with unchanged numerical
+settings, and the DAFoam driver still opts into volume motion and CFD
+diagnostics explicitly. Verified that `WingParameters` with `area=None` and
+`aspect_ratio=None` is numerically identical to `TailParameters` —
+`_apply_planform_scaling` returns its input unchanged — so one code path serves
+both lifting surfaces without altering the tail.
+
+**Facade.** `bsm3/mesh_motion.py` exports eleven high-level names plus `run`.
+Checked that `ComponentSpec`, `IntersectionSpec`, `_ComponentRecord`,
+`build_mesh_motion_model`, `NgonAffineConfig`, and `run_graph_load_steps` are
+all absent from it.
+
+**Pipeline.** STEP-import cache containment moved out of the example and into
+the library, scoped around the import and restored in a `finally`.
+`MeshMotionResult` now carries `recorder`, `elapsed_seconds`,
+`surface_fold_count`, `surface_cell_count`, `surface_ngon_mode_count`, the
+baseline inversion report, and `print_summary()`. Positive polygon
+regularization is applicable-if-present: `_surface_has_ngons` skips the affine
+model on a triangle-only surface instead of assembling a zero matrix, and the
+example never inspects topology.
+
+**Example.** 600 lines to **150**, three imports, one public function, no class,
+no private function, five numbered stages, no CLI and no topology branch. The
+quad path is a single `SURFACE_MESH_FILE` edit sharing one
+`PolygonRegularization(weight=0.3)`.
+
+**Design point resolved during implementation, flagged for review.**
+`design_variable` returns a CSDL variable, which requires an active recorder,
+but the example registers variables in stage 2 while `mm.run` starts the
+recorder in stage 4. `GeometryModel` now starts an inline recorder when none is
+active and hands ownership to `run`, which stops it; a caller supplying its own
+recorder keeps full control, so DAFoam composition is unaffected. This is an
+implementation choice inside "create/start/stop when `recorder is None`", not a
+departure from the plan, but Codex should confirm it.
+
+**Measured runs**
+
+| Run | Time | Result |
+|---|---:|---|
+| tri wall, working tree | 108.3 s | 0 folds, 0 inversions, 0 degenerate |
+| tri wall, clean clone | **106.3 s** | 16,400 vertices / 32,522 cells; 0 folds; 0 baseline and 0 final inversions; 0 degenerate; 0 n-gon modes |
+| quad panel | **63.7 s** | 14,411 vertices / 15,122 cells; **2,535 n-gon modes**; 0 folds; **118 baseline -> 118 final inverted elements** |
+
+The quad motion introduced **no** new inversion. Turn 30's "116" was
+`quality.inverted_corners`; the 118 here is `inversion_report.num_inverted`
+(inverted *elements*) — different metrics, not a discrepancy. Both are recorded
+so Codex can pick the comparison basis.
+
+**Guards.** Projector rank 3, retained fraction 1.0, `‖P·1‖` 0, hexagon modes
+3, `obj'(λ=0)` 4.0, `obj'(λ=0.3)` 57/13, observability 2/13 — **all unchanged
+to 1e-12** against the pre-implementation capture. Derivative gate and both
+M1.4 tests: 6 passed.
+
+**Suite.** Working tree **175 passed** (was 173); the two new structural
+example tests account for the rise. Driver-configuration tests 10 passed after
+being updated to the clean-break API and to the new surface-only defaults.
+
+**Clean clone.** **161 passed, 1 skipped in 146.6 s** (was 159/1). Empty
+`git status --porcelain` **before and after** running both the example and the
+suite, so the cache containment holds and no run writes into the checkout.
+
+CI numpydoc lint widened to `bsm3/mesh_motion.py` and `geometry_model.py`.
+
+**No stop rule fired.** Handing back to Codex; `CODEX_NEXT.md` is a review
+checklist, not a plan.
+
+Status:    closed

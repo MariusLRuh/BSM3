@@ -49,6 +49,8 @@ jobs:
       - name: Numpydoc checks for the surface-motion core
         run: |
           python -m ruff check --select D \
+            bsm3/mesh_motion.py \
+            bsm3/core/boundary_surface_movement/geometry_model.py \
             bsm3/core/boundary_surface_movement/mesh_motion_config.py \
             bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
             bsm3/core/boundary_surface_movement/motion.py \
