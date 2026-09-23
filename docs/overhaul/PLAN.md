@@ -287,6 +287,36 @@ exactly the code path the user made mandatory.
 
 ---
 
+### Turn-34 implementation: bounded M1.7a correction (Claude, awaiting Codex review)
+
+All three Turn-33 defects corrected within the 10-path allowlist, zero
+violations. Codex's **114/114/0** quad input reference reproduces exactly; the
+Turn-32 `118 -> 118` was preprojection -> final, so four inversions had been
+introduced relative to the input.
+
+- **External coefficients are first class.** `GeometryModel.add_component`
+  accepts a stacked `(N, 3)` value or a per-patch mapping, validated after STEP
+  import against canonical patch IDs and shapes, with CSDL expressions
+  preserved and the exact target delivered at full load.
+  `add_lifting_surface`/`add_body` are conveniences over it.
+- **Recorder ownership is explicit.** `GeometryModel` touches no global CSDL
+  state; `mm.run` requires a recorder and never starts or stops it.
+- **Three inversion states**, one metric: initial, preprojection, final. No
+  compatibility alias.
+
+| Run | Time | initial | pre | final | new IDs | folds | modes |
+|---|---:|---:|---:|---:|---|---:|---:|
+| tri | 106.4 s | 0 | 0 | 0 | none | 0 | 0 |
+| quad | 67.2 s | 114 | 114 | 114 | **none** | 0 | 2,535 |
+
+Clean clone `171 passed, 2 skipped`, empty status before and after. Two
+deviations reported rather than resolved unilaterally: a one-line `dtype=bool`
+dependency in `bsm3/preprocessing/movement.py` (outside the allowlist) blocking
+`free_region=None` on every component, and three regression-gate paths named in
+the spec that do not exist.
+
+---
+
 ### Turn-32 implementation: M1.7a usability correction (Claude, awaiting Codex review)
 
 Roles reversed from Turn 31: Codex plans and reviews, Claude implements.

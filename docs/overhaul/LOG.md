@@ -2209,3 +2209,86 @@ Codex wrote the bounded Turn-34 Claude implementation prompt in
 `CODEX_NEXT.md`. No implementation file changed during review.
 
 Status:    closed
+
+---
+
+## Turn 34 — Claude, implementer, 2026-09-23
+Scope:     Bounded M1.7a correction — external coefficients, recorder ownership, inversion accounting
+
+All three Turn-33 defects corrected in three commits, `2bcaf05`, `63109d6`,
+`4a1d0e5`. Six paths touched, all inside the 10-path allowlist, zero
+violations.
+
+**Codex's inversion finding is confirmed and my Turn-32 report was wrong.** A
+read-only evaluation of the untouched tracked quad asset gives exactly
+**114 inverted elements, 114 inverted corners, 0 degenerate** — Codex's
+reference reproduces. My `118 -> 118` was preprojection -> final, so four
+inversions had in fact been introduced relative to the input.
+
+**1. External coefficients.** `GeometryModel.add_component` accepts either one
+stacked `(N, 3)` value in sorted patch-ID order or a per-patch mapping.
+Validation runs after STEP import, when canonical patch IDs and block shapes
+are known, and rejects missing/extra IDs, wrong block shapes, wrong stacked row
+counts, and non-3D trailing dimensions. CSDL expressions are preserved. At
+`f=1` the exact external target reaches the solve chain. `add_lifting_surface`
+and `add_body` are now conveniences over the same mechanism and share a plain
+axis-mapping free region rather than a callback. `validate()` no longer
+requires a model-owned design variable.
+
+**2. Recorder ownership.** All automatic recorder behaviour removed from
+`GeometryModel`; `design_variable` raises a clear `RuntimeError` when no
+recorder is active. `mm.run` takes a required `recorder` and never starts or
+stops it. The example creates, starts, and stops its own recorder around
+stages 2-4.
+
+**3. Inversion accounting.** `baseline_inversion_report` replaced by
+`initial_inversion_report`, `preprojection_inversion_report`, and
+`surface_inversion_report`, all using the same metric. No compatibility alias.
+`print_summary()` labels all three. The fold count is computed once.
+
+**Design values tuned by measurement, not guesswork.** At the Turn-32 values
+the quad panel gained two inverted elements, IDs **8075 and 14923** — a
+symmetric pair of small slivers (area 3.3e-4 against a 4.2e-3 median, ranked
+216-217 smallest of 15,122). Scaling all five deformations down 10x removes
+them. All five remain strictly nonzero.
+
+| Run | Time | initial | preprojection | final | new IDs | folds | n-gon modes |
+|---|---:|---:|---:|---:|---|---:|---:|
+| tri wall | 106.4 s | 0 | 0 | 0 | none | 0 | 0 |
+| quad panel | 67.2 s | 114 | 114 | 114 | **none** | 0 | 2,535 |
+
+**Guards.** Derivative gate and both M1.4 polygon tests: 6 passed, values
+unchanged. Driver configuration: 10 passed.
+
+**A regression I introduced and fixed.** The first clean-clone suite left
+`?? stored_files/` in the checkout: my new end-to-end test called
+`lfs.import_file_patched` directly, bypassing the containment the library now
+performs internally. Commit `4a1d0e5` scopes it to the test's cache directory.
+Re-verified on a fresh clone: **empty status before and after**.
+
+**Clean clone.** `171 passed, 2 skipped`; working tree `185 passed, 1 skipped`.
+Both required greps empty; `git diff --check` clean over every Turn-34 path.
+
+**Two deviations to report, neither resolved unilaterally:**
+
+1. **Blocked dependency, outside the allowlist.** The spec requires
+   `free_region=None` to mean the whole component is free. Doing that for every
+   component leaves no reevaluation vertices, and
+   `bsm3/preprocessing/movement.py:305` then computes
+   `np.asarray([]) &= ~assigned`, which is `float64` and raises `TypeError`.
+   One-line fix: pass `dtype=bool`. That file is **not** in the allowlist, so
+   per the stop rule it was not touched; a skipped test documents the case and
+   names the fix. External coefficients work end to end *with* free regions,
+   including the analytic-derivative assertion, so only this configuration is
+   blocked.
+2. **Three named regression-gate paths do not exist.**
+   `tests/test_e175_boundary_surface_movement_derivatives.py`,
+   `tests/test_polygon_regularization.py`, and
+   `tests/test_ngon_affine_regularization.py` are absent. The real gates are
+   `tests/test_derivative_gate.py`, `tests/test_ngon_affine_operator.py`, and
+   `tests/test_ngon_affine_load_step.py`. The intent was unambiguous, so those
+   were run rather than stopping on a filename slip.
+
+Not reviewed or accepted by me; `CODEX_NEXT.md` is a review checklist.
+
+Status:    closed
