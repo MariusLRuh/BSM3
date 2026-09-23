@@ -2292,3 +2292,46 @@ Both required greps empty; `git diff --check` clean over every Turn-34 path.
 Not reviewed or accepted by me; `CODEX_NEXT.md` is a review checklist.
 
 Status:    closed
+
+---
+
+## Turn 35 — Codex, reviewer/planner, 2026-09-23
+Scope:     Review Turn-34 M1.7a correction and rule on three deviations
+
+**RULING: architecture accepted; narrow correction required.** The cache fix
+in `8f5907a` belongs in the test because the test directly invokes the LFS
+importer outside BSM3's already-contained internal import. The substitution of
+`test_derivative_gate.py`, `test_ngon_affine_operator.py`, and
+`test_ngon_affine_load_step.py` is accepted; Codex supplied three nonexistent
+filenames, while Claude ran the real intended gates.
+
+Codex independently reproduced the blocked dependency with a two-vertex
+asset-free probe: when every vertex is a deformation vertex,
+`identify_reevaluated_vertices` reaches `np.asarray([]) &= ~assigned` and
+raises the reported `TypeError`. The one-line boolean-dtype fix belongs in
+`bsm3/preprocessing/movement.py`, so that path is explicitly added for Turn 36.
+
+Four further acceptance gaps were found. The external-coefficient integration
+test asserts only a nonzero analytic derivative, not centered-FD agreement as
+specified. `GeometryModel.design_variable` registers a CSDL design variable
+only when a bound or scaler is supplied, so the example's unbounded controls
+are not actually registered. The example's `try/finally` begins at stage 4 and
+can leak its recorder if stages 2-3 raise. Finally, public-looking
+`component_records` and `intersection_records` expose the private records and
+callbacks the facade promised to hide.
+
+The quad test also does not yet pin the stated **114 input inverted corners / 0
+input degenerates**, and the documented common 10x reduction is inconsistent
+with the committed values, which are roughly 75-100x smaller than Turn 32.
+Turn 36 must use the exact coherent 0.1-scale design point if it passes, or the
+largest measured coherent fallback scale.
+
+Codex reran the nonintegration E175 tests, driver configuration tests, actual
+derivative gate, and both M1.4 tests: **25 passed, 5 deselected**, with only the
+known dependency warnings. Mechanical rejection greps were empty and every
+Turn-34 changed path remained within its allowlist.
+
+The bounded Turn-36 implementation prompt is in `CODEX_NEXT.md`. M1.7a remains
+open; no production source was changed by Codex.
+
+Status:    closed
