@@ -30,7 +30,17 @@ from .geometry import component_patch_ids, stack_component_coefficients
 
 @dataclass(frozen=True)
 class VertexBatch:
-    """A CSDL vertex array paired with its original global mesh IDs."""
+    """Pair a CSDL vertex array with its original global mesh IDs.
+
+    Parameters
+    ----------
+    values
+        Vertex-coordinate rows owned by the batch.
+    vertex_ids
+        Global mesh indices aligned with ``values``.
+    num_mesh_vertices
+        Total number of vertices in the complete mesh.
+    """
 
     values: csdl.Variable
     vertex_ids: np.ndarray
@@ -53,6 +63,36 @@ def project_onto_oml(
     parametric coordinates.  The ``deformed_mesh_vertices`` form is a
     differentiable CSDL operation and requires explicit component ownership
     metadata.
+
+    Parameters
+    ----------
+    mesh_vertices
+        Optional setup-time coordinate array.
+    geometry
+        Geometry used by setup-time projection.
+    deformed_mesh_vertices
+        Optional differentiable coordinates to reproject.
+    deformed_mesh_vertex_ids
+        Global IDs aligned with ``deformed_mesh_vertices``.
+    projection_metadata
+        Component ownership and patch restrictions for differentiable
+        projection.
+    component_coefficients
+        Optional deformed coefficient overrides keyed by component.
+    projection_options
+        Options forwarded to the projection implementation.
+
+    Returns
+    -------
+    object or VertexBatch
+        Setup metadata for the NumPy form, or projected CSDL vertices paired
+        with global IDs for the differentiable form.
+
+    Raises
+    ------
+    ValueError
+        If the selected call form is incomplete or metadata does not cover all
+        supplied vertices.
     """
 
     if mesh_vertices is not None:
@@ -215,7 +255,22 @@ def reevaluate_vertices(
     metadata: Sequence[VertexEvaluationMetadata],
     component_coefficients: Mapping[object, object] | None = None,
 ) -> VertexBatch:
-    """Reevaluate fixed parametric coordinates on deformed components."""
+    """Reevaluate fixed parametric coordinates on deformed components.
+
+    Parameters
+    ----------
+    mesh
+        Complete mesh used to determine the global vertex count.
+    metadata
+        Component, parametric-coordinate, and global-ID groups to evaluate.
+    component_coefficients
+        Optional deformed coefficient overrides keyed by component.
+
+    Returns
+    -------
+    VertexBatch
+        Reevaluated CSDL coordinates paired with their global IDs.
+    """
 
     mesh_data = _as_mesh_data(mesh)
     coefficient_map = dict(component_coefficients or {})
@@ -254,7 +309,25 @@ def combine_vertices(
     oml_projected_vertices: VertexBatch,
     reevaluated_mesh_vertices: VertexBatch,
 ) -> csdl.Variable:
-    """Assemble projected and reevaluated batches in original mesh order."""
+    """Assemble projected and reevaluated batches in original mesh order.
+
+    Parameters
+    ----------
+    oml_projected_vertices
+        Vertices moved by closest-point OML projection.
+    reevaluated_mesh_vertices
+        Vertices moved by exact parametric reevaluation.
+
+    Returns
+    -------
+    csdl.Variable
+        Complete coordinate array in global mesh order.
+
+    Raises
+    ------
+    ValueError
+        If batches overlap or leave any global vertex uncovered.
+    """
 
     num_vertices = max(
         oml_projected_vertices.num_mesh_vertices,

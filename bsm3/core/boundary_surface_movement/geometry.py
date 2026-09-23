@@ -15,7 +15,23 @@ from bsm3.component_parameters import (
 
 
 def component_patch_ids(component) -> tuple[int, ...]:
-    """Return component patch IDs in the canonical coefficient-stack order."""
+    """Return component patch IDs in canonical coefficient-stack order.
+
+    Parameters
+    ----------
+    component
+        Function set exposing a nonempty ``functions`` mapping.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Sorted integer patch identifiers.
+
+    Raises
+    ------
+    TypeError
+        If ``component`` does not expose any functions.
+    """
 
     functions = getattr(component, "functions", None)
     if functions is None or not functions:
@@ -44,6 +60,23 @@ def classify_patch_sides(
     then slide spanwise across a patch boundary (which a parent-patch
     restriction clamps) but can never jump to the opposite skin (which an
     unrestricted any-patch projection allows on a thin surface).
+
+    Parameters
+    ----------
+    component
+        Lifting-surface function set.
+    axis
+        Coordinate axis used to classify the normal sign.
+    span_axis
+        Coordinate axis used to recognize end caps.
+    cap_span_fraction
+        Maximum relative span extent classified as a cap.
+
+    Returns
+    -------
+    dict[int, int]
+        Patch IDs mapped to ``+1`` (upper), ``-1`` (lower), or ``0`` (cap or
+        degenerate patch).
     """
 
     axis = _validate_axis(axis, "axis")
@@ -87,7 +120,18 @@ def classify_patch_sides(
 
 
 def stack_component_coefficients(component) -> csdl.Variable:
-    """Stack a component's coefficients in sorted patch-ID order."""
+    """Stack component coefficients in sorted patch-ID order.
+
+    Parameters
+    ----------
+    component
+        Function set containing CSDL coefficient arrays.
+
+    Returns
+    -------
+    csdl.Variable
+        Two-dimensional coefficient array with patches concatenated by row.
+    """
 
     blocks = []
     for patch_id in component_patch_ids(component):
@@ -99,7 +143,18 @@ def stack_component_coefficients(component) -> csdl.Variable:
 
 
 def stack_component_coefficients_numpy(component) -> np.ndarray:
-    """NumPy counterpart of :func:`stack_component_coefficients`."""
+    """Stack numeric component coefficients in sorted patch-ID order.
+
+    Parameters
+    ----------
+    component
+        Function set containing coefficient arrays with numeric values.
+
+    Returns
+    -------
+    numpy.ndarray
+        Two-dimensional numeric coefficient array.
+    """
 
     blocks = []
     for patch_id in component_patch_ids(component):
@@ -119,6 +174,26 @@ def deform_geometry(
     remains the immutable geometric template used to construct projection and
     evaluation models, while the returned coefficient variable represents its
     current deformed state.
+
+    Parameters
+    ----------
+    component
+        Immutable component geometry template.
+    parameters
+        Translation, rotation, and component-specific scaling controls.
+
+    Returns
+    -------
+    csdl.Variable
+        Stacked differentiably transformed coefficients.
+
+    Raises
+    ------
+    TypeError
+        If ``parameters`` is not a supported component-parameter object.
+    ValueError
+        If the component is not three-dimensional or a scaling control is
+        invalid.
     """
 
     if not isinstance(parameters, ComponentParameters):

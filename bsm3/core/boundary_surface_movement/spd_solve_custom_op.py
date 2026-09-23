@@ -29,13 +29,34 @@ def factorize_spd(matrix) -> "SPDFactor":
     object exposes a single ``solve`` method that accepts a ``(n,)`` or
     ``(n, k)`` right-hand side and shares the factorization across the forward
     and adjoint solves.
+
+    Parameters
+    ----------
+    matrix
+        Square sparse symmetric positive-definite matrix.
+
+    Returns
+    -------
+    SPDFactor
+        Reusable factorization wrapper.
+
+    Raises
+    ------
+    ValueError
+        If ``matrix`` is not square.
     """
 
     return SPDFactor(matrix)
 
 
 class SPDFactor:
-    """Cached factorization of an SPD matrix with a multi-column solve."""
+    """Cache an SPD factorization with a multi-column solve.
+
+    Parameters
+    ----------
+    matrix
+        Square sparse symmetric positive-definite matrix.
+    """
 
     def __init__(self, matrix):
         csc = sp.csc_matrix(matrix)
@@ -45,7 +66,24 @@ class SPDFactor:
         self._backend, self._factor = _build_factor(csc)
 
     def solve(self, rhs: np.ndarray) -> np.ndarray:
-        """Solve ``A x = rhs`` for a ``(n,)`` or ``(n, k)`` right-hand side."""
+        """Solve ``A x = rhs`` for one or more right-hand sides.
+
+        Parameters
+        ----------
+        rhs
+            Array with shape ``(n,)`` or ``(n, k)``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Solution with the same shape as ``rhs``.
+
+        Raises
+        ------
+        ValueError
+            If ``rhs`` is not one- or two-dimensional or has the wrong row
+            count.
+        """
 
         rhs_array = np.asarray(rhs, dtype=float)
         if rhs_array.ndim == 1:
@@ -83,13 +121,32 @@ def _build_factor(csc):
 
 
 class SPDSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
-    """Wrap ``u_f = L_ff^{-1} rhs`` for a precomputed SPD factorization."""
+    """Wrap ``u_f = L_ff^{-1} rhs`` for a precomputed factorization.
+
+    Parameters
+    ----------
+    factor
+        Cached factorization shared by the forward and reverse operations.
+    """
 
     def __init__(self, factor: SPDFactor):
         super().__init__()
         self.factor = factor
 
     def evaluate(self, rhs):
+        """Declare and return the differentiable SPD solution.
+
+        Parameters
+        ----------
+        rhs
+            CSDL right-hand-side variable.
+
+        Returns
+        -------
+        csdl.Variable
+            Solution variable with the same shape as ``rhs``.
+        """
+
         self.declare_input("rhs", rhs)
         u_f = self.create_output("u_f", rhs.shape)
         self.declare_vjp_function(
@@ -100,11 +157,29 @@ class SPDSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
         return u_f
 
     def compute(self, inputs, outputs):
+        """Evaluate the numeric forward solve.
+
+        Parameters
+        ----------
+        inputs
+            Custom-operation inputs containing ``rhs``.
+        outputs
+            Mutable custom-operation outputs receiving ``u_f``.
+        """
+
         outputs["u_f"] = self.factor.solve(np.asarray(inputs["rhs"], dtype=float))
 
 
 class SPDSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
-    """Adjoint of the SPD solve; reuses the same factor by symmetry."""
+    """Compute the SPD-solve adjoint using the symmetric factor.
+
+    Parameters
+    ----------
+    factor
+        Cached forward factorization.
+    output_name
+        Name used to retrieve the output cotangent.
+    """
 
     def __init__(self, factor: SPDFactor, output_name: str = "u_f"):
         super().__init__()
@@ -112,6 +187,21 @@ class SPDSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
         self.output_name = str(output_name)
 
     def evaluate(self, inputs, d_outputs):
+        """Declare the reverse solve and its input cotangent.
+
+        Parameters
+        ----------
+        inputs
+            Forward inputs containing ``rhs``.
+        d_outputs
+            Output cotangents keyed by ``output_name``.
+
+        Returns
+        -------
+        dict[str, csdl.Variable]
+            Cotangent variable for ``rhs``.
+        """
+
         rhs = inputs["rhs"]
         d_u_f = d_outputs[self.output_name]
 
@@ -121,6 +211,16 @@ class SPDSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
         return {"rhs": d_rhs}
 
     def compute(self, inputs, outputs):
+        """Evaluate the numeric transpose solve.
+
+        Parameters
+        ----------
+        inputs
+            Reverse inputs containing the solution cotangent.
+        outputs
+            Mutable outputs receiving the right-hand-side cotangent.
+        """
+
         outputs["d_rhs"] = self.factor.solve(np.asarray(inputs["d_u_f"], dtype=float))
 
 

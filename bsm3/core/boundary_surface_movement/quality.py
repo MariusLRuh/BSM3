@@ -11,7 +11,17 @@ from bsm3.preprocessing.mesh_io import _as_mesh_data
 
 @dataclass(frozen=True)
 class ElementInversionReport:
-    """Element orientation comparison against the undeformed mesh."""
+    """Report element orientation relative to the undeformed mesh.
+
+    Parameters
+    ----------
+    inverted_element_ids
+        Elements containing at least one reversed corner Jacobian.
+    degenerate_element_ids
+        Elements containing a zero-area or degenerate corner.
+    cell_types
+        Cell type aligned with the stable element ordering.
+    """
 
     inverted_element_ids: np.ndarray
     degenerate_element_ids: np.ndarray
@@ -19,10 +29,26 @@ class ElementInversionReport:
 
     @property
     def num_inverted(self) -> int:
+        """Return the number of inverted elements.
+
+        Returns
+        -------
+        int
+            Size of ``inverted_element_ids``.
+        """
+
         return int(self.inverted_element_ids.size)
 
     @property
     def has_inversions(self) -> bool:
+        """Return whether any element is inverted.
+
+        Returns
+        -------
+        bool
+            ``True`` when at least one element has a reversed corner.
+        """
+
         return bool(self.num_inverted)
 
     def __bool__(self) -> bool:
@@ -31,7 +57,27 @@ class ElementInversionReport:
 
 @dataclass(frozen=True)
 class MeshQualityReport:
-    """Standard aggregate metrics for a triangle/quad surface mesh."""
+    """Store aggregate quality metrics for a polygonal surface mesh.
+
+    Attributes
+    ----------
+    element_count
+        Number of evaluated surface cells.
+    minimum_angle_degrees
+        Minimum corner angle in degrees.
+    maximum_aspect_ratio
+        Largest edge-length aspect ratio.
+    minimum_scaled_jacobian
+        Smallest oriented corner scaled Jacobian.
+    minimum_area_ratio
+        Smallest deformed-to-baseline area ratio.
+    inverted_elements
+        Number of elements with reversed corners.
+    inverted_corners
+        Total number of reversed corners.
+    degenerate_elements
+        Number of elements with degenerate geometry.
+    """
 
     element_count: int
     minimum_angle_degrees: float
@@ -55,6 +101,18 @@ def check_element_inversion(*, mesh, final_mesh_vertices) -> ElementInversionRep
     still points in the baseline direction.  Testing every corner catches that
     failure; an element is inverted when any of its corner Jacobians is
     negative.
+
+    Parameters
+    ----------
+    mesh
+        Baseline mesh and connectivity.
+    final_mesh_vertices
+        Final numeric or CSDL coordinate array.
+
+    Returns
+    -------
+    ElementInversionReport
+        Inverted and degenerate element IDs in stable cell order.
     """
 
     mesh_data = _as_mesh_data(mesh)
@@ -86,7 +144,20 @@ def check_element_inversion(*, mesh, final_mesh_vertices) -> ElementInversionRep
 
 
 def evaluate_mesh_quality(*, mesh, vertices=None) -> MeshQualityReport:
-    """Compute surface quality relative to the mesh's baseline coordinates."""
+    """Compute surface quality relative to baseline coordinates.
+
+    Parameters
+    ----------
+    mesh
+        Baseline mesh and polygon connectivity.
+    vertices
+        Optional deformed coordinates; omit to evaluate the baseline.
+
+    Returns
+    -------
+    MeshQualityReport
+        Aggregate angle, aspect-ratio, Jacobian, area, and inversion metrics.
+    """
 
     mesh_data = _as_mesh_data(mesh)
     baseline = np.asarray(mesh_data.vertices, dtype=float)
@@ -162,7 +233,20 @@ def evaluate_mesh_quality(*, mesh, vertices=None) -> MeshQualityReport:
 
 
 def compare_mesh_quality(*, mesh, deformed_vertices) -> tuple[MeshQualityReport, MeshQualityReport]:
-    """Return baseline and deformed reports using identical connectivity."""
+    """Evaluate baseline and deformed quality with identical connectivity.
+
+    Parameters
+    ----------
+    mesh
+        Baseline mesh and connectivity.
+    deformed_vertices
+        Coordinates of the deformed surface mesh.
+
+    Returns
+    -------
+    tuple[MeshQualityReport, MeshQualityReport]
+        Baseline report followed by the deformed report.
+    """
 
     return (
         evaluate_mesh_quality(mesh=mesh),

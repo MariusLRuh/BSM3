@@ -50,7 +50,27 @@ from .projection import (
 
 @dataclass(frozen=True)
 class GraphLoadStepResult:
-    """Outputs from a fixed graph-continuation path."""
+    """Collect outputs from a fixed graph-continuation path.
+
+    Attributes
+    ----------
+    final_mesh_vertices
+        Final projected coordinates in complete mesh order.
+    final_preprojected_mesh_vertices
+        Final coordinates immediately before OML projection.
+    final_deformation_vertices
+        Final coordinates on the actively deformed subset.
+    load_fractions
+        Monotone continuation fractions ending at one.
+    preprojected_mesh_history
+        Preprojection coordinates from every increment.
+    projected_mesh_history
+        Reprojected coordinates from every increment.
+    distortion_normalization_scale
+        Optional quadratic-regularizer normalization.
+    ngon_affine_normalization_scale
+        Optional affine-residual regularizer normalization.
+    """
 
     final_mesh_vertices: csdl.Variable
     final_preprojected_mesh_vertices: csdl.Variable
@@ -69,7 +89,23 @@ class GraphLoadStepResult:
 
 
 def linear_load_fractions(num_steps: int) -> tuple[float, ...]:
-    """Return ``(1/N, ..., 1)`` for a positive, fixed load-step count."""
+    """Return evenly spaced fractions ending at one.
+
+    Parameters
+    ----------
+    num_steps
+        Positive integer number of continuation increments.
+
+    Returns
+    -------
+    tuple[float, ...]
+        Fractions ``(1/N, ..., 1)``.
+
+    Raises
+    ------
+    ValueError
+        If ``num_steps`` is not a positive integer.
+    """
 
     count = int(num_steps)
     if count < 1 or count != num_steps:
@@ -106,6 +142,47 @@ def run_graph_load_steps(
     one-shot graph path.  Seam rows are overwritten by the current exact
     intersection before every projection so projection roundoff from the prior
     step cannot accumulate at a component junction.
+
+    Parameters
+    ----------
+    motion
+        Configured graph-Laplacian surface-motion solver.
+    mesh
+        Baseline surface mesh.
+    initial_deformation_vertices
+        Initial coordinates for the actively deformed rows.
+    deformation_vertex_ids
+        Global IDs aligned with ``initial_deformation_vertices``.
+    component_coefficient_steps
+        Complete component coefficient mapping at every load fraction.
+    projection_metadata
+        Component ownership used to reproject graph-moved rows.
+    reevaluation_metadata
+        Fixed parametric coordinates used for exact component reevaluation.
+    projection_options
+        Optional projection solver settings.
+    load_fractions
+        Optional explicit strictly increasing fractions ending at one.
+    distortion_config
+        Optional quadratic-distortion regularizer.
+    ngon_affine_config
+        Optional affine-residual polygon regularizer.
+    symmetry_plane_vertex_ids
+        Optional fixed set constrained to the symmetry plane.
+    symmetry_plane_axis
+        Coordinate axis normal to the symmetry plane.
+
+    Returns
+    -------
+    GraphLoadStepResult
+        Final meshes, continuation history, and regularizer diagnostics.
+
+    Raises
+    ------
+    TypeError
+        If ``motion`` is not the required graph-Laplacian solver.
+    ValueError
+        If continuation data, partitions, or regularizer choices are invalid.
     """
 
     if not isinstance(motion, ElasticityMotionSolver):

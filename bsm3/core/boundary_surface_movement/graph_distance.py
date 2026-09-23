@@ -49,6 +49,23 @@ class GraphDistanceWeighting:
     over the restricted band graph.  ``edge_multipliers`` maps any array of
     ordered/unordered vertex-index pairs to the fixed, positive, symmetric
     multiplier ``min(1 + beta*g((d_a + d_b)/2), cap)``.
+
+    Parameters
+    ----------
+    vertex_distance
+        Reference geodesic distance from the nearest seed per vertex.
+    beta
+        Nonnegative multiplier amplitude.
+    length
+        Positive physical decay length.
+    cap
+        Upper bound, no smaller than one.
+    decay
+        ``"exp"`` or ``"rational"`` decay law.
+    rational_power
+        Positive power for rational decay.
+    seed_ids
+        Optional source-vertex IDs retained for diagnostics.
     """
 
     vertex_distance: np.ndarray
@@ -80,7 +97,18 @@ class GraphDistanceWeighting:
         return np.power(1.0 + distance / float(self.length), -float(self.rational_power))
 
     def edge_multipliers(self, edge_vertices: np.ndarray) -> np.ndarray:
-        """Fixed multiplier per edge for a ``(num_edges, 2)`` index array."""
+        """Compute the fixed multiplier for each supplied edge.
+
+        Parameters
+        ----------
+        edge_vertices
+            Integer endpoint array with shape ``(num_edges, 2)``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Positive symmetric multipliers in the interval ``[1, cap]``.
+        """
         edges = np.asarray(edge_vertices, dtype=np.int64).reshape((-1, 2))
         endpoint_distance = 0.5 * (
             self.vertex_distance[edges[:, 0]] + self.vertex_distance[edges[:, 1]]
@@ -91,7 +119,18 @@ class GraphDistanceWeighting:
         return np.maximum(capped, 1.0)
 
     def edge_multiplier_map(self, edge_keys) -> dict[tuple[int, int], float]:
-        """Return ``{(a, b): multiplier}`` for a sequence of vertex-pair keys."""
+        """Map vertex-pair keys to fixed edge multipliers.
+
+        Parameters
+        ----------
+        edge_keys
+            Sequence of two-vertex edge keys.
+
+        Returns
+        -------
+        dict[tuple[int, int], float]
+            Input keys paired with their computed multipliers.
+        """
         keys = list(edge_keys)
         if not keys:
             return {}
@@ -99,7 +138,18 @@ class GraphDistanceWeighting:
         return {tuple(int(v) for v in key): float(m) for key, m in zip(keys, multipliers)}
 
     def summary(self, edge_vertices: np.ndarray) -> dict[str, float | int | str]:
-        """Distance-multiplier diagnostics over a set of edges."""
+        """Summarize distance multipliers over a set of edges.
+
+        Parameters
+        ----------
+        edge_vertices
+            Integer endpoint array with shape ``(num_edges, 2)``.
+
+        Returns
+        -------
+        dict[str, float | int | str]
+            Configuration and reachable-distance/multiplier statistics.
+        """
         multipliers = self.edge_multipliers(edge_vertices)
         finite = self.vertex_distance[np.isfinite(self.vertex_distance)]
         return {
@@ -130,6 +180,28 @@ def compute_multisource_geodesic_distance(
     shortcut through unrelated components; vertices outside the band remain at
     ``+inf``.  Distances use physical edge lengths because the CFD mesh is
     strongly graded.
+
+    Parameters
+    ----------
+    mesh
+        Reference surface mesh.
+    seed_ids
+        Source vertices for the multi-source shortest paths.
+    restrict_vertex_ids
+        Optional band within which both edge endpoints must lie.
+    edge_length_floor
+        Positive lower bound applied to physical edge lengths.
+
+    Returns
+    -------
+    numpy.ndarray
+        Minimum geodesic distance per mesh vertex; unreachable entries are
+        infinite.
+
+    Raises
+    ------
+    ValueError
+        If seed IDs, restricted IDs, or the edge-length floor are invalid.
     """
 
     mesh_data = _as_mesh_data(mesh)
@@ -209,7 +281,32 @@ def build_graph_distance_weighting(
     rational_power: float = 1.0,
     restrict_vertex_ids: np.ndarray | None = None,
 ) -> GraphDistanceWeighting:
-    """Assemble the fixed reference-geodesic distance weighting in one call."""
+    """Assemble fixed reference-geodesic distance weighting.
+
+    Parameters
+    ----------
+    mesh
+        Reference surface mesh.
+    seed_ids
+        Source vertices for the geodesic distance.
+    beta
+        Nonnegative multiplier amplitude.
+    length
+        Positive physical decay length.
+    cap
+        Upper multiplier bound.
+    decay
+        ``"exp"`` or ``"rational"`` decay law.
+    rational_power
+        Power used by rational decay.
+    restrict_vertex_ids
+        Optional vertex band used to restrict shortest paths.
+
+    Returns
+    -------
+    GraphDistanceWeighting
+        Immutable distances and multiplier configuration.
+    """
 
     distance = compute_multisource_geodesic_distance(
         mesh,

@@ -1699,3 +1699,236 @@ implementation is deferred to M3 under the prerequisites recorded in
 `MANIFEST.md`. Claude's Turn-25 review will rule.**
 
 Status:    closed
+
+---
+
+## Turn 25 — Claude, planner/reviewer, 2026-09-23
+Scope:     Review of the M1.5 disposition and deferred backend cleanup
+
+**RULING: the M1.5 deferral is ACCEPTED, and M1.5 is COMPLETE as a disposition
+decision.** Codex's recommendation is correct and every supporting fact was
+verified independently. One refinement to the M3 hand-off is added below.
+
+**Allowlist: 5 files across `8ded2dc..0dbcc75`, zero violations.** `eb1ed5f` is
+the backend cleanup only (+11/-3); `0dbcc75` is docs-only. No `bsm3.meshgen`
+module, no binary asset, nothing untracked adopted.
+
+**Task 2 verified.** The `GeometryParameterization` import is under
+`TYPE_CHECKING`; AST analysis confirms **zero runtime (non-annotation)
+references** and no module-level import of `mesh_motion_config`. The false
+comment at line 304 is replaced with a narrower true statement about the
+deferred pipeline import. Backend imports cleanly; all four public symbols
+resolve. As the prompt predicted, importing the submodule still loads both
+modules via the `__init__` re-exports — deliberately out of scope, correctly
+left alone.
+
+**Task 1 — every factual claim checked and confirmed:**
+
+| Claim | Verified |
+|---|---|
+| root M is the only credible STEP->surface candidate | yes |
+| `gmsh_occ_oml_surface_mesh.py` 2,475 LOC | yes |
+| `smooth_existing_tip_cap.py` 2,283 LOC | yes |
+| circular pair | **4** deferred imports M->S, **1** S->M |
+| combined 4,758 LOC, ~5.9x the 800 threshold | exact |
+| `generate_e175_panel_mesh.py` is a wrapper, not an independent implementation | yes — imports `OccOmlSettings`, `_preset_overrides`, `run` from root M, including a **private** symbol |
+| remaining candidates are volume generators / converters / remeshers | yes, by docstring inspection |
+| **zero test coverage across all nine candidates** | confirmed — the decisive fact |
+
+The deferral is the right call, and for the reason that matters: M1.5's stated
+acceptance ("core imports nothing from meshgen") was **already satisfied before
+this turn**. Adopting 4,758 untested LOC with a circular dependency to satisfy a
+checkbox would be the Turn-3 deletion-safety error run backwards.
+
+**Refinement for M3 — Codex under-sold the best candidate.** Turn 24 grouped
+`remesh_fused_step.py` with "remeshers rather than the required general
+STEP-to-surface entry point." Measured this turn, it is materially the strongest
+starting point and deserves to be named rather than rediscovered:
+
+- **615 LOC** — under the 800 threshold
+- **No circular dependency**; it imports neither root M nor
+  `smooth_existing_tip_cap`
+- Clean dataclass-configured API with three public entry points
+- Critically: **`remesh_fused_step()`, the primary entry point, needs no `bsm3`
+  dependency at all.** Only the `_parametric` and `_manifold` variants pull
+  `body_oml_refit` (847 LOC, untracked) — and they are separable.
+
+So M3's realistic minimum is **615 LOC with zero internal coupling**, not 4,758
+with a cycle. That does not change the M1.5 verdict — it still has no tests, and
+M1.5's criterion was already met — but it makes M3's decision concrete. Recorded
+in `MANIFEST.md` via the next turn.
+
+**Validation, re-run in `central_geom`:**
+- numeric guard re-measured (an import-only change cannot move numerics, but
+  verified anyway): hexagon modes **3**, `obj'(λ=0)` **4.000000000000**,
+  `obj'(λ=0.3)` **4.384615384615** = 57/13, observability **0.153846153846** =
+  2/13 — **all unchanged to 1e-12**
+- guards + MPI tripwire: **32 passed in 8.16 s**
+- full dirty-tree suite: **171 passed in 30.81 s**
+- **genuine clone of `0dbcc75`**: empty `git status --porcelain`, core-clean grep
+  empty, `bsm3/meshgen` absent, **157 passed / 1 skipped in 33.28 s**
+- eight excluded dirty files untouched; nothing staged
+
+**M1.5 is COMPLETE** (disposition: defer adoption to M3). `PLAN.md` updated.
+
+Remaining M1 work: **M1.6** (numpydoc across the live core + widen the CI lint
+gate), **M1.8** (retire the internal pickle branch), then **M1.7** (acceptance
+run). Next turn is **M1.6**; prompt written to `CODEX_NEXT.md`.
+
+Status:    closed
+
+---
+
+## Turn 26 — Codex, implementer/reviewer, 2026-09-23
+Scope:     M1.6 slice 1 of 3 — surface-motion-core numpydoc coverage
+
+Claimed the turn after reviewing the 20-path allowlist, the three-slice M1.6
+plan, and the signature-drift guard. Work is limited to docstrings in the 16
+surface-motion-core modules, the new slice-specific CI lint step, and the three
+collaboration documents.
+
+### STOP — wrong public return annotation exposed by documentation
+
+While documenting `GraphDistanceWeighting.summary`, found that its declared
+return type is `dict[str, float]`, but the returned mapping includes
+`"decay": self.decay`, whose value is a string. This is a genuine signature
+defect covered verbatim by the Turn-26 stop rule. The signature was **not**
+changed and the defect was **not** hidden in the docstring.
+
+At the stop point, the allowed docstring work is prepared but uncommitted:
+the prompt's AST coverage check reports **132/132 (100%)**, its signature-drift
+check reports **none**, and a stronger comparison that removes docstrings from
+both ASTs reports **no non-docstring AST drift** across all 16 modules. The
+slice-specific CI step is also prepared with exactly the 16 named paths. Ruff
+was not run locally because it is absent from `central_geom`, as expected.
+
+No tests or clone verification were run after the finding, no files were
+staged, and no commit was created. Claude must rule whether the annotation is
+fixed in a separate defect commit before the documentation slice resumes, or
+is deliberately left inaccurate. Codex recommends the separate fix, with
+`dict[str, float | int | str]` (or a typed diagnostic mapping) chosen explicitly
+rather than silently weakening the annotation during a docstrings-only turn.
+
+Status:    stopped — awaiting Claude ruling
+
+---
+
+## Turn 27 — Claude, planner/reviewer, 2026-09-23
+Scope:     Rule on the Turn-26 stop (GraphDistanceWeighting.summary annotation)
+
+**RULING: the stop is UPHELD. Fix the annotation in a separate defect commit,
+landed BEFORE the documentation commit.** Sixth stop; unlike the previous five
+this one is **not** a Claude planning defect — it is a genuine pre-existing code
+defect that writing documentation exposed, which is precisely what the Turn-26
+stop rule was written to catch. The rule worked as intended.
+
+**Defect verified independently, and it is worse than reported.**
+`graph_distance.py:140` declares `summary(...) -> dict[str, float]`, but the
+returned mapping is wrong on **two** counts, not one:
+
+| key | actual type | source |
+|---|---|---|
+| `"decay"` | **`str`** | `decay: str = "exp"` (line 75) |
+| `"num_reachable_vertices"` | **`int`** | `int(finite.size)` |
+
+The other eight keys are genuinely `float`.
+
+**Ruled replacement: `dict[str, float | int | str]`.** Checks performed before
+ruling:
+
+- **py39 safety.** The project targets `py39` (`ruff.toml`, CI `python-version:
+  "3.9"`), and `central_geom` is 3.9.23. A bare PEP-604 union in an evaluated
+  annotation raises `TypeError` there — confirmed empirically. But
+  `graph_distance.py` carries `from __future__ import annotations` at **line
+  33**, so annotations are strings and never evaluated. The union is safe, and
+  the file already uses `np.ndarray | None` at lines 77, 172 and 282. *(Claude's
+  first check reported this import "absent" — the probe was wrong, a trailing
+  `sed` masked grep's exit status. Corrected before ruling.)*
+- **Blast radius.** Exactly one caller, `mesh_motion_pipeline.py:941`. It is
+  diagnostics-only: it formats `num_reachable_vertices` as an integer and the
+  distance/multiplier values with `:.3g`. Annotations have no runtime effect and
+  CI runs no type checker, so nothing can break.
+
+**A `TypedDict` is rejected for this turn** — it is the better long-term answer
+but introduces a new public type during a docstrings-only slice, which is the
+scope creep that has caused five of the six stops. Recorded as an M1.7
+candidate.
+
+**Observation worth keeping: the `"decay"` key is dead payload.** The only
+in-repo caller never reads `summary["decay"]`; it prints `distance.decay`
+straight from the config. Removing the key would let the annotation be
+`dict[str, float | int]`, but that changes a public return value and is out of
+scope here. **Candidate cleanup for M1.7/M3**, not now.
+
+**Codex's prepared work is correct and should be preserved.** Verified in the
+working tree: exactly **16/16 slice-1 files** modified, plus
+`.github/workflows/actions.yml`; the five other modified files under
+`boundary_surface_movement/` are the pre-existing excluded dirty files, with
+content untouched. **No unexpected file.** Codex's self-reported
+132/132 (100%) coverage and zero non-docstring AST drift will be re-verified at
+Turn 29 review.
+
+**Commit structure ruled (two commits, in this order):**
+
+1. `fix: correct GraphDistanceWeighting.summary return annotation` — the
+   one-line annotation change in `graph_distance.py`, nothing else.
+2. `docs: numpydoc the surface-motion core (M1.6 slice 1)` — the 16 files plus
+   the CI lint step.
+
+**Consequence Codex must handle:** the prompt's signature-drift guard compares
+against `0dbcc75`. After commit 1 that baseline is stale and would flag
+`graph_distance.py` as drift. The guard's baseline is therefore **commit 1**,
+not `0dbcc75`. The corrected prompt says so explicitly.
+
+M1.6 slice 1 remains **OPEN**; the corrected prompt is in `CODEX_NEXT.md`.
+
+**Turn 27 changed no production code.** Only `PLAN.md`, `LOG.md` and
+`CODEX_NEXT.md` were edited; Codex's uncommitted docstring work was left
+untouched; nothing staged.
+
+Status:    closed
+
+---
+
+## Turn 28 — Codex, implementer/reviewer, 2026-09-23
+Scope:     M1.6 slice 1 resumed after the annotation ruling
+
+Claimed the turn after confirming that the prepared 16-module docstring work
+and slice-specific workflow edit remain intact and unstaged. The ruled
+`GraphDistanceWeighting.summary` annotation correction will land alone before
+the documentation commit; the documentation-only comparison will then use that
+fix commit as its baseline.
+
+User steering for the next planning turn: prioritize a working, well-documented
+E175 example that exercises the generalized API. Preserve the remaining
+milestone guarantees, but organize M1.6 slices 2/3, M1.8, and M1.7 around
+delivering and validating that concrete example rather than treating it as a
+late acceptance artifact.
+
+### Implementation and verification
+
+Commit `03a4f54` contains only the ruled annotation correction:
+`dict[str, float]` to `dict[str, float | int | str]`. The returned mapping is
+byte-identical, including the dead `"decay"` payload; no `TypedDict` was added.
+
+The resumed documentation slice covers all 16 authorized surface-motion-core
+modules. The AST coverage check reports **132/132 public definitions (100%)**,
+up from 2/132 and above the 118/132 threshold. A docstring-stripped AST
+comparison against `03a4f54` reports **zero non-docstring drift**. The new CI
+step names exactly those 16 modules, and the two existing lint steps are
+unchanged. Ruff and pydocstyle remain absent from `central_geom`, so neither was
+installed or run locally; CI's pinned Ruff remains authoritative.
+
+Numerical guards were re-measured: projector rank **3**, retained fraction
+**1.0**, `‖P·1‖` **0**, hexagon modes **3**, `obj'(λ=0)` **4.0**,
+`obj'(λ=0.3)` **57/13**, and normalized observability **2/13**. All match the
+pre-documentation values to 1e-12. Focused tests: derivative gate **1 passed**;
+M1.4 operator/load-step tests **5 passed**. Full dirty-tree suite:
+**171 passed**. A genuine clone of the documentation commit had empty status
+and **157 passed / 1 skipped**.
+
+No second defect was found, no test or untracked mesh-generation file was
+touched, and every pre-existing excluded tracked file remains dirty and outside
+the commits. M1.6 slice 1 is implemented and awaits Claude review.
+
+Status:    closed

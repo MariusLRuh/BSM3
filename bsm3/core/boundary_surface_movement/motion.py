@@ -59,22 +59,66 @@ from .spd_solve_custom_op import SPDSolveOperation
 
 
 class MeshMotionField(Protocol):
-    """Evaluate preprojected free-vertex positions for a set of mesh rows."""
+    """Evaluate preprojected free-vertex positions for mesh rows.
+
+    Notes
+    -----
+    Implementations preserve the input row order and return three coordinates
+    per requested vertex.
+    """
 
     def evaluate(
         self, *, vertices: csdl.Variable, vertex_ids: np.ndarray
-    ) -> csdl.Variable: ...
+    ) -> csdl.Variable:
+        """Evaluate the trained motion field.
+
+        Parameters
+        ----------
+        vertices
+            Query coordinates aligned with ``vertex_ids``.
+        vertex_ids
+            Global IDs of the query rows.
+
+        Returns
+        -------
+        csdl.Variable
+            Preprojected coordinates in query-row order.
+        """
+
+        ...
 
 
 class MeshMotionSolver(Protocol):
-    """Train a differentiable motion field from deformed component coefficients."""
+    """Train a motion field from deformed component coefficients.
+
+    Notes
+    -----
+    The returned field is differentiable with respect to supplied CSDL
+    coefficients.
+    """
 
     def train(
         self,
         *,
         component_coeffs,
         query_component_coeffs: Mapping[object, object] | None = None,
-    ) -> MeshMotionField: ...
+    ) -> MeshMotionField:
+        """Build a differentiable field for one geometry state.
+
+        Parameters
+        ----------
+        component_coeffs
+            Deformed driving-component coefficients.
+        query_component_coeffs
+            Optional coefficient overrides for query components.
+
+        Returns
+        -------
+        MeshMotionField
+            Trained preprojection field.
+        """
+
+        ...
 
 
 @dataclass(frozen=True)
@@ -87,6 +131,15 @@ class ComponentReevaluation:
     enter the elastic solve.  Providing them here lets ``evaluate`` reproduce
     the RBF's non-fuselage behavior and keeps the projection back-end
     unchanged.
+
+    Parameters
+    ----------
+    component
+        Geometry component evaluated exactly.
+    vertex_ids
+        Global mesh rows owned by the component.
+    parametric_coordinates
+        Fixed ``[patch, u, v]`` coordinates aligned with ``vertex_ids``.
     """
 
     component: object
@@ -106,7 +159,19 @@ class ComponentReevaluation:
 
 @dataclass(frozen=True)
 class GraphLoadStepState:
-    """Geometry-side data needed by one incremental graph solve."""
+    """Store geometry-side data for one incremental graph solve.
+
+    Attributes
+    ----------
+    free_reference
+        Absolute component-reference positions for free rows.
+    prescribed_deviations
+        Absolute boundary deviations for unconstrained coordinate blocks.
+    prescribed_deviations_y
+        Boundary deviations for the symmetry-aware y block.
+    solutions
+        Exact component-intersection solutions.
+    """
 
     free_reference: csdl.Variable
     prescribed_deviations: tuple[csdl.Variable, ...]
@@ -120,7 +185,15 @@ class GraphLoadStepState:
 
 
 class RBFMotionSolver:
-    """Adapter presenting the meshless RBF interpolator as a motion strategy."""
+    """Present the meshless RBF interpolator as a motion strategy.
+
+    Parameters
+    ----------
+    mesh
+        Baseline surface mesh.
+    interpolation_params
+        RBF centers, basis, and component-intersection metadata.
+    """
 
     def __init__(
         self,
@@ -139,6 +212,21 @@ class RBFMotionSolver:
         component_coeffs,
         query_component_coeffs: Mapping[object, object] | None = None,
     ) -> MeshMotionField:
+        """Train the underlying meshless displacement interpolator.
+
+        Parameters
+        ----------
+        component_coeffs
+            Deformed driving-component coefficients.
+        query_component_coeffs
+            Optional coefficient overrides for query components.
+
+        Returns
+        -------
+        MeshMotionField
+            RBF displacement surrogate satisfying the common field protocol.
+        """
+
         # ``DisplacementSurrogate`` already satisfies the MeshMotionField
         # contract (``evaluate(vertices=..., vertex_ids=...)``).
         return self._interpolator.train(
@@ -162,6 +250,39 @@ class ElasticityMotionSolver:
     (parametric reevaluation on the owner component, which is zero where the
     owner is stationary).  Wing/tail surface rows are handled by
     ``component_reevaluations`` and never enter the solve.
+
+    Parameters
+    ----------
+    mesh
+        Baseline surface mesh.
+    free_ids
+        Global vertex IDs solved by graph propagation.
+    intersection_params
+        Exact seam problems providing moving Dirichlet data.
+    parametric_coordinates
+        Fixed geometry coordinates for every mesh vertex.
+    components
+        Geometry components that own mesh rows.
+    component_reevaluations
+        Rows moved by exact parametric reevaluation rather than the graph.
+    stiffening_exponent
+        Reference-area exponent used by the default assembler.
+    use_query_seam_reference
+        Whether query-component motion contributes to the seam reference.
+    symmetry_plane_ids
+        Optional global IDs constrained to a symmetry plane.
+    assembler
+        Optional custom stiffness assembler.
+    prescribed_ids
+        Optional explicit Dirichlet partition.
+    symmetry_use_element_neighbors
+        Whether symmetry partitions use the full co-element halo.
+    distance_weighting
+        Optional fixed reference-geodesic edge weighting.
+    quad_diagonal_weight
+        Weight for auxiliary quadrilateral bracing.
+    quad_bracing_mode
+        Auxiliary bracing topology.
     """
 
     def __init__(
@@ -487,6 +608,18 @@ class ElasticityMotionSolver:
         geometry.  A continuation driver differences consecutive states and
         solves those increments using graph weights from the current projected
         mesh.
+
+        Parameters
+        ----------
+        component_coeffs
+            Deformed driving-component coefficients.
+        query_component_coeffs
+            Optional coefficient overrides for query components.
+
+        Returns
+        -------
+        GraphLoadStepState
+            Absolute free references, prescribed deviations, and exact seams.
         """
 
         driving_by_id, query_component_coeffs, solutions = self._solve_geometry(
@@ -535,6 +668,22 @@ class ElasticityMotionSolver:
         component_coeffs,
         query_component_coeffs: Mapping[object, object] | None = None,
     ) -> "ElasticityMotionField":
+        """Solve the reference-config graph motion for one geometry state.
+
+        Parameters
+        ----------
+        component_coeffs
+            Deformed driving-component coefficients.
+        query_component_coeffs
+            Optional coefficient overrides for query components.
+
+        Returns
+        -------
+        ElasticityMotionField
+            Field combining graph displacements, exact reevaluations, and seam
+            overrides.
+        """
+
         driving_by_id, query_component_coeffs, solutions = self._solve_geometry(
             component_coeffs=component_coeffs,
             query_component_coeffs=query_component_coeffs,
@@ -776,6 +925,23 @@ class ElasticityMotionField:
     wing/tail rows, and the exact bisection override on seam rows -- the same
     row structure the RBF surrogate produces, so the projection back-end is
     unchanged.
+
+    Parameters
+    ----------
+    free_ids
+        Global graph-solved vertex IDs.
+    free_local
+        Mapping from global free ID to solver-row index.
+    free_reference
+        Baseline reference positions for free rows.
+    free_displacement
+        Solved differentiable free-row displacement.
+    solutions
+        Exact seam solutions used as final overrides.
+    component_reevaluations
+        Groups evaluated at fixed component parametric coordinates.
+    reevaluation_coefficients
+        Deformed component coefficients keyed by component identity.
     """
 
     def __init__(
@@ -798,6 +964,26 @@ class ElasticityMotionField:
         self.reevaluation_coefficients = dict(reevaluation_coefficients)
 
     def evaluate(self, *, vertices: csdl.Variable, vertex_ids: np.ndarray) -> csdl.Variable:
+        """Evaluate graph motion, reevaluations, and seam overrides.
+
+        Parameters
+        ----------
+        vertices
+            Query coordinates aligned with ``vertex_ids``.
+        vertex_ids
+            Global IDs of the query rows.
+
+        Returns
+        -------
+        csdl.Variable
+            Preprojected coordinates in query-row order.
+
+        Raises
+        ------
+        ValueError
+            If IDs do not align with query rows or reevaluation metadata.
+        """
+
         query_points = np.asarray(
             getattr(vertices, "value", vertices), dtype=float
         ).reshape((-1, 3))

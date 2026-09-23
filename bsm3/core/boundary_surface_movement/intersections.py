@@ -26,7 +26,39 @@ from .geometry import (
 
 @dataclass(frozen=True)
 class IntersectionParameters:
-    """Configuration for one driving-component/query-component intersection."""
+    """Configure one driving/query component intersection.
+
+    Parameters
+    ----------
+    parametric_coords
+        Setup-time ``[patch, u, v]`` coordinates on the driving component.
+    sdf_query_component
+        Component supplying the signed-distance residual.
+    driving_component
+        Component evaluated at the parametric coordinates.
+    vertex_ids
+        Optional global mesh IDs aligned with the seam rows.
+    bisection_search_direction
+        Driving parametric coordinate varied by the solve.
+    bisection_tolerance, bisection_max_iter
+        Bracketed-search convergence controls.
+    vertices_to_include
+        Seam rows retained as propagation training data.
+    influence_x, influence_y, influence_z
+        Axis-aligned influence extents.
+    influence_ellipsoid_radii
+        Optional ellipsoidal influence radii.
+    seam_support_sigma
+        Optional nonnegative soft seam-support bandwidth.
+    weighting_function
+        Distance weighting used by propagation.
+    projection_options
+        Options forwarded to the signed-distance model.
+    print_status
+        Whether the nonlinear solver prints convergence status.
+    name
+        Stable diagnostic and implicit-state name.
+    """
 
     parametric_coords: np.ndarray
     sdf_query_component: object
@@ -74,7 +106,19 @@ class IntersectionParameters:
 
 @dataclass(frozen=True)
 class IntersectionSolution:
-    """Initial and current exact vertices for one intersection."""
+    """Store baseline and current exact intersection vertices.
+
+    Attributes
+    ----------
+    initial_vertices
+        Baseline NumPy intersection coordinates.
+    deformed_vertices
+        Differentiable current intersection coordinates.
+    vertex_ids
+        Optional aligned global mesh IDs.
+    training_rows
+        Local seam rows retained for motion propagation.
+    """
 
     initial_vertices: np.ndarray
     deformed_vertices: csdl.Variable
@@ -94,6 +138,25 @@ def solve_intersection(
     projection.  The other coordinate is an implicit state bracketed by the
     full ``[0, 1]`` parametric span of that patch.  The residual is the query
     component SDF in normal-sign mode.
+
+    Parameters
+    ----------
+    parameters
+        Fixed intersection geometry and bracket settings.
+    driving_coefficients
+        Current coefficients of the driving component.
+    query_coefficients
+        Optional current query-component coefficients.
+
+    Returns
+    -------
+    IntersectionSolution
+        Baseline and differentiable current seam coordinates.
+
+    Raises
+    ------
+    ValueError
+        If no driving component is configured.
     """
 
     driving_component = parameters.driving_component
@@ -246,6 +309,19 @@ def _solve_baseline_intersection(
     count = coordinates.shape[0]
 
     def residual(state: np.ndarray) -> np.ndarray:
+        """Evaluate baseline signed distances at trial coordinates.
+
+        Parameters
+        ----------
+        state
+            Trial values of the free parametric coordinate.
+
+        Returns
+        -------
+        numpy.ndarray
+            Signed-distance residual for each seam row.
+        """
+
         coordinates[:, solve_column] = state
         points = evaluation_model.evaluate(driving_coefficients, coordinates)
         distances, _ = sdf_model.project(query_coefficients, points)

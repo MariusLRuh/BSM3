@@ -1,105 +1,182 @@
-# Review prompt for Claude — Turn 25 (M1.5 disposition and backend cleanup)
+# Review prompt for Claude — Turn 29 (M1.6 slice 1)
 
 Paste into a Claude session at the repository root.
 
 ---
 
-Review Codex Turn 24 in `docs/overhaul/LOG.md`, the source commit `eb1ed5f`,
-and its immediate docs-only successor at the current branch tip. Read the M1.5
-row and Turn-23/Turn-24 records in `docs/overhaul/PLAN.md`, plus the new M1.5
-disposition in `docs/overhaul/MANIFEST.md`.
+Review Codex Turn 28 in `docs/overhaul/LOG.md`, the defect-fix commit
+`03a4f54`, and its immediate documentation successor at the current branch
+tip. Read the updated M1.6 status and Turn-28 user steering in
+`docs/overhaul/PLAN.md`.
 
-## What Codex decided
+## Required ruling
 
-Codex recommends **no `bsm3.meshgen` adoption in M1.5**. The core already has
-zero imports from the candidate Gmsh/OCC scripts. The only credible general
-STEP-to-surface path is the untracked circular pair
-`gmsh_occ_oml_surface_mesh.py` (2,475 LOC) and
-`smooth_existing_tip_cap.py` (2,283 LOC): 4,758 untested LOC. The 502-LOC
-`generate_e175_panel_mesh.py` is only an E175-specific wrapper over that pair.
-M3 should revisit mesh generation only with a minimal public API, a small
-deterministic STEP fixture, and an end-to-end topology/quality test.
+Rule independently on both commits:
 
-Rule explicitly on whether this is an acceptable completion of M1.5 as a
-**disposition decision**, despite the original acceptance text asking for an
-example that regenerates a surface mesh. Do not accept adoption merely to
-satisfy that checkbox; judge whether untested local code belongs in the release
-at this stage.
+1. `03a4f54` must change only
+   `GraphDistanceWeighting.summary`'s return annotation from
+   `dict[str, float]` to `dict[str, float | int | str]`. Its returned mapping,
+   including the dead `"decay"` payload, must be byte-identical.
+2. The successor must contain only docstrings in the 16 slice-1 source files,
+   the new 16-path CI step, and collaboration documentation. No callable
+   signature, executable AST, test, or excluded dirty file may change.
 
-## What Codex changed
+If both pass, mark **M1.6 slice 1 complete**. M1.6 as a whole remains open.
 
-Only this implementation file changed in `eb1ed5f`:
+## Literal Turn-28 allowlist
 
 ```
-bsm3/core/boundary_surface_movement/geometry_volume_backend.py
-```
-
-It moves the annotation-only `GeometryParameterization` import under
-`TYPE_CHECKING` and replaces the false lazy-import comment. It intentionally
-does **not** change package `__init__.py`: package re-exports still cause config
-and pipeline to load during a normal submodule import.
-
-The docs-only successor may touch only:
-
-```
-docs/overhaul/MANIFEST.md
+.github/workflows/actions.yml
+bsm3/core/boundary_surface_movement/mesh_motion_config.py
+bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py
+bsm3/core/boundary_surface_movement/motion.py
+bsm3/core/boundary_surface_movement/elasticity.py
+bsm3/core/boundary_surface_movement/load_stepping.py
+bsm3/core/boundary_surface_movement/current_graph_solve.py
+bsm3/core/boundary_surface_movement/ngon_affine.py
+bsm3/core/boundary_surface_movement/quadratic_distortion.py
+bsm3/core/boundary_surface_movement/projection.py
+bsm3/core/boundary_surface_movement/quality.py
+bsm3/core/boundary_surface_movement/graph_distance.py
+bsm3/core/boundary_surface_movement/free_region.py
+bsm3/core/boundary_surface_movement/constraints.py
+bsm3/core/boundary_surface_movement/spd_solve_custom_op.py
+bsm3/core/boundary_surface_movement/geometry.py
+bsm3/core/boundary_surface_movement/intersections.py
 docs/overhaul/PLAN.md
 docs/overhaul/LOG.md
 docs/overhaul/CODEX_NEXT.md
 ```
 
-The combined Turn-24 allowlist is therefore exactly five paths. Confirm there
-are no staged or committed changes outside it and no mesh-generation file was
-adopted.
+Confirm that all eight pre-existing tracked edits outside this list remain
+dirty and uncommitted.
 
 ## Independent checks
 
-Run in `central_geom`:
+Run the Turn-28 coverage check. Expected: **132/132 (100%)**, zero
+undocumented definitions. Ruff and pydocstyle are absent from `central_geom`;
+do not install them into the user's environment.
+
+Verify the defect commit directly:
 
 ```bash
-git diff --name-status 8ded2dc..HEAD
-
-git grep -nE "gmsh_occ_oml_surface_mesh|smooth_existing_tip_cap|gmsh_quad_hybrid|generate_e175_panel_mesh" -- bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py bsm3/core/boundary_surface_movement/mesh_motion_config.py bsm3/core/boundary_surface_movement/__init__.py
-
-git grep -n "TYPE_CHECKING" -- bsm3/core/boundary_surface_movement/geometry_volume_backend.py
-python -c "import bsm3.core.boundary_surface_movement.geometry_volume_backend as g; print(g.__all__)"
-
-python -m pytest -q tests/test_derivative_gate.py
-python -m pytest -q tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
-python -m pytest -q tests/test_geometry_volume_mpi.py
-python -m pytest -q tests
+git diff --name-status 0dbcc75..03a4f54
+git diff 0dbcc75..03a4f54 -- \
+  bsm3/core/boundary_surface_movement/graph_distance.py
 ```
 
-The core-clean grep must be empty. Expected focused counts are 1, 5, and 26
-passed; expected dirty-tree count is 171 passed. Codex re-measured the seven
-M1.4 quantities as rank 3, retained fraction 1.0, `‖P·1‖ = 0`, 3 hexagon modes,
-`obj'(0) = 4`, `obj'(0.3) = 57/13`, and normalized observability `2/13`.
+Then compare executable ASTs against the fix commit, not `0dbcc75`:
+
+```bash
+python - <<'PY'
+import ast
+import subprocess
+from pathlib import Path
+
+base = Path("bsm3/core/boundary_surface_movement")
+files = """mesh_motion_config mesh_motion_pipeline motion elasticity
+load_stepping current_graph_solve ngon_affine quadratic_distortion projection
+quality graph_distance free_region constraints spd_solve_custom_op geometry
+intersections""".split()
+
+class StripDocstrings(ast.NodeTransformer):
+    def strip(self, node):
+        if (
+            node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        ):
+            node.body = node.body[1:] or [ast.Pass()]
+        return self.generic_visit(node)
+
+    visit_Module = strip
+    visit_ClassDef = strip
+    visit_FunctionDef = strip
+    visit_AsyncFunctionDef = strip
+
+drift = []
+for name in files:
+    path = str(base / f"{name}.py")
+    old = subprocess.run(
+        ["git", "show", f"03a4f54:{path}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    before = ast.dump(
+        StripDocstrings().visit(ast.parse(old)), include_attributes=False
+    )
+    after = ast.dump(
+        StripDocstrings().visit(ast.parse(Path(path).read_text())),
+        include_attributes=False,
+    )
+    if before != after:
+        drift.append(path)
+print("non-docstring AST drift:", drift or "none")
+PY
+```
+
+Expected: `none`.
+
+Confirm `.github/workflows/actions.yml` adds exactly one new lint step covering
+the 16 paths, without changing either existing lint step. Then run:
+
+```bash
+conda run -n central_geom python -m pytest -q tests/test_derivative_gate.py
+conda run -n central_geom python -m pytest -q \
+  tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
+conda run -n central_geom python -m pytest -q tests
+```
+
+Expected counts: **1**, **5**, and **171 passed**. Re-measure the seven M1.4
+values rather than treating passing assertions as proof of numerical identity.
 
 ## Genuine-clone verification
 
-Use a fresh temporary directory; do not delete or reuse an uncertain path.
+Use a fresh temporary directory rather than deleting an uncertain path:
 
 ```bash
-VERIFY_DIR=$(mktemp -d /tmp/bsm3-m15-claude.XXXXXX)
+VERIFY_DIR=$(mktemp -d /tmp/bsm3-m16-s1-claude.XXXXXX)
 git clone --no-hardlinks --branch production-ready-overhaul \
   "file:///Users/mariusruh/Documents/Research/nasa_uli/mesh_movement/packages/BSM3" \
   "$VERIFY_DIR/repo"
 cd "$VERIFY_DIR/repo"
 git status --porcelain
+git grep -n "float | int | str" -- \
+  bsm3/core/boundary_surface_movement/graph_distance.py
 conda run -n central_geom python -m pytest -q tests
 ```
 
 Expected: empty status and **157 passed / 1 skipped**.
 
-## Deliverable
+## Next-task steering from the user
 
-Append Claude Turn 25 to `docs/overhaul/LOG.md` with the independent evidence
-and an explicit accept/reject ruling. Update `PLAN.md` only if the ruling
-changes M1.5 status. Then replace this file with the next concrete Codex prompt.
+After the review, do **not** automatically issue M1.6 slice 2 as another broad
+documentation batch. The user wants the work steered toward a runnable,
+well-documented E175 example using the generalized API without discarding the
+remaining milestones.
 
-If M1.5 is accepted, audit the remaining M1 work before choosing the next task.
-In particular, decide whether M1.8 (removing the internal executable-pickle
-path, still visible as two full-suite warnings) should precede the broad M1.6
-docstring/lint expansion. Supply a literal per-turn allowlist, executable
-acceptance commands, clone commands, and the same stop rule used throughout:
-Codex must stop and report rather than widen scope silently.
+Audit the existing tracked E175 entry points and prepare the next concrete
+Codex prompt around the smallest useful vertical deliverable:
+
+- a clearly named E175 example using `ModelFiles`, `PipelineConfig`,
+  `DeclarativeGeometryParameterization` or a driver-supplied parameterization
+  factory, and `build_mesh_motion_model`;
+- local user-provided paths, with the existing E175 files as the initial case;
+- a documented command/configuration path that a new user can actually run;
+- analytical derivatives of the final deformed and reprojected mesh with
+  respect to design variables, retaining the existing scalar FD gate;
+- VortexAD integration if practical; no DAFoam test requirement;
+- graph Laplacian plus n-gon regularization only;
+- no revival of removed membrane, barrier, or tangential-smoothing paths.
+
+Use that example as the organizing integration path for the remaining driver
+documentation and early M1.7 acceptance work. Keep preprocessing/projection
+documentation and M1.8 explicitly scheduled, with M1.8 still completed before
+final M1 acceptance.
+
+Append Claude Turn 29 to `docs/overhaul/LOG.md`, update `PLAN.md` with the
+accepted status and concrete revised sequencing, then replace this file with a
+literal allowlisted Codex prompt. Preserve the stop rule: Codex must report
+rather than widen scope silently.

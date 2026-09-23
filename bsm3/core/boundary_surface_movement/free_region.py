@@ -40,6 +40,15 @@ class AxisRange:
     A vertex is free on this axis iff ``lower <= t < upper`` (``None`` bounds
     are unbounded).  The lower bound is inclusive and the upper bound exclusive,
     matching the ``0.1 <= x < 0.95`` convention.
+
+    Parameters
+    ----------
+    lower
+        Optional inclusive normalized lower bound.
+    upper
+        Optional exclusive normalized upper bound.
+    mode
+        Normalization mode, ``"extent"`` or ``"abs"``.
     """
 
     lower: float | None = None
@@ -57,7 +66,20 @@ class AxisRange:
             raise ValueError("AxisRange.lower must not exceed AxisRange.upper.")
 
     def mask(self, coordinate: np.ndarray, *, reference: np.ndarray) -> np.ndarray:
-        """Boolean free-mask for ``coordinate`` given the component's values."""
+        """Select coordinates inside this normalized interval.
+
+        Parameters
+        ----------
+        coordinate
+            Values to classify.
+        reference
+            Component values defining the normalization extent.
+
+        Returns
+        -------
+        numpy.ndarray
+            Boolean mask aligned with ``coordinate``.
+        """
 
         coordinate = np.asarray(coordinate, dtype=float).reshape(-1)
         reference = np.asarray(reference, dtype=float).reshape(-1)
@@ -91,6 +113,15 @@ class ComponentFreeRegion:
     An unset axis (``None``) imposes no constraint on that axis.  By default the
     normalization reference is the component's own owned vertices; supply
     ``reference_vertices`` to normalize against a different extent.
+
+    Parameters
+    ----------
+    component
+        Geometry component owning the candidate vertices.
+    x, y, z
+        Optional normalized interval on each coordinate axis.
+    reference_vertices
+        Optional coordinates defining normalization extents.
     """
 
     component: object
@@ -100,6 +131,19 @@ class ComponentFreeRegion:
     reference_vertices: np.ndarray | None = None
 
     def free_mask(self, vertices: np.ndarray) -> np.ndarray:
+        """Select vertices satisfying every configured axis interval.
+
+        Parameters
+        ----------
+        vertices
+            Candidate coordinates with shape ``(num_vertices, 3)``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Boolean free-vertex mask.
+        """
+
         vertices = np.asarray(vertices, dtype=float).reshape((-1, 3))
         reference = (
             vertices
@@ -128,6 +172,27 @@ def select_free_vertices(
     ``component_vertex_ids`` maps each region's component (or ``id(component)``)
     to the global mesh vertex ids owned by it.  ``exclude_ids`` (e.g. seam
     vertices) are always prescribed and removed from the result.
+
+    Parameters
+    ----------
+    free_regions
+        Per-component normalized free-region declarations.
+    component_vertex_ids
+        Component-to-global-vertex ownership mapping.
+    mesh_vertices
+        Complete baseline coordinate array.
+    exclude_ids
+        Global IDs forced to remain prescribed.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sorted unique global IDs selected as free.
+
+    Raises
+    ------
+    KeyError
+        If a region's component is absent from ``component_vertex_ids``.
     """
 
     mesh_vertices = np.asarray(mesh_vertices, dtype=float).reshape((-1, 3))

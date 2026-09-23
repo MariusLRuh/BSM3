@@ -24,7 +24,33 @@ from .spd_solve_custom_op import factorize_spd
 
 
 class CurrentGraphModel:
-    """Fixed topology for a graph solve whose weights follow current areas."""
+    """Solve a fixed graph whose weights follow current polygon areas.
+
+    Parameters
+    ----------
+    mesh
+        Baseline mesh defining fixed cells and graph topology.
+    free_ids
+        Global unknown vertex IDs.
+    prescribed_ids
+        Global Dirichlet vertex IDs.
+    stiffening_exponent
+        Nonnegative inverse-current-area exponent.
+    area_floor
+        Positive lower bound used in area weights.
+    distance_weighting
+        Optional fixed reference-geodesic edge multipliers.
+    quad_diagonal_weight
+        Nonnegative weight for auxiliary quadrilateral bracing.
+    quad_bracing_mode
+        Auxiliary bracing topology.
+
+    Raises
+    ------
+    ValueError
+        If weights or partitions are invalid or graph vertices are
+        unclassified.
+    """
 
     def __init__(
         self,
@@ -90,6 +116,25 @@ class CurrentGraphModel:
             scale: float,
             physical: bool,
         ) -> int | None:
+            """Register one face contribution to an undirected graph edge.
+
+            Parameters
+            ----------
+            vertex_a, vertex_b
+                Global edge endpoint IDs.
+            face_index
+                Cell supplying the weight contribution.
+            scale
+                Contribution multiplier.
+            physical
+                Whether the edge is a physical ring edge.
+
+            Returns
+            -------
+            int or None
+                Stable edge ID, or ``None`` for a zero-length topological edge.
+            """
+
             if vertex_a == vertex_b:
                 return None
             key = (
@@ -216,6 +261,23 @@ class CurrentGraphModel:
         )
 
     def solve(self, current_vertices, prescribed_values, *, return_state=False):
+        """Solve the current weighted graph equilibrium.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current coordinate array used to compute areas.
+        prescribed_values
+            Dirichlet values aligned with ``prescribed_ids``.
+        return_state
+            Whether to return the factor, coupling, weights, and areas.
+
+        Returns
+        -------
+        numpy.ndarray or tuple
+            Free values, optionally followed by the reusable solve state.
+        """
+
         points, prescribed = self._validate_inputs(
             current_vertices, prescribed_values
         )
@@ -232,6 +294,23 @@ class CurrentGraphModel:
         prescribed_values,
         d_free_values,
     ):
+        """Apply the analytic implicit VJP of the current graph solve.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current coordinate array.
+        prescribed_values
+            Dirichlet values aligned with ``prescribed_ids``.
+        d_free_values
+            Cotangent of the solved free values.
+
+        Returns
+        -------
+        tuple[numpy.ndarray, numpy.ndarray]
+            Cotangents for current coordinates and prescribed values.
+        """
+
         points, prescribed = self._validate_inputs(
             current_vertices, prescribed_values
         )
@@ -354,6 +433,22 @@ class CurrentGraphModel:
         The coupled quadratic-distortion extension uses the same scalar graph
         operator in ``kron(L, I3)`` form.  Keeping this assembly here ensures
         that the original and coupled paths use identical topology and weights.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current coordinate array used to compute area weights.
+
+        Returns
+        -------
+        tuple
+            Free-free matrix, free-prescribed matrix, edge weights, and cell
+            areas.
+
+        Raises
+        ------
+        ValueError
+            If the coordinate array does not contain the complete mesh.
         """
 
         points = np.asarray(current_vertices, dtype=float).reshape((-1, 3))
@@ -416,13 +511,34 @@ class CurrentGraphModel:
 
 
 class CurrentGraphSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
-    """Solve the current-area graph equilibrium."""
+    """Expose the current-area graph equilibrium as a CSDL operation.
+
+    Parameters
+    ----------
+    model
+        Fixed-topology current graph model.
+    """
 
     def __init__(self, model: CurrentGraphModel):
         super().__init__()
         self.model = model
 
     def evaluate(self, current_vertices, prescribed_values):
+        """Declare the differentiable current-graph solution.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete CSDL coordinate array.
+        prescribed_values
+            CSDL Dirichlet values.
+
+        Returns
+        -------
+        csdl.Variable
+            Solved free values.
+        """
+
         self.declare_input("current_vertices", current_vertices)
         self.declare_input("prescribed_values", prescribed_values)
         free_values = self.create_output(
@@ -433,6 +549,16 @@ class CurrentGraphSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
         return free_values
 
     def compute(self, inputs, outputs):
+        """Evaluate the numeric graph solve.
+
+        Parameters
+        ----------
+        inputs
+            Custom-operation inputs for coordinates and boundary values.
+        outputs
+            Mutable outputs receiving the free solution.
+        """
+
         outputs["free_values"] = self.model.solve(
             inputs["current_vertices"],
             inputs["prescribed_values"],
@@ -440,13 +566,34 @@ class CurrentGraphSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
 
 
 class CurrentGraphSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
-    """IFT adjoint including the derivative of current polygon areas."""
+    """Apply an IFT adjoint including current-area derivatives.
+
+    Parameters
+    ----------
+    model
+        Fixed-topology current graph model.
+    """
 
     def __init__(self, model: CurrentGraphModel):
         super().__init__()
         self.model = model
 
     def evaluate(self, inputs, d_outputs):
+        """Declare coordinate and boundary-value cotangents.
+
+        Parameters
+        ----------
+        inputs
+            Forward operation inputs.
+        d_outputs
+            Cotangent of the free solution.
+
+        Returns
+        -------
+        dict[str, csdl.Variable]
+            Cotangent variables for coordinates and prescribed values.
+        """
+
         current_vertices = inputs["current_vertices"]
         prescribed_values = inputs["prescribed_values"]
         d_free_values = d_outputs["free_values"]
@@ -465,6 +612,16 @@ class CurrentGraphSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
         }
 
     def compute(self, inputs, outputs):
+        """Evaluate the numeric implicit VJP.
+
+        Parameters
+        ----------
+        inputs
+            Reverse inputs including the free-solution cotangent.
+        outputs
+            Mutable outputs receiving input cotangents.
+        """
+
         d_current, d_prescribed = self.model.compute_vjp(
             inputs["current_vertices"],
             inputs["prescribed_values"],

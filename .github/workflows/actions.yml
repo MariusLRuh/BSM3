@@ -46,6 +46,26 @@ jobs:
             tests/test_derivative_gate.py \
             tests/test_curated_assets.py
 
+      - name: Numpydoc checks for the surface-motion core
+        run: |
+          python -m ruff check --select D \
+            bsm3/core/boundary_surface_movement/mesh_motion_config.py \
+            bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
+            bsm3/core/boundary_surface_movement/motion.py \
+            bsm3/core/boundary_surface_movement/elasticity.py \
+            bsm3/core/boundary_surface_movement/load_stepping.py \
+            bsm3/core/boundary_surface_movement/current_graph_solve.py \
+            bsm3/core/boundary_surface_movement/ngon_affine.py \
+            bsm3/core/boundary_surface_movement/quadratic_distortion.py \
+            bsm3/core/boundary_surface_movement/projection.py \
+            bsm3/core/boundary_surface_movement/quality.py \
+            bsm3/core/boundary_surface_movement/graph_distance.py \
+            bsm3/core/boundary_surface_movement/free_region.py \
+            bsm3/core/boundary_surface_movement/constraints.py \
+            bsm3/core/boundary_surface_movement/spd_solve_custom_op.py \
+            bsm3/core/boundary_surface_movement/geometry.py \
+            bsm3/core/boundary_surface_movement/intersections.py
+
       - name: Fast derivative gate
         run: python -m pytest -q tests/test_derivative_gate.py
 

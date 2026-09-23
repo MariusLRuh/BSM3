@@ -18,6 +18,19 @@ class ModelFiles:
     aircraft-wall boundary extracted from ``volume_mesh_file`` and
     ``volume_wall_map_file`` must store the corresponding surface-to-volume
     node map. Surface-only analyses may omit both volume paths.
+
+    Parameters
+    ----------
+    geometry_step_file
+        STEP file containing the source geometry.
+    surface_mesh_file
+        Surface mesh whose nodes are moved and reprojected.
+    volume_mesh_file
+        Optional volume mesh associated with the surface mesh.
+    volume_wall_map_file
+        Optional surface-to-volume node map.
+    setup_cache_directory
+        Optional directory for reusable setup data.
     """
 
     geometry_step_file: Path
@@ -46,6 +59,31 @@ class ModelFiles:
 
 @dataclass(frozen=True)
 class GraphDistanceWeightingConfig:
+    """Configure distance-dependent graph-edge stiffening.
+
+    Parameters
+    ----------
+    enabled
+        Whether graph-distance weighting is active.
+    beta
+        Nonnegative magnitude of the edge-weight increase.
+    length_scale
+        Positive physical decay length.
+    cap
+        Upper bound on the resulting multiplier.
+    decay
+        Decay law, either ``"exp"`` or ``"rational"``.
+    power
+        Exponent used by the rational decay law.
+    seed_intersections
+        Optional intersection names used as distance seeds.
+
+    Raises
+    ------
+    ValueError
+        If a numeric bound, decay law, or seed-name list is invalid.
+    """
+
     enabled: bool = True
     beta: float = 2.0
     length_scale: float = 4.0
@@ -74,6 +112,31 @@ class GraphDistanceWeightingConfig:
 
 @dataclass(frozen=True)
 class DistortionRegularizationConfig:
+    """Configure the fixed quadratic element-distortion penalty.
+
+    Parameters
+    ----------
+    weight
+        Nonnegative global regularization strength.
+    mode
+        Distortion formulation selected by the assembler.
+    area
+        Relative area-change penalty.
+    deviatoric
+        Relative deviatoric-strain penalty.
+    shear
+        Relative shear penalty.
+    rotation
+        Relative in-plane rotation penalty.
+    normal
+        Relative out-of-plane normal penalty.
+
+    Raises
+    ------
+    ValueError
+        If ``weight`` is negative.
+    """
+
     weight: float = 0.0
     mode: str = "strain_distortion"
     area: float = 1.0
@@ -89,7 +152,19 @@ class DistortionRegularizationConfig:
 
 @dataclass(frozen=True)
 class NgonAffineRegularizationConfig:
-    """Fixed element-local affine-residual weight for polygons with n >= 4."""
+    """Configure the element-local affine-residual polygon penalty.
+
+    Parameters
+    ----------
+    weight
+        Finite nonnegative penalty applied to polygons with at least four
+        vertices.
+
+    Raises
+    ------
+    ValueError
+        If ``weight`` is negative or non-finite.
+    """
 
     weight: float = 0.0
 
@@ -104,6 +179,31 @@ class NgonAffineRegularizationConfig:
 
 @dataclass(frozen=True)
 class SurfaceMotionConfig:
+    """Configure graph-Laplacian surface-mesh propagation.
+
+    Parameters
+    ----------
+    load_steps
+        Positive number of continuation increments.
+    stiffening_exponent
+        Reference-area exponent used by graph edge weights.
+    quad_diagonal_weight
+        Nonnegative weight for optional quadrilateral bracing.
+    quad_bracing_mode
+        Bracing topology used when diagonal weighting is active.
+    graph_distance_weighting
+        Settings for distance-dependent graph stiffening.
+    distortion
+        Optional quadratic distortion penalty.
+    ngon_affine
+        Optional affine-residual polygon penalty.
+
+    Raises
+    ------
+    ValueError
+        If an option is invalid or incompatible regularizers are enabled.
+    """
+
     load_steps: int = 2
     stiffening_exponent: float = 1.5
     quad_diagonal_weight: float = 0.0
@@ -146,6 +246,34 @@ class SurfaceMotionConfig:
 
 @dataclass(frozen=True)
 class VolumeMotionConfig:
+    """Configure propagation from the surface into a volume mesh.
+
+    Parameters
+    ----------
+    mode
+        Enabled volume solver: ``"off"``, ``"graph"``, ``"elasticity"``,
+        or ``"both"``.
+    load_mode
+        Apply only the final surface state or synchronized increments.
+    synchronized_load_steps
+        Optional positive override for synchronized continuation.
+    graph_stiffening_exponent
+        Cell-size exponent for graph volume motion.
+    elasticity_poisson_ratio
+        Poisson ratio for linear elasticity.
+    elasticity_stiffening_exponent
+        Cell-size exponent for elasticity stiffness.
+    output_directory
+        Optional directory for generated volume meshes.
+    write_meshes
+        Whether to write deformed meshes to disk.
+
+    Raises
+    ------
+    ValueError
+        If a mode or physical/numerical parameter is invalid.
+    """
+
     mode: str = "elasticity"
     load_mode: str = "final"
     synchronized_load_steps: int | None = None
@@ -179,6 +307,14 @@ class VolumeMotionConfig:
 
     @property
     def methods(self) -> tuple[str, ...]:
+        """Return the concrete volume solvers selected by ``mode``.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Zero, one, or both of ``"graph"`` and ``"elasticity"``.
+        """
+
         return {
             "off": (),
             "graph": ("graph",),
@@ -189,6 +325,22 @@ class VolumeMotionConfig:
 
 @dataclass(frozen=True)
 class MeshQualityOutputConfig:
+    """Configure surface and volume quality evaluation.
+
+    Parameters
+    ----------
+    surface
+        Whether to evaluate surface metrics.
+    volume
+        Whether to evaluate volume metrics.
+    gmsh_volume_metrics
+        Whether to request Gmsh-specific volume metrics.
+    fail_on_surface_inversion
+        Whether inverted surface elements raise an error.
+    fail_on_volume_inversion
+        Whether inverted volume elements raise an error.
+    """
+
     surface: bool = True
     volume: bool = True
     gmsh_volume_metrics: bool = True
@@ -198,12 +350,34 @@ class MeshQualityOutputConfig:
 
 @dataclass(frozen=True)
 class VisualizationConfig:
+    """Configure optional interactive surface visualization.
+
+    Parameters
+    ----------
+    enabled
+        Whether visualization is produced.
+    opacity
+        Surface opacity supplied to the plotting backend.
+    """
+
     enabled: bool = True
     opacity: float = 1.0
 
 
 @dataclass(frozen=True)
 class FiniteDifferenceConfig:
+    """Configure the optional driver-level finite-difference sweep.
+
+    Parameters
+    ----------
+    enabled
+        Whether to run the sweep.
+    objective
+        Named scalar objective selected from the pipeline result.
+    step_sizes
+        Perturbation sizes evaluated by the derivative checker.
+    """
+
     enabled: bool = False
     objective: str = "surface_coordinates"
     step_sizes: tuple[float, ...] = (
@@ -217,6 +391,43 @@ class FiniteDifferenceConfig:
 
 @dataclass(frozen=True)
 class PipelineConfig:
+    """Collect all mesh-motion pipeline settings.
+
+    Parameters
+    ----------
+    surface_motion
+        Surface graph-motion configuration.
+    volume_motion
+        Optional volume-motion configuration.
+    quality
+        Quality evaluation and failure policy.
+    visualization
+        Interactive visualization settings.
+    finite_difference
+        Optional derivative-sweep settings.
+    symmetry
+        Whether a fixed symmetry plane is enforced.
+    symmetry_plane_tolerance
+        Coordinate tolerance used to identify symmetry-plane vertices.
+    setup_projection_resolution
+        Sampling resolution for setup-time projection.
+    projection_warm_start_resolution
+        Sampling resolution for projection warm starts.
+    rebuild_setup_cache
+        Whether cached setup data is ignored and rebuilt.
+    query_seam_reference
+        Whether seam reference points follow the query component.
+    lifting_surface_patch_mode
+        Patch restriction used for lifting-surface projection.
+    diagnostic_dump
+        Optional path for diagnostic output.
+
+    Raises
+    ------
+    ValueError
+        If a tolerance, resolution, or patch mode is invalid.
+    """
+
     surface_motion: SurfaceMotionConfig = field(
         default_factory=SurfaceMotionConfig
     )
@@ -299,7 +510,26 @@ class ComponentSpec:
 
 @dataclass(frozen=True)
 class IntersectionSpec:
-    """Describe one independent closed component-intersection curve."""
+    """Describe one independent closed component-intersection curve.
+
+    Parameters
+    ----------
+    name
+        Stable identifier for the intersection.
+    driving_component
+        Component whose parametric line drives the solve.
+    query_component
+        Component providing the signed-distance residual.
+    bisection_search_direction
+        Parametric coordinate varied by the bracketed solve.
+    solver_name
+        Optional diagnostic name; defaults to ``name``.
+
+    Raises
+    ------
+    ValueError
+        If the name is invalid or both component names are equal.
+    """
 
     name: str
     driving_component: str
@@ -321,7 +551,17 @@ class IntersectionSpec:
 
 
 class GeometryParameterization(Protocol):
-    """User-supplied geometry variables and declarative component behavior."""
+    """Specify design variables and declarative component behavior.
+
+    Attributes
+    ----------
+    design_variables
+        Named differentiable geometry controls.
+    component_specs
+        Component declarations used to build geometry coefficients.
+    intersection_specs
+        Independent closed-intersection declarations.
+    """
 
     design_variables: Mapping[str, csdl.Variable]
     component_specs: list[ComponentSpec]
@@ -330,7 +570,22 @@ class GeometryParameterization(Protocol):
 
 @dataclass(frozen=True)
 class DeclarativeGeometryParameterization:
-    """Simple concrete implementation of :class:`GeometryParameterization`."""
+    """Store a validated declarative geometry parameterization.
+
+    Parameters
+    ----------
+    design_variables
+        Nonempty mapping of geometry control names to CSDL variables.
+    component_specs
+        Nonempty component declarations with unique names.
+    intersection_specs
+        Intersection declarations with unique names and known components.
+
+    Raises
+    ------
+    ValueError
+        If names are missing, duplicated, or reference unknown components.
+    """
 
     design_variables: Mapping[str, csdl.Variable]
     component_specs: list[ComponentSpec]
@@ -364,6 +619,36 @@ class DeclarativeGeometryParameterization:
 
 @dataclass
 class MeshMotionResult:
+    """Collect differentiable outputs and forward diagnostics.
+
+    Attributes
+    ----------
+    model_files
+        Input file contracts used to build the model.
+    geometry_parameterization
+        User-supplied geometry controls and declarations.
+    initial_surface_coordinates
+        Baseline surface coordinates.
+    preprojected_surface_coordinates
+        Surface coordinates before OML reprojection.
+    surface_coordinates
+        Final reprojected surface coordinates.
+    volume_coordinates
+        Deformed volume coordinates keyed by motion method.
+    aerodynamic_outputs
+        Optional downstream aerodynamic results.
+    surface_inversion_report
+        Surface-orientation diagnostics.
+    surface_quality_report
+        Aggregate surface-quality diagnostics.
+    volume_quality_summary
+        Optional volume-quality metrics.
+    volume_mesh
+        Optional loaded volume-mesh object.
+    surface_mesh
+        Loaded surface-mesh object.
+    """
+
     model_files: ModelFiles
     geometry_parameterization: GeometryParameterization
     initial_surface_coordinates: np.ndarray

@@ -26,7 +26,15 @@ from .spd_solve_custom_op import factorize_spd
 
 @dataclass(frozen=True)
 class NgonAffineConfig:
-    """Controls for the fixed element-local affine-residual regularizer."""
+    """Configure the fixed element-local affine-residual regularizer.
+
+    Parameters
+    ----------
+    lambda_ngon
+        Finite nonnegative regularization strength.
+    geometry_tolerance
+        Positive tolerance for tangent-chart rank checks.
+    """
 
     lambda_ngon: float = 0.0
     geometry_tolerance: float = 1e-11
@@ -44,7 +52,25 @@ class NgonAffineConfig:
 
 @dataclass(frozen=True)
 class NgonAffineSystem:
-    """Partitioned scalar affine-residual matrix."""
+    """Store the partitioned scalar affine-residual matrix.
+
+    Attributes
+    ----------
+    free_ids, prescribed_ids
+        Vertex IDs defining the matrix partition order.
+    free_matrix
+        Free-free affine-residual block.
+    coupling
+        Free-prescribed affine-residual block.
+    prescribed_matrix
+        Prescribed-prescribed affine-residual block.
+    num_regularized_elements
+        Number of active polygons with at least four vertices.
+    num_hourglass_modes
+        Total retained non-affine modes, ``sum(n - 3)``.
+    maximum_warp_ratio
+        Largest baseline normal-to-tangent extent ratio.
+    """
 
     free_ids: np.ndarray
     prescribed_ids: np.ndarray
@@ -56,6 +82,14 @@ class NgonAffineSystem:
     maximum_warp_ratio: float
 
     def full_matrix(self) -> sp.csc_matrix:
+        """Reconstruct the complete matrix in active partition order.
+
+        Returns
+        -------
+        scipy.sparse.csc_matrix
+            Symmetric block matrix over free then prescribed vertices.
+        """
+
         return sp.bmat(
             [
                 [self.free_matrix, self.coupling],
@@ -66,12 +100,46 @@ class NgonAffineSystem:
 
 
 class NgonAffineAssembler:
-    """Assemble one fixed affine-nullspace projector for every active n-gon."""
+    """Assemble affine-residual projectors for active polygons.
+
+    Parameters
+    ----------
+    config
+        Geometry tolerance and default regularization settings.
+
+    Notes
+    -----
+    For an ``n``-vertex polygon, the projector annihilates
+    ``span{1, u, v}`` in its tangent chart and retains exactly ``n - 3``
+    non-affine modes.
+    """
 
     def __init__(self, config: NgonAffineConfig | None = None):
         self.config = config or NgonAffineConfig()
 
     def assemble(self, mesh, *, free_ids, prescribed_ids) -> NgonAffineSystem:
+        """Assemble the partitioned affine-residual matrix.
+
+        Parameters
+        ----------
+        mesh
+            Baseline polygonal surface mesh.
+        free_ids
+            Unknown graph vertex IDs.
+        prescribed_ids
+            Dirichlet IDs covering every active co-element neighbor.
+
+        Returns
+        -------
+        NgonAffineSystem
+            Fixed partitioned projector sum and geometry diagnostics.
+
+        Raises
+        ------
+        ValueError
+            If partitions or an active polygon chart are invalid.
+        """
+
         mesh_data = _as_mesh_data(mesh)
         points = np.asarray(mesh_data.vertices, dtype=float).reshape((-1, 3))
         free_ids, prescribed_ids = _validate_partition(free_ids, prescribed_ids)
@@ -145,7 +213,24 @@ class NgonAffineAssembler:
 
 
 class CurrentGraphNgonAffineModel:
-    """Current-area graph increments with a fixed total-correction penalty."""
+    """Couple current-area graph increments to a fixed affine penalty.
+
+    Parameters
+    ----------
+    graph_model
+        Current-area scalar graph model.
+    affine_system
+        Fixed affine-residual matrix with matching partitions.
+    lambda_ngon
+        Positive regularization strength.
+    baseline_vertices
+        Baseline coordinates used to normalize graph and affine diagonals.
+
+    Notes
+    -----
+    The fixed penalty acts on total correction while the graph term acts on
+    the current increment.
+    """
 
     def __init__(
         self,
@@ -200,6 +285,27 @@ class CurrentGraphNgonAffineModel:
         *,
         return_state: bool = False,
     ):
+        """Solve one regularized graph increment.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current mesh coordinates.
+        incremental_prescribed
+            Current Dirichlet increment.
+        current_free_correction
+            Accumulated free-vertex correction.
+        total_prescribed_correction
+            Accumulated prescribed-vertex correction.
+        return_state
+            Whether to include factorization and graph assembly state.
+
+        Returns
+        -------
+        numpy.ndarray or tuple
+            Free increment, optionally followed by reusable solve state.
+        """
+
         points, incremental, current_free, total_prescribed = self._validate_inputs(
             current_vertices,
             incremental_prescribed,
@@ -227,6 +333,27 @@ class CurrentGraphNgonAffineModel:
         total_prescribed_correction,
         d_free_increment,
     ):
+        """Apply the implicit VJP of the regularized increment solve.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current mesh coordinates.
+        incremental_prescribed
+            Current Dirichlet increment.
+        current_free_correction
+            Accumulated free correction.
+        total_prescribed_correction
+            Accumulated prescribed correction.
+        d_free_increment
+            Cotangent of the solved free increment.
+
+        Returns
+        -------
+        tuple[numpy.ndarray, ...]
+            Cotangents for all four differentiable inputs.
+        """
+
         points, incremental, current_free, total_prescribed = self._validate_inputs(
             current_vertices,
             incremental_prescribed,
@@ -344,7 +471,13 @@ class CurrentGraphNgonAffineModel:
 class CurrentGraphNgonAffineSolveOperation(
     csdl.experimental.CustomExplicitOperationBeta
 ):
-    """CSDL operation for the scalar current-graph/n-gon solve."""
+    """Expose the current-graph affine-regularized solve to CSDL.
+
+    Parameters
+    ----------
+    model
+        Configured scalar graph and affine-residual model.
+    """
 
     def __init__(self, model: CurrentGraphNgonAffineModel):
         super().__init__()
@@ -357,6 +490,25 @@ class CurrentGraphNgonAffineSolveOperation(
         current_free_correction,
         total_prescribed_correction,
     ):
+        """Declare the differentiable regularized increment.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current coordinate variable.
+        incremental_prescribed
+            Current Dirichlet increment variable.
+        current_free_correction
+            Accumulated free correction variable.
+        total_prescribed_correction
+            Accumulated prescribed correction variable.
+
+        Returns
+        -------
+        csdl.Variable
+            Solved free increment.
+        """
+
         self.declare_input("current_vertices", current_vertices)
         self.declare_input("incremental_prescribed", incremental_prescribed)
         self.declare_input("current_free_correction", current_free_correction)
@@ -370,6 +522,16 @@ class CurrentGraphNgonAffineSolveOperation(
         return output
 
     def compute(self, inputs, outputs):
+        """Evaluate the numeric regularized solve.
+
+        Parameters
+        ----------
+        inputs
+            Forward custom-operation inputs.
+        outputs
+            Mutable outputs receiving ``free_increment``.
+        """
+
         outputs["free_increment"] = self.model.solve(
             inputs["current_vertices"],
             inputs["incremental_prescribed"],
@@ -381,13 +543,34 @@ class CurrentGraphNgonAffineSolveOperation(
 class CurrentGraphNgonAffineSolveVJP(
     csdl.experimental.CustomExplicitOperationBeta
 ):
-    """Implicit VJP for the scalar current-graph/n-gon solve."""
+    """Apply the implicit VJP of the graph/n-gon solve.
+
+    Parameters
+    ----------
+    model
+        Configured scalar graph and affine-residual model.
+    """
 
     def __init__(self, model: CurrentGraphNgonAffineModel):
         super().__init__()
         self.model = model
 
     def evaluate(self, inputs, d_outputs):
+        """Declare cotangents for every differentiable model input.
+
+        Parameters
+        ----------
+        inputs
+            Forward custom-operation inputs.
+        d_outputs
+            Cotangent of ``free_increment``.
+
+        Returns
+        -------
+        dict[str, csdl.Variable]
+            Input cotangent variables keyed by forward input name.
+        """
+
         for name in (
             "current_vertices",
             "incremental_prescribed",
@@ -413,6 +596,16 @@ class CurrentGraphNgonAffineSolveVJP(
         }
 
     def compute(self, inputs, outputs):
+        """Evaluate the numeric implicit VJP.
+
+        Parameters
+        ----------
+        inputs
+            Reverse inputs including the free-increment cotangent.
+        outputs
+            Mutable outputs receiving all input cotangents.
+        """
+
         derivatives = self.model.compute_vjp(
             inputs["current_vertices"],
             inputs["incremental_prescribed"],
@@ -429,6 +622,30 @@ class CurrentGraphNgonAffineSolveVJP(
 
 
 def _affine_residual_projector(polygon, *, tolerance):
+    """Project nodal values onto the non-affine tangent-chart complement.
+
+    The affine design matrix has columns ``[1, u, v]``. Its range is the
+    three-dimensional affine subspace, so ``I - Q Q.T`` annihilates every
+    affine field and has rank ``n - 3`` for a valid ``n``-vertex polygon.
+
+    Parameters
+    ----------
+    polygon
+        Baseline polygon coordinates.
+    tolerance
+        Positive rank tolerance for the local tangent chart.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, float]
+        Symmetric residual projector and baseline warp ratio.
+
+    Raises
+    ------
+    ValueError
+        If the polygon has fewer than four vertices or a degenerate chart.
+    """
+
     points = np.asarray(polygon, dtype=float).reshape((-1, 3))
     if points.shape[0] < 4:
         raise ValueError("An affine-residual polygon must have at least four vertices.")

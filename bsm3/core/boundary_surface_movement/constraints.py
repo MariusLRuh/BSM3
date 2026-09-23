@@ -16,6 +16,25 @@ def identify_symmetry_plane_vertices(
 
     Identification is a setup-time operation.  The returned set therefore
     remains fixed throughout design evaluation and differentiation.
+
+    Parameters
+    ----------
+    vertices
+        Baseline coordinate array with three columns.
+    axis
+        Coordinate axis normal to the symmetry plane.
+    tolerance
+        Nonnegative absolute coordinate tolerance.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sorted integer indices lying on the symmetry plane.
+
+    Raises
+    ------
+    ValueError
+        If ``axis`` or ``tolerance`` is invalid.
     """
 
     points = np.asarray(
@@ -43,6 +62,27 @@ def enforce_symmetry_plane(
     The overwritten coordinate has an exact zero derivative, which is the
     appropriate essential condition for a fixed symmetry plane.  The other two
     coordinates remain fully differentiable.
+
+    Parameters
+    ----------
+    mesh_vertices
+        CSDL or NumPy coordinate array with shape ``(num_vertices, 3)``.
+    vertex_ids
+        Fixed vertex indices whose coordinate is overwritten.
+    axis
+        Coordinate axis normal to the symmetry plane.
+    coordinate
+        Finite constant assigned on the selected axis.
+
+    Returns
+    -------
+    csdl.Variable
+        Coordinates with the essential symmetry condition applied.
+
+    Raises
+    ------
+    ValueError
+        If shapes, indices, the axis, or the coordinate are invalid.
     """
 
     values = (

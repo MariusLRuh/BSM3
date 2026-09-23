@@ -1495,7 +1495,25 @@ def select_fd_objective(
     result: MeshMotionResult,
     objective_name: str,
 ) -> csdl.Variable:
-    """Select a scalar objective used by the optional driver-level FD sweep."""
+    """Select a scalar objective for the optional finite-difference sweep.
+
+    Parameters
+    ----------
+    result
+        Completed mesh-motion pipeline result.
+    objective_name
+        Surface, enabled volume-method, or aerodynamic output name.
+
+    Returns
+    -------
+    csdl.Variable
+        Scalar objective registered on the active recorder.
+
+    Raises
+    ------
+    ValueError
+        If ``objective_name`` is not available in ``result``.
+    """
 
     if objective_name == "surface_coordinates":
         objective = csdl.sum(result.surface_coordinates)
@@ -1530,7 +1548,21 @@ def run_fd_sweep(
     recorder: csdl.Recorder,
     step_sizes: tuple[float, ...],
 ) -> dict[str, dict[float, float]]:
-    """Run and print a finite-difference convergence sweep."""
+    """Run and print a finite-difference convergence sweep.
+
+    Parameters
+    ----------
+    recorder
+        Recorder containing the objective and design variables.
+    step_sizes
+        Perturbation sizes evaluated by the JAX simulator.
+
+    Returns
+    -------
+    dict[str, dict[float, float]]
+        Relative errors keyed first by design-variable name and then by step
+        size.
+    """
 
     simulator = csdl.experimental.JaxSimulator(recorder=recorder, gpu=False)
     sweep: dict[str, dict[float, float]] = {}

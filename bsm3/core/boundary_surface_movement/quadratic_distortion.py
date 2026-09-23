@@ -28,7 +28,21 @@ from .spd_solve_custom_op import factorize_spd
 
 @dataclass(frozen=True)
 class DistortionModeCoefficients:
-    """Nonnegative weights for the local linearized distortion modes."""
+    """Weight local linearized distortion modes.
+
+    Parameters
+    ----------
+    area
+        Isotropic in-plane area-change weight.
+    deviatoric
+        Deviatoric normal-strain weight.
+    shear
+        Symmetric in-plane shear weight.
+    rotation
+        In-plane antisymmetric rotation weight.
+    normal
+        Out-of-plane gradient weight.
+    """
 
     area: float = 1.0
     deviatoric: float = 1.0
@@ -46,7 +60,21 @@ class DistortionModeCoefficients:
 
 @dataclass(frozen=True)
 class QuadraticDistortionConfig:
-    """User-facing controls for the fixed quadratic regularizer."""
+    """Configure the fixed quadratic distortion regularizer.
+
+    Parameters
+    ----------
+    lambda_dist
+        Finite nonnegative global regularization strength.
+    mode
+        ``"full_gradient"`` or ``"strain_distortion"`` energy.
+    coefficients
+        Relative weights for individual linearized modes.
+    area_tolerance
+        Positive virtual-triangle degeneracy threshold.
+    geometry_tolerance
+        Positive polygon chart and topology tolerance.
+    """
 
     lambda_dist: float = 0.0
     mode: str = "strain_distortion"
@@ -78,7 +106,23 @@ class QuadraticDistortionConfig:
 
 @dataclass(frozen=True)
 class SubtriangleRecord:
-    """Immutable baseline integration data for one virtual triangle."""
+    """Store baseline integration data for one virtual triangle.
+
+    Attributes
+    ----------
+    coefficient_matrix
+        Map from polygon nodes to the three virtual triangle nodes.
+    local_frame
+        Orthonormal tangent-normal basis.
+    shape_gradient
+        Linear triangle shape-function gradients.
+    gradient_map
+        Map from nodal displacement DOFs to displacement gradients.
+    reference_area
+        Positive baseline triangle area.
+    normalized_weight
+        Triangle area divided by total polygon integration area.
+    """
 
     coefficient_matrix: np.ndarray
     local_frame: np.ndarray
@@ -90,7 +134,25 @@ class SubtriangleRecord:
 
 @dataclass(frozen=True)
 class ElementRecord:
-    """Fixed preprocessing result for one active polygon."""
+    """Store fixed preprocessing for one active polygon.
+
+    Attributes
+    ----------
+    element_id
+        Stable element index in mesh block order.
+    node_ids
+        Global polygon vertex IDs.
+    cell_type
+        Source mesh cell type.
+    triangulation
+        Native, centroid-fan, or ear-clipped integration scheme.
+    is_convex
+        Whether the projected baseline polygon is convex.
+    warp_ratio
+        Normal extent relative to tangent extent.
+    subtriangles
+        Virtual-triangle integration records.
+    """
 
     element_id: int
     node_ids: np.ndarray
@@ -103,7 +165,25 @@ class ElementRecord:
 
 @dataclass(frozen=True)
 class QuadraticDistortionSystem:
-    """Partitioned fixed regularization matrix."""
+    """Store a partitioned fixed quadratic regularization matrix.
+
+    Attributes
+    ----------
+    free_ids, prescribed_ids
+        Vertex IDs defining the node-major matrix partition.
+    free_matrix
+        Free-free regularization block.
+    coupling
+        Free-prescribed regularization block.
+    prescribed_matrix
+        Prescribed-prescribed regularization block.
+    records
+        Optional retained per-element preprocessing records.
+    num_centroid_fans, num_ear_clipped
+        Counts of polygon integration strategies.
+    maximum_warp_ratio
+        Largest baseline polygon warp ratio.
+    """
 
     free_ids: np.ndarray
     prescribed_ids: np.ndarray
@@ -117,14 +197,36 @@ class QuadraticDistortionSystem:
 
     @property
     def num_free(self) -> int:
+        """Return the number of free vertices.
+
+        Returns
+        -------
+        int
+            Number of free vertex IDs.
+        """
+
         return int(self.free_ids.size)
 
     @property
     def num_prescribed(self) -> int:
+        """Return the number of prescribed vertices.
+
+        Returns
+        -------
+        int
+            Number of prescribed vertex IDs.
+        """
+
         return int(self.prescribed_ids.size)
 
     def full_matrix(self) -> sp.csc_matrix:
-        """Return the active free/prescribed matrix for diagnostics and tests."""
+        """Reconstruct the complete active regularization matrix.
+
+        Returns
+        -------
+        scipy.sparse.csc_matrix
+            Symmetric block matrix in free-then-prescribed node-major order.
+        """
 
         return sp.bmat(
             [
@@ -136,7 +238,13 @@ class QuadraticDistortionSystem:
 
 
 class QuadraticDistortionAssembler:
-    """Assemble fixed virtual-triangle distortion energies on mixed polygons."""
+    """Assemble virtual-triangle distortion energies on mixed polygons.
+
+    Parameters
+    ----------
+    config
+        Distortion mode, weights, and geometric tolerances.
+    """
 
     def __init__(self, config: QuadraticDistortionConfig | None = None):
         self.config = config or QuadraticDistortionConfig()
@@ -149,6 +257,30 @@ class QuadraticDistortionAssembler:
         prescribed_ids: np.ndarray,
         retain_records: bool = False,
     ) -> QuadraticDistortionSystem:
+        """Assemble the partitioned fixed distortion matrix.
+
+        Parameters
+        ----------
+        mesh
+            Baseline mixed-polygon surface mesh.
+        free_ids
+            Unknown graph vertex IDs.
+        prescribed_ids
+            Dirichlet IDs covering active co-element neighbors.
+        retain_records
+            Whether to retain detailed virtual-triangle records.
+
+        Returns
+        -------
+        QuadraticDistortionSystem
+            Partitioned matrix and polygon integration diagnostics.
+
+        Raises
+        ------
+        ValueError
+            If partitions or active polygon geometry are invalid.
+        """
+
         mesh_data = _as_mesh_data(mesh)
         points = np.asarray(mesh_data.vertices, dtype=float).reshape((-1, 3))
         free_ids, prescribed_ids = _validate_partition(free_ids, prescribed_ids)
@@ -343,7 +475,21 @@ class QuadraticDistortionAssembler:
 
 
 class CurrentGraphDistortionModel:
-    """Coupled incremental graph solve with a fixed total-quality penalty."""
+    """Couple graph increments to a fixed total-distortion penalty.
+
+    Parameters
+    ----------
+    graph_model
+        Current-area scalar graph model.
+    distortion_system
+        Fixed three-dimensional distortion matrix.
+    lambda_dist
+        Positive regularization strength.
+    constrained_free_dofs
+        Optional node-major free DOFs fixed to zero.
+    baseline_vertices
+        Baseline coordinates used for diagonal normalization.
+    """
 
     def __init__(
         self,
@@ -425,6 +571,27 @@ class CurrentGraphDistortionModel:
         *,
         return_state: bool = False,
     ):
+        """Solve one coupled graph/distortion increment.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current mesh coordinates.
+        incremental_prescribed
+            Current Dirichlet increments in 3-column blocks.
+        current_free_correction
+            Accumulated free corrections.
+        total_prescribed_correction
+            Accumulated prescribed corrections.
+        return_state
+            Whether to return factorization and assembly state.
+
+        Returns
+        -------
+        numpy.ndarray or tuple
+            Free increment, optionally followed by reusable solve state.
+        """
+
         (
             points,
             incremental,
@@ -483,6 +650,27 @@ class CurrentGraphDistortionModel:
         total_prescribed_correction,
         d_free_increment,
     ):
+        """Apply the implicit VJP of the coupled increment solve.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current mesh coordinates.
+        incremental_prescribed
+            Current Dirichlet increments.
+        current_free_correction
+            Accumulated free corrections.
+        total_prescribed_correction
+            Accumulated prescribed corrections.
+        d_free_increment
+            Cotangent of the solved free increment.
+
+        Returns
+        -------
+        tuple[numpy.ndarray, ...]
+            Cotangents for all four differentiable inputs.
+        """
+
         points = np.asarray(current_vertices, dtype=float).reshape((-1, 3))
         (
             output,
@@ -640,7 +828,13 @@ class CurrentGraphDistortionModel:
 class CurrentGraphDistortionSolveOperation(
     csdl.experimental.CustomExplicitOperationBeta
 ):
-    """CSDL operation for the coupled total-correction quadratic solve."""
+    """Expose the coupled graph/distortion solve to CSDL.
+
+    Parameters
+    ----------
+    model
+        Configured current-graph distortion model.
+    """
 
     def __init__(self, model: CurrentGraphDistortionModel):
         super().__init__()
@@ -653,6 +847,25 @@ class CurrentGraphDistortionSolveOperation(
         current_free_correction,
         total_prescribed_correction,
     ):
+        """Declare the differentiable coupled increment.
+
+        Parameters
+        ----------
+        current_vertices
+            Complete current coordinate variable.
+        incremental_prescribed
+            Current Dirichlet increment variable.
+        current_free_correction
+            Accumulated free correction variable.
+        total_prescribed_correction
+            Accumulated prescribed correction variable.
+
+        Returns
+        -------
+        csdl.Variable
+            Solved free increment.
+        """
+
         self.declare_input("current_vertices", current_vertices)
         self.declare_input("incremental_prescribed", incremental_prescribed)
         self.declare_input("current_free_correction", current_free_correction)
@@ -669,6 +882,16 @@ class CurrentGraphDistortionSolveOperation(
         return output
 
     def compute(self, inputs, outputs):
+        """Evaluate the numeric coupled solve.
+
+        Parameters
+        ----------
+        inputs
+            Forward custom-operation inputs.
+        outputs
+            Mutable outputs receiving ``free_increment``.
+        """
+
         outputs["free_increment"] = self.model.solve(
             inputs["current_vertices"],
             inputs["incremental_prescribed"],
@@ -680,13 +903,34 @@ class CurrentGraphDistortionSolveOperation(
 class CurrentGraphDistortionSolveVJP(
     csdl.experimental.CustomExplicitOperationBeta
 ):
-    """IFT VJP including current graph weights and all quadratic boundary data."""
+    """Apply the coupled IFT VJP including current graph weights.
+
+    Parameters
+    ----------
+    model
+        Configured current-graph distortion model.
+    """
 
     def __init__(self, model: CurrentGraphDistortionModel):
         super().__init__()
         self.model = model
 
     def evaluate(self, inputs, d_outputs):
+        """Declare cotangents for every differentiable model input.
+
+        Parameters
+        ----------
+        inputs
+            Forward custom-operation inputs.
+        d_outputs
+            Cotangent of ``free_increment``.
+
+        Returns
+        -------
+        dict[str, csdl.Variable]
+            Input cotangent variables keyed by forward input name.
+        """
+
         for name in (
             "current_vertices",
             "incremental_prescribed",
@@ -714,6 +958,16 @@ class CurrentGraphDistortionSolveVJP(
         }
 
     def compute(self, inputs, outputs):
+        """Evaluate the numeric implicit VJP.
+
+        Parameters
+        ----------
+        inputs
+            Reverse inputs including the free-increment cotangent.
+        outputs
+            Mutable outputs receiving all input cotangents.
+        """
+
         derivatives = self.model.compute_vjp(
             inputs["current_vertices"],
             inputs["incremental_prescribed"],
@@ -818,6 +1072,19 @@ def _check_simple_polygon(points, *, tolerance, element_id):
 
 def _segments_intersect(a, b, c, d, tolerance):
     def cross(left, right):
+        """Return the scalar cross product of two planar vectors.
+
+        Parameters
+        ----------
+        left, right
+            Two-component planar vectors.
+
+        Returns
+        -------
+        float
+            Signed scalar cross product.
+        """
+
         return float(left[0] * right[1] - left[1] * right[0])
 
     ab = b - a
@@ -916,6 +1183,19 @@ def _ear_clip(points, *, tolerance, element_id):
 
 def _point_in_triangle(point, a, b, c, *, tolerance):
     def orient(first, second, third):
+        """Return the signed planar orientation of three points.
+
+        Parameters
+        ----------
+        first, second, third
+            Ordered planar points.
+
+        Returns
+        -------
+        float
+            Twice the signed triangle area.
+        """
+
         left = second - first
         right = third - first
         return float(left[0] * right[1] - left[1] * right[0])

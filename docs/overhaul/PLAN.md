@@ -262,10 +262,18 @@ nothing in the end state and removes the risk of silently dropping live code.
 | M1.2 | Decompose `build_e175_mesh_motion_model` into stage functions matching the 5-step pipeline. Delete the ~50-line `LOCAL_ALIAS = config.field` block at lines 456-515. | Codex | **COMPLETE** — implemented `872c0f1`, audited and accepted Turn 23 | No function over 300 LOC in the pipeline module; derivative gate still passes. |
 | M1.3 | Delete the configured `membrane` surface-motion mode: 7 `membrane_*` fields, 6 `mode != "graph"` validation rules in `SurfaceMotionConfig.__post_init__`, and the branches at pipeline lines 1069 and 1521. Re-check `inversion_barrier.py` reachability afterward. **Turn-3 note:** Turn 2 added two tests that construct the removed mode to assert graph-only validation; these must be rewritten, not deleted: keep the `quad_bracing_mode` and negative-weight assertions. **Turn-9 addition:** commit C2 brought in two standalone coupled-assembler tests that Turn 3 could not have seen. Judge them against surviving graph coverage rather than mechanically porting them. | Codex | **COMPLETE** — implemented `1e3adfb`, audited and accepted Turn 19 | No **live/package** source or test contains a membrane implementation, an optimization barrier, the tangential-smoothing API, or a one-valued compatibility field. All acceptance greps are scoped to `-- bsm3/ tests/` (Turn 17); `docs/overhaul/` records are append-only history and are exempt by design. `inversion_barrier.py`, `oml_quality.py`, `tangential_smoothing.py` and `_dafoam_mpi_refactor_backups/` deleted. Permitted survivors: MPI `Barrier` at four files, KS/SDF logarithms, and `tangential_smoothing_step` in `analytical_SDF_anchor_attraction_noarg.py`. |corotational|tangential_smooth' -- bsm3/ tests/` empty; `git grep -i barrier -- bsm3/ tests/` returns only MPI `comm.Barrier()`; `inversion_barrier.py`, `oml_quality.py`, `tangential_smoothing.py` deleted; no stale exports, dead imports, or orphaned helpers. |
 | M1.4 | **N-gon, mandatory (decision 6).** Requires a *true six-gon load-step/VJP regression*, not merely loading the mixed-N-gon asset. Turn-3 measurement: in the M0.3 gate, changing `lambda_ngon` from 0.0 to 0.3 moves the solution by 3.3e-16 and the derivative by 1.8e-15 — the deformation is a pure affine ramp on a uniform quad grid, which lies in the **nullspace** of the affine penalty. Formally, `range(A_e) = range(Q_e) = 𝒜_e`, and the residual projector `(I - Q_e Q_e^T)` annihilates any correction in that affine subspace. The N-gon path is *executed* (graph grows 2666 -> 3080 nodes) but its contribution is unobservable, so a sign, scale, or transpose error in its VJP would pass today. M1.4 must construct a polygon6 correction with a provably nonzero component in the orthogonal complement of `range(Q_e)`, giving a genuine hourglass mode whose primal response changes with `lambda_ngon` by construction. | Codex | **COMPLETE** — implemented Turn 8, independently audited and accepted Turn 9 | Polygon6 projector, analytic primal limits, observable load-step VJP/centered-FD, mixed-polygon quality, and trusted wall-asset assembly all pass. `ngon_affine.py` required no change. |
-| M1.5 | Decide the `bsm3.meshgen` boundary without adopting untested local scripts. The only credible STEP-to-surface implementation is a circular, untracked 4,758-LOC pair, so implementation is deferred to M3 pending a minimal API, fixture, and end-to-end test. | Codex | **IMPLEMENTED (disposition)** — core separation verified Turn 24; awaiting Claude review Turn 25 | Core imports nothing from mesh-generation scripts; the candidate closure and prerequisites for later adoption are recorded in `MANIFEST.md`. |
-| M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | not started | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
+| M1.5 | Decide the `bsm3.meshgen` boundary without adopting untested local scripts. The only credible STEP-to-surface implementation is a circular, untracked 4,758-LOC pair, so implementation is deferred to M3 pending a minimal API, fixture, and end-to-end test. | Codex | **COMPLETE** — disposition: defer adoption to M3 (Turn 24), accepted Turn 25 | Core imports nothing from mesh-generation scripts; the candidate closure and prerequisites for later adoption are recorded in `MANIFEST.md`. |
+| M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | **SLICE 1 IMPLEMENTED** — 132/132 surface-motion definitions documented Turn 28; awaiting Claude review | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
 | M1.8 | **New (Turn 5).** Retire the internal legacy polygon-pickle branch in the E175 pipeline. Turn 4 made the *public* importer safe by removing `.pkl` from suffix dispatch, but the pipeline retains an internal trusted-pickle path, and `bsm3/core/projections/refitted_fun_set.pkl` is an untracked executable pickle used as a warm-start default. Convert `wall_surface.pkl` to `.npz` per `ASSETS.md` and delete the branch. | Codex | not started | No pickle load remains reachable from any retained root except through an explicitly named trusted API; `wall_surface.pkl` replaced by a non-executable container with identical coordinates and connectivity. |
-| M1.7 | Acceptance run. Must exercise a **STEP-to-VortexAD path** if practical, alongside the surface-motion path — the VortexAD root is the one the Turn-1 trace missed entirely, so it is the least protected by existing tests. | Codex | not started | Generalized driver reproduces current R4 output within tolerance; derivative gate passes; quad and mixed-N-gon examples clean; a STEP-to-VortexAD path runs end to end or is recorded as impractical with the reason. |
+| M1.7 | Acceptance run. Must exercise a **STEP-to-VortexAD path** if practical, alongside the surface-motion path — the VortexAD root is the one the Turn-1 trace missed entirely, so it is the least protected by existing tests. **Turn-27 carry-ins:** (a) consider a `TypedDict` for `GraphDistanceWeighting.summary` instead of the ruled `dict[str, float | int | str]`; (b) the `"decay"` key in that return value is dead payload — the only caller (`mesh_motion_pipeline.py:941`) never reads it — so removing it would allow `dict[str, float | int]`. Both are public-return changes, deliberately out of scope for the M1.6 docstring slices. | Codex | not started | Generalized driver reproduces current R4 output within tolerance; derivative gate passes; quad and mixed-N-gon examples clean; a STEP-to-VortexAD path runs end to end or is recorded as impractical with the reason. |
+
+**Turn-28 user steering.** After M1.6 slice 1 is reviewed, prioritize a
+runnable, well-documented E175 example using the generalized API as the next
+vertical deliverable. Fold the relevant driver/example portion of M1.6 and an
+early part of M1.7 into that turn; do not abandon projection/preprocessing
+documentation or M1.8, and keep M1.8 ahead of final M1 acceptance. The example
+should become the organizing integration path for those remaining milestones,
+not a late artifact created after them.
 
 **Sequencing.** M1.3 before M1.2 (deleting membrane removes ~200 LOC and six
 validation rules from the function being decomposed). M1.1 and M1.2 are
@@ -275,6 +283,31 @@ every test we have, so it is both the one mandatory capability (decision 6) and
 the one with no working regression. Proving it before the refactor means the
 refactor has a gate; proving it after means the refactor is unguarded on
 exactly the code path the user made mandatory.
+
+---
+
+### Turn-25 audit: **M1.5 deferral ACCEPTED**
+
+5 files, zero violations. `eb1ed5f` is the backend `TYPE_CHECKING` cleanup
+(+11/-3), verified by AST to leave **zero runtime references** to
+`GeometryParameterization`; `0dbcc75` is docs-only.
+
+M1.5's acceptance criterion — "core imports nothing from meshgen" — was
+**already satisfied before the turn**. Adoption was correctly declined: the only
+credible STEP->surface pair is 4,758 LOC with a confirmed cycle (4 imports one
+way, 1 the other), `generate_e175_panel_mesh.py` is a wrapper importing a
+private symbol from it, and **all nine candidates have zero test coverage**.
+
+**M3 refinement (Turn 25).** `remesh_fused_step.py` is the strongest starting
+point and should not be grouped with the volume generators: **615 LOC**, no
+circular dependency, clean dataclass API, and its primary entry point
+`remesh_fused_step()` needs **no `bsm3` dependency at all** — only the
+`_parametric` / `_manifold` variants pull `body_oml_refit` (847 LOC, untracked),
+and they are separable. M3's realistic minimum is 615 LOC with zero internal
+coupling, not 4,758 with a cycle.
+
+Numeric guard re-measured and unchanged to 1e-12; genuine clone
+**157 passed / 1 skipped**.
 
 ---
 

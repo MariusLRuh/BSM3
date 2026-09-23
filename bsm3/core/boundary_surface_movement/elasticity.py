@@ -44,6 +44,17 @@ class AssembledSystem:
     ``prescribed_ids``.  ``factor`` solves ``L_ff x = rhs`` (and, by symmetry,
     its adjoint); ``coupling`` is ``L_fp`` as a ``(n_free, n_prescribed)``
     sparse matrix.
+
+    Parameters
+    ----------
+    free_ids
+        Global vertex IDs aligned with free-system rows.
+    prescribed_ids
+        Global vertex IDs aligned with prescribed-system columns.
+    factor
+        Cached factorization of the free-free block.
+    coupling
+        Sparse free-prescribed block.
     """
 
     free_ids: np.ndarray
@@ -53,17 +64,38 @@ class AssembledSystem:
 
     @property
     def num_free(self) -> int:
+        """Return the number of free vertices.
+
+        Returns
+        -------
+        int
+            Number of free-system rows.
+        """
+
         return int(self.free_ids.size)
 
     @property
     def num_prescribed(self) -> int:
+        """Return the number of prescribed vertices.
+
+        Returns
+        -------
+        int
+            Number of prescribed-system columns.
+        """
+
         return int(self.prescribed_ids.size)
 
 
 @dataclass(frozen=True)
 
 class StiffnessAssembler(Protocol):
-    """Build a factored SPD free-free block and its prescribed coupling."""
+    """Build a factored SPD free-free block and prescribed coupling.
+
+    Notes
+    -----
+    Implementations preserve the supplied free and prescribed row order.
+    """
 
     def assemble(
         self,
@@ -71,7 +103,25 @@ class StiffnessAssembler(Protocol):
         *,
         free_ids: np.ndarray,
         prescribed_ids: np.ndarray,
-    ) -> AssembledSystem: ...
+    ) -> AssembledSystem:
+        """Assemble and factor a partitioned stiffness system.
+
+        Parameters
+        ----------
+        mesh
+            Reference surface mesh.
+        free_ids
+            Unknown vertex IDs.
+        prescribed_ids
+            Dirichlet vertex IDs.
+
+        Returns
+        -------
+        AssembledSystem
+            Factored free-free block and free-prescribed coupling.
+        """
+
+        ...
 
 
 class GraphLaplacianAssembler:
@@ -87,6 +137,19 @@ class GraphLaplacianAssembler:
     one quality-chosen diagonal, both diagonals, or a four-spoke virtual center.
     The center is eliminated analytically, so every mode affects only the
     deformation operator; none alters the aerodynamic mesh connectivity.
+
+    Parameters
+    ----------
+    stiffening_exponent
+        Nonnegative inverse-area exponent.
+    area_floor
+        Positive lower bound used in area-based weights.
+    distance_weighting
+        Optional fixed reference-geodesic edge multipliers.
+    quad_diagonal_weight
+        Nonnegative weight for auxiliary quadrilateral bracing.
+    quad_bracing_mode
+        Auxiliary bracing topology.
     """
 
     def __init__(
@@ -123,6 +186,29 @@ class GraphLaplacianAssembler:
         free_ids: np.ndarray,
         prescribed_ids: np.ndarray,
     ) -> AssembledSystem:
+        """Assemble the partitioned graph-Laplacian system.
+
+        Parameters
+        ----------
+        mesh
+            Reference surface mesh.
+        free_ids
+            Unknown vertex IDs.
+        prescribed_ids
+            Dirichlet vertex IDs containing every exterior graph neighbor.
+
+        Returns
+        -------
+        AssembledSystem
+            Factored free-free Laplacian and free-prescribed block.
+
+        Raises
+        ------
+        ValueError
+            If partitions overlap, contain duplicates, or leave a graph
+            neighbor unclassified.
+        """
+
         mesh_data = _as_mesh_data(mesh)
         points = np.asarray(mesh_data.vertices, dtype=float).reshape((-1, 3))
 
@@ -230,6 +316,22 @@ def graph_neighbors(
     is how the elastic prescribed set is grown from the free set: every
     stiffness neighbor of a free vertex must be prescribed so the free-free
     block has no stiffness leak.
+
+    Parameters
+    ----------
+    mesh
+        Reference surface mesh.
+    vertex_ids
+        Source vertices whose exterior neighbors are requested.
+    include_quad_diagonals
+        Legacy switch that requests both quadrilateral diagonals.
+    quad_bracing_mode
+        Optional explicit quadrilateral bracing topology.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sorted unique neighboring vertex IDs outside ``vertex_ids``.
     """
 
     mesh_data = _as_mesh_data(mesh)
@@ -279,6 +381,18 @@ def element_neighbors(mesh, vertex_ids: np.ndarray) -> np.ndarray:
     CST polygon integration produces coupling between every boundary vertex of
     a condensed polygon.  Its Dirichlet support therefore needs the complete
     one-element halo, not only the ring-edge halo used by the graph Laplacian.
+
+    Parameters
+    ----------
+    mesh
+        Reference surface mesh.
+    vertex_ids
+        Source vertices whose co-element halo is requested.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sorted unique co-element vertex IDs outside ``vertex_ids``.
     """
 
     mesh_data = _as_mesh_data(mesh)
