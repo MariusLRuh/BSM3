@@ -1,24 +1,72 @@
-# Review prompt for Claude — Turn 31 (audit M1.7a)
+# Planning prompt for Claude — Turn 31 (M1.7a usability rejection)
 
 Paste this entire prompt into Claude at the repository root.
 
 ---
 
-Review Codex Turn 30 and implementation commits `476b10d` and `a9c2830`
-against the Turn-30 M1.7a contract recorded in `docs/overhaul/LOG.md` and
-`docs/overhaul/PLAN.md`. This is an independent audit, not an implementation
-turn.
+Read `docs/overhaul/PLAN.md`, `docs/overhaul/LOG.md`, and the implementation
+in commits `476b10d` and `a9c2830`.
 
-## Scope and allowlist
+## Ruling supplied by the user
 
-The implementation commits may contain only:
+M1.7a is **REJECTED on usability/API-design grounds**. The implementation is a
+reasonable first attempt and its numerical results remain useful, but the
+example is too low-level and cluttered to serve as the flagship public API.
+Do not spend this turn deciding whether to accept it or rerunning the expensive
+clean-clone suite. Treat the following as requirements for the corrective
+implementation:
 
-```
-examples/e175_surface_deformation.py
-tests/test_e175_example.py
-```
+1. **No CLI.** Remove `argparse`, `argv`, and command-line switches. Every input
+   must be visible and directly editable in the main script.
+2. **Hide mechanics behind appropriate helpers.** Users should provide
+   high-level geometry and mesh-motion inputs. They should not have to read or
+   write coefficient-builder callbacks such as `_wing_coefficients`, nor
+   diagnostics mechanics such as `_surface_cells`, `_polygon_normals`, or fold
+   counting. Decide which abstractions belong in the public library and which
+   aircraft-specific assembly, if any, belongs in a small example helper. Do
+   not merely rename or move 500 lines of complexity out of sight.
+3. **Make the five pipeline steps unmistakable in executable code**, not only
+   in the module docstring. The main script should read top-to-bottom as five
+   short, visibly separated stages.
+4. **No dataclass definitions in the run script.** Prefer returning the public
+   pipeline result directly. If a reusable result abstraction is genuinely
+   needed, it belongs in the library rather than the example.
+5. **No `mesh_kind` input.** The user supplies a surface-mesh `Path` directly.
+   Selecting the triangle or quad mesh is done by changing that path. Any
+   topology-dependent behavior must be derived from the loaded mesh or exposed
+   as an explicit high-level numerical setting, not inferred from a string
+   label such as `"tri"` or `"quad"`.
+6. **Substantially simplify the import and configuration surface.** The current
+   block of roughly twenty imported classes is overwhelming. Design a small,
+   intuitive public entry surface rather than teaching users the internal
+   configuration object graph.
+7. **Public configuration classes should not use the `Config` suffix.** This is
+   a clean-break API, so do not retain deprecated aliases merely for
+   compatibility. Inspect name collisions before proposing exact replacements.
+8. **Replace opaque names.** In particular,
+   `DeclarativeGeometryParameterization` is not acceptable: “declarative” does
+   not communicate anything useful to the user. Choose a short name that says
+   what the object contains or does. Review the other exposed names under the
+   same standard rather than changing only this one.
 
-For your review turn, you may edit only:
+These requirements supersede Turn 30's “all of `bsm3/` is prohibited” rule.
+The example has exposed a public-API design problem, so the corrective turn may
+change library code and tests. The user's earlier clean-break decision still
+applies: avoid compatibility aliases and one-valued legacy fields.
+
+## Your task this turn: design and issue the correction, do not implement it
+
+Claim `## Turn 31` by appending to `docs/overhaul/LOG.md`. Perform a careful
+static design audit of the current example and every public type/function it
+uses. Then:
+
+1. Record the user rejection and your design conclusions in `LOG.md`.
+2. Update `PLAN.md` so M1.7a remains open and its acceptance criteria include
+   all eight requirements above. Preserve the remaining order: corrected
+   M1.7a, M1.6 slices 2-3, M1.8, then full M1.7 acceptance.
+3. Replace this file with the next concrete Codex implementation prompt.
+
+For this planning/review turn you may edit only:
 
 ```
 docs/overhaul/PLAN.md
@@ -26,101 +74,74 @@ docs/overhaul/LOG.md
 docs/overhaul/CODEX_NEXT.md
 ```
 
-Do not edit the example, tests, `bsm3/`, CI, or any pre-existing dirty file.
-Claim `## Turn 31` by appending to `LOG.md` before the audit, then close it with
-an explicit ACCEPTED or REJECTED ruling and the evidence.
+Do not edit implementation files yourself.
 
-## Implementation claims to verify independently
+## Required design work before writing the Codex prompt
 
-- The example runs as a direct script from a genuine clone using tracked assets
-  only, with no editable source-tree assumption, and leaves the clone clean.
-- It uses the generalized API and contains none of the retired E175-prefixed
-  API names.
-- All five pipeline stages are explained in the module docstring and every
-  public function/class has a genuine numpydoc section.
-- Tri is the default; volume and visualization are off; the setup cache is
-  outside the repository.
-- `--mesh quad` selects the tracked quad-dominant panel and a nonzero
-  `ngon_affine.weight`.
-- The integration test executes the tri path and checks stable vertex count,
-  the expected public result fields, zero folds, and zero inversions. Its
-  600-second timeout is justified by the measured 105.8-second cold run and
-  the turn's ten-minute hard stop.
-- No library change was needed and no file under `bsm3/` was changed by either
-  implementation commit.
+Trace the current public configuration/result graph and all references to every
+class you propose renaming. Resolve collisions explicitly—for example, the
+repository may already have runtime objects whose names would collide with a
+configuration class after dropping `Config`. Choose a coherent vocabulary,
+not a collection of local substitutions.
 
-Codex reports: cold tri **105.8 s** in the working tree and **105.9 s** in the
-final clone, cached tri **55.5 s**, each with 16,400 vertices / 32,522 cells and
-zero folds/inversions/degeneracies. The quad run was **66.3 s**, used
-`ngon_affine.weight=0.3`, and had zero normal-flip folds. It reported 116
-orientation inversions both before and after deformation; determine whether
-the evidence supports Codex's statement that these belong to the curated
-input rather than being introduced by motion. Do not silently strengthen
-M1.7a's acceptance criterion: Turn 30 required zero inversions for the tri
-smoke test, while final M1.7 still owns the broader “quad clean” acceptance.
+Design the smallest high-level interface that allows the main script to state:
 
-Peak memory is intentionally unreported because the sandbox denied the
-post-run macOS `sysctl` query. That is not by itself a failure because Task 3
-made peak memory optional.
+- STEP geometry path;
+- surface-mesh path;
+- cache path;
+- high-level wing, tail, and fuselage design values;
+- component identities and independent intersections, without callback boilerplate;
+- graph-Laplacian settings and optional n-gon regularization;
+- surface-only execution, headless output, and quality checks.
 
-## Mechanical audit
+The example must still use the **general API**. E175-specific knowledge must
+not be smuggled into the core pipeline. If reusable component motions need
+named helpers (for example, lifting-surface planform/rigid motion or body
+diameter scaling), design those as general concepts with high-level inputs.
+The user should not have to manipulate component coefficient arrays, compute
+intersection-derived pivots manually, enumerate polygon connectivity, or
+implement Newell normals in the example.
 
-Run at least:
+The five executable stages should be recognizable at a glance, approximately:
 
-```bash
-git show --stat --oneline 476b10d a9c2830
-git diff-tree --no-commit-id --name-only -r 476b10d
-git diff-tree --no-commit-id --name-only -r a9c2830
+1. define input paths and design values;
+2. describe components/intersections using the high-level geometry API;
+3. select surface-motion and quality behavior;
+4. build/run the model;
+5. inspect or print the public result/diagnostics.
 
-grep -nE "E175ModelFiles|E175PipelineConfig|E175GeometryVariables|E175MeshMotionResult|build_e175_mesh_motion_model" examples/e175_surface_deformation.py
-grep -nE "ModelFiles|PipelineConfig|ComponentSpec|IntersectionSpec|GeometryParameterization|build_mesh_motion_model" examples/e175_surface_deformation.py
+This outline is descriptive, not a mandate to preserve current class names or
+the current nested configuration hierarchy.
 
-python - <<'PY'
-import ast
-from pathlib import Path
-t = ast.parse(Path("examples/e175_surface_deformation.py").read_text())
-assert ast.get_docstring(t)
-public = [n for n in ast.walk(t) if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and not n.name.startswith("_")]
-sectioned = [n for n in public if (ast.get_docstring(n) or "") and ("\n---" in ast.get_docstring(n) or "Parameters\n" in ast.get_docstring(n) or "Returns\n" in ast.get_docstring(n))]
-print(f"example public defs {len(public)}; numpydoc-sectioned {len(sectioned)}")
-assert len(sectioned) == len(public)
-PY
+## Requirements for the corrective Codex prompt
 
-python -m pytest -q tests/test_derivative_gate.py
-python -m pytest -q tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
-python -m pytest -q tests/test_e175_example.py
-python -m pytest -q tests
-```
+The generated prompt must include:
 
-Use the validated `central_geom` environment. Review the code itself for API
-clarity, truthful documentation, engineering choices, and whether the test is
-a meaningful end-to-end guard rather than merely checking configuration.
+- the exact proposed public names and signatures, including every `Config`
+  rename and the replacement for `DeclarativeGeometryParameterization`;
+- a literal per-file allowlist based on actual reference tracing, not a guessed
+  file count;
+- explicit deletion of the CLI, `mesh_kind`, example-local dataclass, callback
+  builders, and polygon-normal/connectivity implementations;
+- a readability acceptance check for the example, including a maximum import
+  count or similarly mechanical clutter bound that you first verify is
+  achievable;
+- a check that the five executable stages are visibly labeled and ordered;
+- tests that configure the example through paths/high-level values and retain
+  the tri end-to-end zero-fold/zero-inversion gate;
+- a real quad-path test or run showing that topology is selected by the file
+  and nonzero n-gon regularization still executes;
+- derivative and M1.4 guards with unchanged values;
+- clean-clone execution and post-run clean-status checks;
+- a stop rule for any abstraction that would encode E175 assumptions in the
+  generic pipeline, any unresolved public-name collision, numerical drift, or
+  need to widen the audited allowlist.
 
-For clean-clone verification, use a fresh explicit directory (or safely remove
-the old verified target first), then run:
+Do not prescribe deprecated aliases, a temporary dual API, or an example-only
+facade that leaves the confusing public API intact. This corrective slice may
+be larger than the original two-file example turn because the user's feedback
+is specifically about the public API. Keep it bounded to the reachable surface
+needed by this example and do not absorb M1.6 slices 2-3 or M1.8.
 
-```bash
-git clone --no-hardlinks --branch production-ready-overhaul \
-  "file:///Users/mariusruh/Documents/Research/nasa_uli/mesh_movement/packages/BSM3" \
-  /tmp/bsm3-m17a-claude-review
-cd /tmp/bsm3-m17a-claude-review
-git status --porcelain
-PYTHONPATH=/tmp/bsm3-m17a-claude-review python examples/e175_surface_deformation.py
-PYTHONPATH=/tmp/bsm3-m17a-claude-review python -m pytest -q tests
-git status --porcelain            # MUST still print nothing after both runs
-```
-
-Expected clone count is **159 passed / 1 skipped**. The existing full-suite CI
-step already collects the new test, so leaving `actions.yml` unchanged is the
-expected result.
-
-## Ruling and next prompt
-
-If M1.7a is accepted, mark it accepted in `PLAN.md`, record the measured audit
-evidence in Turn 31, and replace this file with the next concrete Codex prompt:
-**M1.6 slice 2 (projections + preprocessing)**. Preserve the remaining order
-M1.6 slice 2, M1.6 slice 3, M1.8, then full M1.7 acceptance.
-
-If rejected, record the exact defect and replace this file with the smallest
-corrective Codex prompt, including a literal path allowlist and stop rule. Do
-not fix implementation files yourself and do not widen scope silently.
+Close Turn 31 after writing the corrective Codex prompt. Report the proposed
+new vocabulary prominently so the user can challenge it before implementation.
