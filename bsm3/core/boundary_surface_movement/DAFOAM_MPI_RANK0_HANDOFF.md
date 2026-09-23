@@ -1,7 +1,6 @@
 # DAFoam MPI rank-0 geometry-to-volume refactor — handoff
 
-Branch: `dafoam-mpi-rank0-refactor` (off `dev`). Pristine copies of every edited
-file are in `_dafoam_mpi_refactor_backups/`.
+Branch: `dafoam-mpi-rank0-refactor` (off `dev`).
 
 This implements the MPI-aware geometry-to-volume CSDL operation coupled to
 DAFoam described in `DAFoam_CSDL_MPI_Custom_Operation_Implementation_Instructions.md`
@@ -83,7 +82,7 @@ Collectives:
 | `slurm/env_setup.sh`, `slurm/e175_derivative_ladder.sbatch`, `slurm/e175_mpi_invariance.sbatch` | TSCC batch scaffolding. |
 | `tests/test_geometry_volume_mpi.py` | 14 dependency-free / mock-MPI tests. |
 
-**Modified** (backups in `_dafoam_mpi_refactor_backups/`)
+**Modified**
 
 | File | Change |
 |---|---|

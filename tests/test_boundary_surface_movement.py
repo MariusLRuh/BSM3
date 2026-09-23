@@ -13,8 +13,6 @@ from bsm3.core.boundary_surface_movement import (
     ComponentDisplacementData,
     ComponentFreeRegion,
     ComponentReevaluation,
-    CornerInversionBarrierModel,
-    CornerInversionBarrierOperation,
     CurrentGraphDistortionModel,
     CurrentGraphNgonAffineModel,
     CurrentGraphModel,
@@ -28,16 +26,12 @@ from bsm3.core.boundary_surface_movement import (
     IntersectionParameters,
     build_graph_distance_weighting,
     compute_multisource_geodesic_distance,
-    OMLQualityModel,
-    OMLQualityOperation,
     NgonAffineAssembler,
     NgonAffineConfig,
-    ParameterizedProjectionGroup,
     QuadraticDistortionAssembler,
     QuadraticDistortionConfig,
     DistortionModeCoefficients,
     SPDSolveOperation,
-    assemble_fixed_projected_tangential_smoother,
     combine_vertices,
     deform_geometry,
     evaluate_mesh_quality,
@@ -49,7 +43,6 @@ from bsm3.core.boundary_surface_movement import (
     project_onto_oml,
     reevaluate_vertices,
     run_graph_load_steps,
-    select_fixed_vertex_band,
     select_free_vertices,
     solve_intersection,
     stack_component_coefficients,
@@ -636,159 +629,6 @@ def _grid_strip(nx, ny):
     return mesh, interior, boundary
 
 
-def test_fixed_projected_tangential_smoother_preserves_reference_and_has_fixed_vjp():
-    mesh, _, _ = _grid_strip(3, 3)
-    mesh.vertices = 0.8 * (mesh.vertices - np.array([1.0, 1.0, 0.0]))
-    active_ids = np.array([4], dtype=np.int64)
-
-    recorder = csdl.Recorder(inline=True)
-    recorder.start()
-    surface = _plane_function_set("xy")
-    metadata = [
-        ProjectionMetadata(
-            component=surface,
-            vertex_ids=active_ids,
-            allowed_patch_ids=(0,),
-        )
-    ]
-    smoother = assemble_fixed_projected_tangential_smoother(
-        mesh,
-        active_ids=active_ids,
-        projection_metadata=metadata,
-        iterations=1,
-        relaxation=0.5,
-        preserve_reference=True,
-    )
-
-    reference_output = smoother.evaluate(
-        csdl.Variable(value=mesh.vertices),
-        projection_options={"warm_start_nu": 8, "warm_start_nv": 8},
-    )
-    candidate_value = mesh.vertices.copy()
-    candidate_value[4] += np.array([0.4, -0.2, 0.6])
-    center_x = csdl.Variable(name="smoother_center_x", value=0.4)
-    center_x.set_as_design_variable()
-    candidate = csdl.Variable(value=candidate_value)
-    candidate = candidate.set(
-        csdl.slice[4:5, 0:1],
-        csdl.reshape(center_x, (1, 1)),
-    )
-    smoothed = smoother.evaluate(
-        candidate,
-        projection_options={"warm_start_nu": 8, "warm_start_nv": 8},
-    )
-    derivative = csdl.derivative(csdl.sum(smoothed), center_x)
-    recorder.stop()
-
-    # The reference mesh is an exact fixed point.  Only the prescribed active
-    # row moves; the surrounding fixed ring remains untouched.
-    np.testing.assert_allclose(reference_output.value, mesh.vertices, atol=1e-10)
-    np.testing.assert_allclose(
-        np.delete(smoothed.value, 4, axis=0),
-        np.delete(candidate_value, 4, axis=0),
-        atol=1e-12,
-    )
-    np.testing.assert_allclose(smoothed.value[4], [0.2, -0.1, 0.0], atol=1e-10)
-    np.testing.assert_array_equal(
-        smoother.fixed_neighbor_ids,
-        np.array([1, 3, 5, 7], dtype=np.int64),
-    )
-    np.testing.assert_allclose(derivative.value, 0.5, atol=1e-10)
-
-
-def test_final_only_tangential_smoother_defers_projection_and_differentiates():
-    """``final_only`` skips the internal OML projection but stays differentiable.
-
-    The active rows the smoother returns are the raw Jacobi/tangential updates
-    (off the OML); a single downstream projection reproduces the
-    ``every_iteration`` result and the whole path is FD-consistent.
-    """
-
-    mesh, _, _ = _grid_strip(3, 3)
-    mesh.vertices = 0.8 * (mesh.vertices - np.array([1.0, 1.0, 0.0]))
-    active_ids = np.array([4], dtype=np.int64)
-
-    recorder = csdl.Recorder(inline=True)
-    recorder.start()
-    surface = _plane_function_set("xy")
-    metadata = [
-        ProjectionMetadata(
-            component=surface,
-            vertex_ids=active_ids,
-            allowed_patch_ids=(0,),
-        )
-    ]
-    options = {"warm_start_nu": 8, "warm_start_nv": 8}
-
-    every = assemble_fixed_projected_tangential_smoother(
-        mesh,
-        active_ids=active_ids,
-        projection_metadata=metadata,
-        iterations=1,
-        relaxation=0.5,
-        preserve_reference=True,
-        projection_mode="every_iteration",
-    )
-    final_only = assemble_fixed_projected_tangential_smoother(
-        mesh,
-        active_ids=active_ids,
-        projection_metadata=metadata,
-        iterations=1,
-        relaxation=0.5,
-        preserve_reference=True,
-        projection_mode="final_only",
-    )
-
-    candidate_value = mesh.vertices.copy()
-    candidate_value[4] += np.array([0.4, -0.2, 0.6])
-    center_x = csdl.Variable(name="final_only_center_x", value=0.4)
-    center_x.set_as_design_variable()
-    candidate = csdl.Variable(value=candidate_value)
-    candidate = candidate.set(
-        csdl.slice[4:5, 0:1],
-        csdl.reshape(center_x, (1, 1)),
-    )
-
-    every_smoothed = every.evaluate(candidate, projection_options=options)
-    preprojected = final_only.evaluate(candidate, projection_options=options)
-    # The single ordinary projection the driver performs after final_only.
-    downstream = project_onto_oml(
-        deformed_mesh_vertices=preprojected[csdl.slice[4:5, :]],
-        deformed_mesh_vertex_ids=active_ids,
-        projection_metadata=metadata,
-        projection_options=options,
-    )
-    projected = preprojected.set(csdl.slice[4:5, :], downstream.values)
-    objective = csdl.sum(projected)
-    objective.set_as_objective()
-    derivative = csdl.derivative(objective, center_x)
-    recorder.stop()
-
-    # final_only leaves the active row OFF the plane (z retained); the ring
-    # neighbors are still untouched.
-    np.testing.assert_allclose(preprojected.value[4], [0.2, -0.1, 0.6], atol=1e-10)
-    np.testing.assert_allclose(
-        np.delete(preprojected.value, 4, axis=0),
-        np.delete(candidate_value, 4, axis=0),
-        atol=1e-12,
-    )
-    # A single downstream projection reproduces the every_iteration result and
-    # lands the active row exactly on the z=0 OML.
-    np.testing.assert_allclose(projected.value[4], [0.2, -0.1, 0.0], atol=1e-8)
-    np.testing.assert_allclose(
-        projected.value, every_smoothed.value, atol=1e-8
-    )
-
-    simulator = csdl.experimental.JaxSimulator(recorder=recorder, gpu=False)
-    check = simulator.check_optimization_derivatives(
-        step_size=1e-6,
-        print_results=False,
-        raise_on_error=False,
-    )
-    relative_errors = [float(entry["rel_error"]) for entry in check.values()]
-    assert relative_errors and max(relative_errors) < 1e-6
-
-
 def test_fixed_symmetry_plane_constraint_overwrites_only_the_normal_coordinate():
     values = np.array(
         [
@@ -872,176 +712,6 @@ def test_harmonic_solve_reproduces_affine_field_exactly():
     # A constant field (partition of unity) is likewise reproduced exactly.
     constant = system.factor.solve(-(system.coupling @ np.ones((system.num_prescribed, 3))))
     np.testing.assert_allclose(constant, 1.0, atol=1e-9)
-
-
-def test_corner_barrier_repairs_quad_and_ift_vjp_matches_finite_difference():
-    vertices = np.array(
-        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]
-    )
-    quad = np.array([[0, 1, 2, 3]], dtype=np.int64)
-    mesh = MeshData(
-        vertices=vertices,
-        connectivity=quad,
-        cell_types=np.array(["quad"], dtype=object),
-        cell_blocks={"quad": quad},
-    )
-    model = CornerInversionBarrierModel(
-        mesh,
-        free_ids=np.array([2], dtype=np.int64),
-        prescribed_ids=np.array([0, 1, 3], dtype=np.int64),
-        activation_margin=0.5,
-        target_margin=0.1,
-        barrier_weight=5000.0,
-        max_iterations=1000,
-        tolerance=1e-14,
-    )
-    free_value = np.array([[0.2, -0.2, 0.0]])
-    prescribed_value = vertices[[0, 1, 3]]
-    weights = np.array([[0.3, -0.7, 0.2]])
-
-    recorder = csdl.Recorder(inline=True)
-    recorder.start()
-    free = csdl.Variable(value=free_value)
-    prescribed = csdl.Variable(value=prescribed_value)
-    repaired = CornerInversionBarrierOperation(model).evaluate(free, prescribed)
-    objective = csdl.sum(repaired * csdl.Variable(value=weights))
-    d_free = csdl.derivative(objective, free)
-    d_prescribed = csdl.derivative(objective, prescribed)
-    recorder.stop()
-
-    repaired_mesh = vertices.copy()
-    repaired_mesh[2] = repaired.value[0]
-    repaired_quality = evaluate_mesh_quality(mesh=mesh, vertices=repaired_mesh)
-    assert repaired_quality.inverted_elements == 0
-    assert repaired_quality.minimum_scaled_jacobian > 0.0
-
-    def scalar(candidate_free, candidate_prescribed):
-        return float(
-            np.sum(model.solve(candidate_free, candidate_prescribed) * weights)
-        )
-
-    step = 1e-5
-    finite_free = np.zeros_like(free_value)
-    finite_prescribed = np.zeros_like(prescribed_value)
-    for component in range(3):
-        plus = free_value.copy()
-        minus = free_value.copy()
-        plus[0, component] += step
-        minus[0, component] -= step
-        finite_free[0, component] = (
-            scalar(plus, prescribed_value) - scalar(minus, prescribed_value)
-        ) / (2.0 * step)
-    for row in range(prescribed_value.shape[0]):
-        for component in range(3):
-            plus = prescribed_value.copy()
-            minus = prescribed_value.copy()
-            plus[row, component] += step
-            minus[row, component] -= step
-            finite_prescribed[row, component] = (
-                scalar(free_value, plus) - scalar(free_value, minus)
-            ) / (2.0 * step)
-    np.testing.assert_allclose(d_free.value, finite_free, atol=2e-7)
-    np.testing.assert_allclose(
-        np.asarray(d_prescribed.value).reshape(prescribed_value.shape),
-        finite_prescribed,
-        atol=2e-7,
-    )
-
-
-def test_fixed_oml_quality_repairs_on_surface_and_ift_vjp_matches_fd():
-    recorder = csdl.Recorder(inline=True)
-    recorder.start()
-    surface = _plane_function_set("xy")
-    coefficients_value = np.asarray(
-        surface.functions[0].coefficients.value,
-        dtype=float,
-    ).reshape((-1, 3))
-    baseline = np.array(
-        [
-            [-1.0, -1.0, 0.0],
-            [1.0, -1.0, 0.0],
-            [1.0, 1.0, 0.0],
-            [-1.0, 1.0, 0.0],
-        ]
-    )
-    quad = np.array([[0, 1, 2, 3]], dtype=np.int64)
-    mesh = MeshData(
-        vertices=baseline,
-        connectivity=quad,
-        cell_types=np.array(["quad"], dtype=object),
-        cell_blocks={"quad": quad},
-    )
-    candidate_value = baseline.copy()
-    candidate_value[2] = np.array([0.0, -0.5, 0.0])
-    parametric_value = np.array([[0.0, 0.5, 0.25]])
-
-    candidate = csdl.Variable(value=candidate_value)
-    parametric = csdl.Variable(value=parametric_value)
-    coefficients = csdl.Variable(value=coefficients_value)
-    group = ParameterizedProjectionGroup(
-        vertex_ids=np.array([2], dtype=np.int64),
-        parametric_coordinates=parametric,
-        coefficients=coefficients,
-        evaluation_model=FunctionSetEvaluationModel(
-            surface,
-            patch_indices=(0,),
-        ),
-    )
-    model = OMLQualityModel(
-        mesh,
-        quality_vertex_ids=np.array([2], dtype=np.int64),
-        parameter_groups=(group,),
-        barrier_weight=10.0,
-        max_feasibility_iterations=500,
-        max_quality_iterations=500,
-        tolerance=1e-12,
-    )
-    repaired = OMLQualityOperation(model, (group,)).evaluate(candidate)
-    weights = np.array([[0.3, -0.7, 0.2]])
-    objective = csdl.sum(repaired * csdl.Variable(value=weights))
-    d_candidate = np.asarray(
-        csdl.derivative(objective, candidate).value,
-        dtype=float,
-    ).reshape(candidate_value.shape)
-    recorder.stop()
-
-    repaired_mesh = candidate_value.copy()
-    repaired_mesh[2] = repaired.value[0]
-    report = evaluate_mesh_quality(mesh=mesh, vertices=repaired_mesh)
-    assert report.inverted_elements == 0
-    assert report.minimum_scaled_jacobian > 0.0
-    # The plane has z=0 everywhere: the solve moved CAD parameters, not XYZ.
-    assert repaired.value[0, 2] == pytest.approx(0.0, abs=1e-13)
-
-    def scalar(values):
-        output = model.solve(
-            values,
-            (parametric_value,),
-            (coefficients_value,),
-        )
-        return float(np.sum(output * weights))
-
-    step = 2e-5
-    plus = candidate_value.copy()
-    minus = candidate_value.copy()
-    plus[2, 0] += step
-    minus[2, 0] -= step
-    finite = (scalar(plus) - scalar(minus)) / (2.0 * step)
-    np.testing.assert_allclose(
-        d_candidate[2, 0],
-        finite,
-        atol=1e-6,
-        rtol=1e-5,
-    )
-
-    band = select_fixed_vertex_band(
-        mesh,
-        seed_ids=np.array([0], dtype=np.int64),
-        allowed_ids=np.arange(4, dtype=np.int64),
-        excluded_ids=np.array([0], dtype=np.int64),
-        element_layers=1,
-    )
-    np.testing.assert_array_equal(band, np.array([1, 2, 3], dtype=np.int64))
 
 
 def test_elasticity_motion_solver_seam_exact_and_free_harmonic():

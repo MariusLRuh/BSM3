@@ -41,14 +41,11 @@ from .ngon_affine import (
     NgonAffineConfig,
 )
 from .projection import (
-    ParameterizedProjection,
     VertexBatch,
     combine_vertices,
     project_onto_oml,
-    project_onto_oml_parameterized,
     reevaluate_vertices,
 )
-from .tangential_smoothing import FixedProjectedTangentialSmoother
 
 
 @dataclass(frozen=True)
@@ -61,7 +58,6 @@ class GraphLoadStepResult:
     load_fractions: tuple[float, ...]
     preprojected_mesh_history: tuple[csdl.Variable, ...]
     projected_mesh_history: tuple[csdl.Variable, ...]
-    final_parameterized_projection: ParameterizedProjection | None = None
     distortion_normalization_scale: float | None = None
     distortion_redundancy: float | None = None
     distortion_num_ear_clipped: int = 0
@@ -92,10 +88,8 @@ def run_graph_load_steps(
     reevaluation_metadata: Sequence[VertexEvaluationMetadata],
     projection_options: Mapping[str, object] | None = None,
     load_fractions: Sequence[float] | None = None,
-    parameterize_final_projection: bool = False,
     distortion_config: QuadraticDistortionConfig | None = None,
     ngon_affine_config: NgonAffineConfig | None = None,
-    tangential_smoother: FixedProjectedTangentialSmoother | None = None,
     symmetry_plane_vertex_ids: np.ndarray | None = None,
     symmetry_plane_axis: int = 1,
 ) -> GraphLoadStepResult:
@@ -291,8 +285,6 @@ def run_graph_load_steps(
 
     preprojected_history: list[csdl.Variable] = []
     projected_history: list[csdl.Variable] = []
-    final_parameterized_projection = None
-
     for step_index, coefficient_map in enumerate(coefficient_steps):
         state = motion.build_load_step_state(
             component_coeffs=coefficient_map,
@@ -515,37 +507,13 @@ def run_graph_load_steps(
             vertex_ids=plane_ids,
             axis=symmetry_plane_axis,
         )
-        if tangential_smoother is not None:
-            preprojected_mesh = tangential_smoother.evaluate(
-                preprojected_mesh,
-                component_coefficients=coefficient_map,
-                projection_options=projection_options,
-            )
-            preprojected_mesh = enforce_symmetry_plane(
-                preprojected_mesh,
-                vertex_ids=plane_ids,
-                axis=symmetry_plane_axis,
-            )
-            preprojected_deformation = preprojected_mesh[_row_slice(ids)]
-
-        is_last = step_index == len(coefficient_steps) - 1
-        if is_last and parameterize_final_projection:
-            final_parameterized_projection = project_onto_oml_parameterized(
-                deformed_mesh_vertices=preprojected_deformation,
-                deformed_mesh_vertex_ids=ids,
-                projection_metadata=projection_metadata,
-                component_coefficients=coefficient_map,
-                projection_options=dict(projection_options or {}),
-            )
-            projected_batch = final_parameterized_projection.vertices
-        else:
-            projected_batch = project_onto_oml(
-                deformed_mesh_vertices=preprojected_deformation,
-                deformed_mesh_vertex_ids=ids,
-                projection_metadata=projection_metadata,
-                component_coefficients=coefficient_map,
-                projection_options=dict(projection_options or {}),
-            )
+        projected_batch = project_onto_oml(
+            deformed_mesh_vertices=preprojected_deformation,
+            deformed_mesh_vertex_ids=ids,
+            projection_metadata=projection_metadata,
+            component_coefficients=coefficient_map,
+            projection_options=dict(projection_options or {}),
+        )
 
         projected_mesh = combine_vertices(
             oml_projected_vertices=projected_batch,
@@ -569,7 +537,6 @@ def run_graph_load_steps(
         load_fractions=fractions,
         preprojected_mesh_history=tuple(preprojected_history),
         projected_mesh_history=tuple(projected_history),
-        final_parameterized_projection=final_parameterized_projection,
         distortion_normalization_scale=(
             None
             if distortion_model is None

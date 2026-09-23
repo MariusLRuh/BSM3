@@ -715,3 +715,513 @@ Validation:
   because the two standalone strategy-only tests were removed.
 
 Status:    closed
+
+---
+
+## Turn 11 — Claude, planner/reviewer, 2026-09-22
+Scope:     User ruling overturns Turn 10's preservation decision; M1.3 reopened
+
+**User ruling, binding:** "The membrane approach and log-barrier are not wanted
+and must not be kept." Turn 10's preservation of the lower-level membrane
+solver, assembler, barrier implementation, exports and tests is **overruled**.
+Its justification — a literal seven-file allowlist, plus three tracked call
+sites still passing `mode="graph"` — defended compatibility with code the user
+wants deleted. **M1.3 is reopened.** Full ruling in `PLAN.md` section 5.
+
+Claude's error is on record: Turn 9's allowlist was scoped to the *configured*
+membrane path and did not extend to the implementation behind it, so Codex's
+reading was reasonable against the prompt it was given. The prompt was too
+narrow, not the execution.
+
+Dependency audit, by the six required reports:
+
+**1. Tracked files containing `membrane` / `CorotationalMembrane`, or importing
+`inversion_barrier`** — 5 production, 1 test, 4 docs:
+- `elasticity.py` (17 hits): `CoupledAssembledSystem` 64,
+  `CorotationalMembraneAssembler` 246, `_polygon_membrane_stiffness` 547,
+  `_cst_stiffness` 634, `_scatter_coupled_element` 658,
+  `_scatter_edge_regularization` 703. Call-graph traced: every one is reachable
+  **only** from `CorotationalMembraneAssembler`; `_cst_stiffness`'s sole caller
+  is `_polygon_membrane_stiffness`.
+- `motion.py` (21 hits): `CorotationalMembraneMotionSolver` 870-1111; import at
+  55. **All four `use_inversion_barrier` sites (899, 951, 954, 1029) are inside
+  that class** — confirmed by mapping each line to its enclosing class.
+- `inversion_barrier.py` (1 hit, docstring 590): importers are exactly
+  `__init__.py:102` and `motion.py:55`. No non-membrane caller exists.
+- `__init__.py` (5 hits): imports 17, 18, 61, 102-109; `__all__` 174, 178, 179,
+  189, 190, 191, 192, 222, 223; docstring 11.
+- `oml_quality.py` (1 hit, docstring 3).
+- `tests/test_boundary_surface_movement.py`: barrier imports 16-17, used at
+  888 and 906.
+- Docs: `MANIFEST.md:57`, plus `PLAN.md`, `LOG.md`, `CODEX_NEXT.md`.
+
+**2. Logarithmic barrier formulations — the naming is inverted:**
+- **`inversion_barrier.py` is not a log barrier.** `_objective` (391-440) is a
+  quadratic penalty, `0.5·w·Σ(ratio − target)²` plus a quadratic data term;
+  zero `log` calls in the file. It is removed for reachability, not formulation.
+- **`oml_quality.py` is the log barrier**: line 494,
+  `-(1.0 - normalized)**2 * jnp.log(safe)` — IPC form, and the docstring at
+  line 13 names it. The only genuine optimization log barrier in tracked live
+  code.
+- `movement_test_csdl_static_seam.py:537`, `movement_test_new.py:436`,
+  `movement_test_new_2.py:670`: `np.log` in KS smooth-union SDF aggregation.
+  Not barriers; not in the retained manifest; untouched.
+
+**3. Symbols unreachable after deletion:** the six `elasticity.py` symbols
+above; `CorotationalMembraneMotionSolver`; all of `inversion_barrier.py`
+(`BarrierSolveInfo`, `_BarrierState`, `CornerInversionBarrierModel`,
+`CornerInversionBarrierOperation`, `CornerInversionBarrierVJP`,
+`FallbackCornerInversionBarrierOperation`, `FallbackCornerInversionBarrierVJP`,
+`_corner_ratio_gradients`, `_corner_ratio_hessian`); all of `oml_quality.py`
+(`OMLQualityModel`, `OMLQualityOperation`, `OMLQualitySolveInfo`,
+`OMLQualityVJP`, `optimize_mesh_on_oml`, `select_fixed_vertex_band`);
+`FinalSurfaceQualityConfig`; `SurfaceMotionConfig.final_quality` and `.mode`.
+
+**4. Tests — two deletions, one rewrite.** Both deletions are tests *of* the
+removed component, not independent consumers that happen to use it:
+`test_corner_barrier_repairs_quad_and_ift_vjp_matches_finite_difference` (877)
+and `test_fixed_oml_quality_repairs_on_surface_and_ift_vjp_matches_fd` (951).
+The rewrite is `test_e175_driver_configuration.py:147`, whose
+`SurfaceMotionConfig(mode="unsupported")` arm goes with the field while the
+rest of the test stands.
+
+**5. Expected reduction: 162 passed / 1 skipped -> 160 passed / 1 skipped** in a
+genuine clone (working tree 176 collected -> 174).
+
+**6. Accepted public API breaks:** nine `__all__` entries from the
+boundary-surface package; six `oml_quality` exports; `FinalSurfaceQualityConfig`
+(config `__all__` 340) and `SurfaceMotionConfig.final_quality`;
+`SurfaceMotionConfig.mode`.
+
+Two rulings the prompt asked me to make:
+
+- **`oml_quality.py` and `FinalSurfaceQualityConfig`: REMOVE.** It is a
+  nonlinear geometry-correction method driven by a log barrier — precisely what
+  the overhaul brief named. It is dormant (`mode` defaults to `"none"`, no
+  tracked driver enables it) yet publicly exposes `barrier_floor`,
+  `barrier_activation`, `barrier_weight`. `quality.py` — the diagnostics module —
+  is a different file, contains no barrier (its one grep hit is the word
+  "logic" at line 178), and survives.
+- **`SurfaceMotionConfig.mode`: REMOVE.** Turn 10 kept it for three call sites.
+  Two are live drivers needing a one-line edit each; the third is
+  `_dafoam_mpi_refactor_backups/…:127`. I checked whether repository policy
+  treats that directory as live — **no test, `pytest.ini`, or `ruff.toml`
+  references it** — so it is a dead tracked snapshot, updated for consistency
+  but not load-bearing. A one-valued validated field is the compatibility field
+  this ruling forbids.
+
+Precise distinction recorded for the implementer: **the only "barrier" that
+survives is MPI `comm.Barrier()`** — `cfd_mesh_dafoam_analysis.py:346`,
+`geometry_volume_mpi.py:77`, `run_dafoam_gmsh.py:653/656/911/954`. Process
+synchronization, not optimization.
+
+Trap flagged: `final_quality` is overloaded in `e175_mesh_motion_pipeline.py`.
+Lines 351-403 bind it to a **volume mesh quality metrics** object
+(`inverted_tetrahedra`, `minimum_relative_jacobian`, `mean_ratio_p001`)
+unrelated to `FinalSurfaceQualityConfig`; only line 462 and the aliases at
+493-499 belong to the config. Deleting the wrong ones breaks volume diagnostics
+silently.
+
+Preserved explicitly: graph Laplacian, N-gon affine regularization, quadratic
+distortion regularization, tangential smoothing, projection, and the
+`quality.py` diagnostics — none depends on the removed barrier.
+
+This turn was audit and planning only. No production file was staged,
+committed, modified or deleted; only the three permitted docs were edited.
+
+**M1.3 remains OPEN** pending Codex's corrective implementation; the prompt is
+in `docs/overhaul/CODEX_NEXT.md` with a 16-path allowlist.
+
+Status:    closed
+
+---
+
+## Turn 12 — Codex, implementer/reviewer, 2026-09-22
+Scope:     Corrective M1.3 deletion of membrane and optimization-barrier code
+
+Did:
+- Claimed the turn after reading the Turn-11 ruling, dependency audit, and
+  16-path literal allowlist.
+- Traced every deletion target before changing production code and found a
+  preserved-path dependency omitted by the audit.
+
+Decided:
+- No compatibility exception applies. The unwanted implementations, exports,
+  tests, dormant surface-quality configuration, and one-valued mode field will
+  be removed as one coherent clean break.
+
+Open:
+- **Blocking missed dependency:** `oml_quality.py:98` defines
+  `select_fixed_vertex_band`, but the explicitly preserved tangential-smoothing
+  path calls it at `e175_mesh_motion_pipeline.py:1184`. Whole-file deletion plus
+  removal of its export would break graph tangential smoothing. Its natural
+  destination is `tangential_smoothing.py`, which is outside the allowlist and
+  explicitly prohibited. Copying it into the monolithic pipeline would stay
+  inside the literal paths but would be an unreviewed architectural choice and
+  discard the only assertion of the helper when the OML-quality test is deleted.
+- **Additional in-scope stale branch:** the pipeline still contains
+  `if ELASTIC_STRATEGY == "graph"` at line 1238 and a dead alternate motion path,
+  although Turn 10 removed the `ELASTIC_STRATEGY` binding. The corrective prompt
+  removes `SurfaceMotionConfig.mode` but does not name this branch; it must be
+  collapsed to the graph path for the clean break to be runnable.
+- No production file was modified or deleted. Per the prompt's stop rule, the
+  allowlist/design needs an explicit ruling before implementation continues.
+
+Status:    blocked — corrective prompt amendment required
+
+---
+
+## Turn 13 — Claude, planner/reviewer, 2026-09-22
+Scope:     Resolve the Turn-12 block; user extends M1.3 to tangential smoothing
+
+**User decision, binding:** tangential smoothing is also unwanted and must be
+removed. `select_fixed_vertex_band` is **deleted with `oml_quality.py`** — not
+moved to `tangential_smoothing.py`, not copied into the pipeline.
+
+**Why Turn 12 stopped, and it was right to.** The Turn-11 prompt ordered
+whole-file deletion of `oml_quality.py` while explicitly preserving tangential
+smoothing — but `oml_quality.py:98` defines `select_fixed_vertex_band` and
+`e175_mesh_motion_pipeline.py:1184` calls it to build the smoothing band. Every
+available resolution was bad: moving the helper meant editing a prohibited file,
+copying it into the pipeline meant an unreviewed architectural choice plus
+losing its only assertion when the OML test was deleted. Codex invoked the stop
+rule instead of guessing. **The contradiction was Claude's, not Codex's**, and
+the user's ruling dissolves it rather than patching around it.
+
+Revised dependency graph — four subsystems, one clean break:
+
+1. **Membrane + inversion repair** (unchanged from the Turn-11 audit):
+   `elasticity.py` symbols 64/246/547/634/658/703, all reachable only from
+   `CorotationalMembraneAssembler`; `CorotationalMembraneMotionSolver`
+   (`motion.py` 870-1111) with all four `use_inversion_barrier` sites inside it;
+   whole-file `inversion_barrier.py`.
+2. **OML log-barrier quality**: whole-file `oml_quality.py` (the IPC log barrier
+   at line 494) including `select_fixed_vertex_band`; `FinalSurfaceQualityConfig`;
+   pipeline aliases 493-499 and branches 1254/1304/1369/1532.
+3. **Tangential smoothing** (new this turn): whole-file
+   `tangential_smoothing.py`; `TangentialSmoothingConfig` (config 48, 141-142,
+   346); `__init__.py` 79-82 and `__all__` 237; `load_stepping.py` 51, 98,
+   518-519; pipeline 458, 480-485, 1177-1224, 1280, 1525-1530, 1587-1588; three
+   tracked drivers incl. the backup.
+4. **Stale pipeline branch** (found by Codex in Turn 12): `ELASTIC_STRATEGY ==
+   "graph"` at 1238 with a dead `else:` arm at 1292 calling `motion.train()`.
+   Turn 10 removed the binding but left the branch. Must collapse to the graph
+   load-step path.
+
+**Newly discovered dependency — parameterized projection is dead too.** Traced
+every tracked reference:
+- `parameterize_final_projection` is set **only** as
+  `(FINAL_QUALITY_STRATEGY == "oml")` at pipeline 1253-1255;
+- the stale `else:` arm calls `project_onto_oml_parameterized` under the same
+  condition;
+- `oml_quality.py` imports `ParameterizedProjectionGroup` — deleted;
+- `tests/test_boundary_surface_movement.py:981` sits **inside**
+  `test_fixed_oml_quality_repairs_on_surface_and_ift_vjp_matches_fd` (951),
+  which is deleted.
+
+Zero independent tracked consumers survive, so `ParameterizedProjection`,
+`ParameterizedProjectionGroup` and `project_onto_oml_parameterized` are deleted
+with their `load_stepping.py` plumbing (44, 48, 64, 95, 294, 532-540, 572).
+**Ordinary projection survives**: `project_onto_oml`, `reevaluate_vertices`,
+`combine_vertices`, `VertexBatch`. The private helpers `_project_group` (478)
+and `_coefficient_subset` (501) are **shared by both paths** — verified by
+call-graph trace — so they stay. This is a partial-file edit, not a deletion.
+
+**Allowlist delta (Turn 11: 16 paths -> Turn 13: 19).** Added:
+`tangential_smoothing.py` (whole-file delete), `load_stepping.py`,
+`projection.py`. The latter two were on Turn 11's *prohibited* list; that
+prohibition is lifted for the named symbols only, and `ngon_affine.py`,
+`quality.py`, `current_graph_solve.py` and `quadratic_distortion.py` remain
+prohibited.
+
+**Tests — five deletions, two rewrites.** Deletions:
+`test_fixed_projected_tangential_smoother_preserves_reference_and_has_fixed_vjp`
+(639), `test_final_only_tangential_smoother_defers_projection_and_differentiates`
+(699), `test_corner_barrier_repairs_quad_and_ift_vjp_matches_finite_difference`
+(877), `test_fixed_oml_quality_repairs_on_surface_and_ift_vjp_matches_fd` (951)
+in `test_boundary_surface_movement.py`; and
+`test_final_only_tangential_reprojection_is_a_supported_fixed_option` (138) in
+`test_e175_driver_configuration.py`. Each is a test *of* a removed component.
+Rewrites: `test_default_volume_motion_is_final_only_and_differentiable` (56,
+drop the `tangential_smoothing.reprojection` assertion) and
+`test_quad_diagonal_controls_are_validated` (147, drop the `mode="unsupported"`
+arm).
+
+**Expected final count: 162 passed / 1 skipped -> 157 passed / 1 skipped** in a
+genuine clone (working tree 176 collected -> 171).
+
+Acceptance greps may retain only MPI `comm.Barrier()`
+(`cfd_mesh_dafoam_analysis.py:346`, `geometry_volume_mpi.py:77`,
+`run_dafoam_gmsh.py:653/656/911/954`) and the KS smooth-union `np.log` in the
+three `movement_test_*` scripts, which are outside the retained manifest.
+`quality.py` diagnostics are **not** removed for containing the word "quality";
+they contain no barrier.
+
+**Turn 13 changed no production code.** Only `PLAN.md`, `LOG.md` and
+`CODEX_NEXT.md` were edited; nothing staged, committed, modified or deleted
+under `bsm3/` or `tests/`. Verified by `git status --porcelain`.
+
+**M1.3 remains OPEN** pending Codex's corrective implementation; the prompt is
+in `docs/overhaul/CODEX_NEXT.md` with a 19-path allowlist.
+
+Status:    closed
+
+## Turn 14 — Codex, implementer, 2026-09-22
+
+Claimed the amended M1.3 corrective implementation. Scope was limited to the
+19-path allowlist in `CODEX_NEXT.md`: remove the four obsolete subsystems,
+collapse the E175 surface pipeline to its graph load-step path, update the five
+component-specific tests and two remaining assertions, then validate and commit
+from the dirty working tree without touching excluded user files.
+
+**STOP RULE invoked before production edits.** The pre-edit tracked-reference
+audit found three paths outside the literal allowlist that make Turn 14's
+acceptance criteria impossible as written:
+
+1. `_dafoam_mpi_refactor_backups/bsm3__core__boundary_surface_movement__cfd_mesh_dafoam_analysis.py.pre_level6_20260730_084717`
+   imports `TangentialSmoothingConfig` at line 49 and constructs both
+   `mode="graph"` and `tangential_smoothing=...` at lines 138-143.
+2. `_dafoam_mpi_refactor_backups/bsm3__core__boundary_surface_movement__cfd_mesh_dafoam_analysis.py.pre_level6fix_20260730_092729`
+   has the same tracked references at lines 49 and 138-143.
+3. `analytical_SDF_anchor_attraction_noarg.py` independently uses a setting
+   named `tangential_smoothing_step` at lines 74, 936, 942 and 1119. It is not
+   part of the surface-motion subsystem being removed, but the required
+   repository-wide `tangential_smooth` grep still matches it.
+
+The first two are stale tracked snapshots whose imports would name a deleted
+config class; the third is an acceptance-pattern collision rather than a
+dependency. None is in the 19-path allowlist. No symbol was relocated and the
+allowlist was not widened. No production or test file was modified, deleted,
+staged or committed; only this log entry changed. Claude must either add the two
+snapshots to the deletion/cleanup scope and narrow the tangential grep to the
+removed API, or explicitly add and disposition all three paths.
+
+**M1.3 remains OPEN.**
+
+Status:    closed — stopped on an out-of-allowlist dependency
+
+---
+
+## Turn 15 — Claude, planner/reviewer, 2026-09-22
+Scope:     Rule on the Turn-14 stop; correct the allowlist and the acceptance grep
+
+**Turn-14 stop upheld.** Both findings verified independently; both are Claude's
+planning defects, not implementation problems. This is Codex's second correct
+stop-rule invocation in three turns — the rule is doing its job.
+
+**Defect 1 (Claude's): the tangential-smoothing acceptance grep was too broad.**
+Turn 13 wrote `git grep -iE "tangential_smooth|TangentialSmoothing"`, which
+matches `tangential_smoothing_step` in
+`analytical_SDF_anchor_attraction_noarg.py` (74, 936, 942, 1119). Inspected the
+code: it is a scalar relaxation coefficient applying a **projected surface
+Laplacian** step inside an SDF anchor-attraction point-projection loop —
+`lap = surface_laplacian_displacement(...)`, projected through `projectors`,
+scaled, then re-projected to the surface. Entirely unrelated to
+`FixedProjectedTangentialSmoother`. Verified **zero imports** from the removed
+subsystem; the file is tracked, live, and covered by
+`tests/test_analytical_sdf_anchor_attraction.py`. Codex called it a pattern
+collision rather than a dependency and was right.
+
+Corrected criterion greps the **removed API symbols**, not the word. Validated
+this turn: the narrowed pattern matches exactly the twelve in-scope files and
+returns **0** hits in `analytical_SDF_anchor_attraction_noarg.py`.
+`tangential_smoothing_step` is now an explicitly identified permitted survivor,
+alongside MPI `comm.Barrier()` and the KS/SDF logarithms.
+
+**Defect 2 (Claude's): two backup snapshots sat outside the allowlist.** Both
+`…cfd_mesh_dafoam_analysis.py.pre_level6_20260730_084717` and
+`…pre_level6fix_20260730_092729` import `TangentialSmoothingConfig` at 49 and
+construct `mode="graph"` / `tangential_smoothing=` at 138-143 — confirmed by
+direct inspection. Turn 13 allowlisted only the sibling `.py`.
+
+**Ruling: delete the whole `_dafoam_mpi_refactor_backups/` directory (14 tracked
+files).** Editing them was never a legitimate option: the directory's own
+`README.txt` says they are *"Pristine backups … the exact content before the
+first edit in this effort,"* with restore instructions. Editing a backup to
+remove a reference to a deleted class destroys the only property it has. That
+left delete or permanently exempt. Delete, because:
+
+- **Inert.** 11 of 14 carry `.pre_level6*` timestamp extensions and are not
+  Python modules at all. The 3 `.py` files live in a directory with no
+  `__init__.py`, under `__`-mangled names, outside `testpaths`, matching neither
+  `python_files = test_*.py` nor any import — checked against `pytest.ini`.
+- **Unreferenced** by live code; only `DAFOAM_MPI_RANK0_HANDOFF.md` mentions it.
+- **Superseded**: snapshots of a completed refactor on
+  `dafoam-mpi-rank0-refactor`, replaced by `production-ready-overhaul`.
+- **Preserved** in git history regardless, and M3.2 pushes full history to a
+  separate archive remote.
+- **Otherwise permanent**: keeping them means carrying a grep exclusion through
+  every future acceptance criterion in this project.
+
+This **replaces** Turn 13's instruction to edit the single `.py` file there.
+`DAFOAM_MPI_RANK0_HANDOFF.md` is tracked and points at the directory, so it is
+added to the allowlist to have that pointer removed.
+
+**Allowlist 19 -> 20 paths.** Removed: the single backup-file edit. Added: the
+whole-directory deletion and `DAFOAM_MPI_RANK0_HANDOFF.md`.
+
+Unchanged from Turn 13: the four-subsystem scope, the three whole-file source
+deletions, the parameterized-projection deletion with ordinary projection and
+the shared `_project_group` / `_coefficient_subset` helpers preserved, the stale
+`ELASTIC_STRATEGY` collapse, five test deletions and two rewrites, and the
+expected **157 passed / 1 skipped**.
+
+**Turn 15 changed no production code.** Only `PLAN.md`, `LOG.md` and
+`CODEX_NEXT.md` were edited; nothing staged, committed, modified or deleted
+under `bsm3/` or `tests/`.
+
+**M1.3 remains OPEN** pending Codex's implementation; the corrected prompt is in
+`docs/overhaul/CODEX_NEXT.md` with a 20-path allowlist.
+
+Status:    closed
+
+## Turn 16 — Codex, implementer/reviewer, 2026-09-22
+
+Claimed the second-amended M1.3 implementation and audited the acceptance
+commands against tracked files before touching production code.
+
+**STOP RULE invoked before production edits.** The new directory disposition
+closes Turn 14's source dependency gap, and the narrowed tangential API grep no
+longer matches `analytical_SDF_anchor_attraction_noarg.py`. However, this new
+required command is impossible as written:
+
+```bash
+git grep -n "_dafoam_mpi_refactor_backups" -- .  # MUST be empty
+```
+
+It currently matches the two intentionally removable pointers in
+`DAFOAM_MPI_RANK0_HANDOFF.md`, but also historical/audit references that must
+survive deletion of the directory:
+
+- `docs/overhaul/LOG.md`: Turns 10, 14 and 15, including the append-only record
+  of the two earlier stop decisions;
+- `docs/overhaul/PLAN.md`: the M1.3 acceptance/ruling and historical Turn-10
+  audit notes;
+- `docs/overhaul/CODEX_NEXT.md`: the current instruction, allowlist, acceptance
+  command, clone check and definition of done.
+
+All three documents are allowlisted, but erasing the LOG matches would violate
+its explicit append-only policy and destroy the audit trail the user requested.
+The directory can be deleted and live-code pointers can be removed without
+claiming the string is absent from repository history documents. The acceptance
+criterion should instead be scoped to live/package content, for example:
+
+```bash
+git grep -n "_dafoam_mpi_refactor_backups" -- bsm3/ tests/
+```
+
+After the two HANDOFF lines are removed, that scoped grep can be empty while
+PLAN/LOG retain the decision record. Alternatively, exclude `docs/overhaul/`
+explicitly. No production/test file was modified, deleted, staged or committed;
+only this Turn-16 log entry changed.
+
+**M1.3 remains OPEN.**
+
+Status:    closed — stopped on a contradictory acceptance criterion
+
+---
+
+## Turn 17 — Claude, planner/reviewer, 2026-09-22
+Scope:     Rule on the Turn-16 stop; full audit of every acceptance command
+
+**Turn-16 stop upheld.** Third correct stop-rule invocation in five turns, and
+the third time the defect was Claude's. Codex has not once absorbed a bad
+instruction, which is the behaviour the rule exists for.
+
+**Defect 1 (Claude's): a self-referential acceptance command.**
+`git grep -n "_dafoam_mpi_refactor_backups" -- .` cannot return empty, because
+`docs/overhaul/LOG.md`, `PLAN.md` and `CODEX_NEXT.md` intentionally document the
+directory and its disposition. `LOG.md` is explicitly append-only, so satisfying
+that command would have meant destroying the audit trail the user asked for.
+Codex's proposed fix is adopted verbatim.
+
+**Binding correction:** the command is scoped to
+`git grep -n "_dafoam_mpi_refactor_backups" -- bsm3/ tests/`, which must be
+empty once the two live pointers in `DAFOAM_MPI_RANK0_HANDOFF.md` (4, 86) are
+removed and the directory is deleted. **Historical references in
+`docs/overhaul/LOG.md`, `PLAN.md` and `CODEX_NEXT.md` are explicitly permitted
+and must remain.**
+
+**Defect 2 (Claude's, found this turn — Codex had not reached it).** Per the
+user's instruction to audit *every* acceptance command for the same class of
+fault, each pattern was run against the tracked tree and every matching file
+classified as allowlisted, inside the deleted directory, or surviving:
+
+| Check | Files matched | Verdict |
+|---|---:|---|
+| membrane | 5 | all resolved by the work |
+| corotational | 4 | all resolved |
+| tangential API (narrowed, Turn 15) | 12 | all resolved |
+| deleted modules | 6 | all resolved |
+| parameterized projection | 6 | all resolved |
+| `mode="graph"` | 5 | all resolved |
+| `ELASTIC_STRATEGY` | 1 | all resolved |
+| backups dir, scoped to `bsm3/ tests/` | 1 | resolved by the HANDOFF edit |
+| barrier | 16 | 3 survivors — **one was unlisted** |
+
+The definition of done claimed `git grep -i barrier` matches "only MPI
+`comm.Barrier()` at the six named sites," listing three files under `bsm3/`. A
+fourth survivor exists: **`tests/test_geometry_volume_mpi.py:69`,
+`def Barrier(self):`** — a mock MPI communicator, not in the allowlist, so the
+criterion was unsatisfiable as written. Corrected permitted-survivor set is
+**seven sites across four files**: `cfd_mesh_dafoam_analysis.py:346`,
+`geometry_volume_mpi.py:77`, `run_dafoam_gmsh.py:653/656/911/954`, and
+`tests/test_geometry_volume_mpi.py:69`. Note that
+`cfd_mesh_dafoam_analysis.py` is allowlisted for the tangential/mode edits, so
+the prompt now states explicitly that its `comm.Barrier()` must **survive** that
+edit.
+
+Every other `git grep` in the prompt was already scoped to `bsm3/` or
+`bsm3/ tests/`; the backups command was the only repo-wide one. No further
+contradiction found.
+
+**Unchanged:** the 20-path allowlist and every other Turn-16 implementation
+instruction — four subsystems, three whole-file source deletions plus the backup
+directory, parameterized-projection removal with ordinary projection and the
+shared `_project_group` / `_coefficient_subset` helpers preserved, the stale
+`ELASTIC_STRATEGY` collapse, five test deletions, two rewrites, expected
+**157 passed / 1 skipped**.
+
+**Turn 17 changed no production code.** Only `PLAN.md`, `LOG.md` and
+`CODEX_NEXT.md` were edited; nothing staged, committed, modified or deleted
+under `bsm3/` or `tests/`.
+
+**M1.3 remains OPEN** pending Codex's implementation; the corrected prompt is in
+`docs/overhaul/CODEX_NEXT.md`.
+
+Status:    closed
+
+## Turn 18 — Codex, implementer, 2026-09-22
+
+Claimed the third-amended M1.3 corrective implementation. The pre-edit audit
+confirmed that the live-code-scoped backup grep and the seven-site MPI barrier
+exception are satisfiable. Work is restricted to the 20-path allowlist in
+`CODEX_NEXT.md`; historical overhaul records and excluded dirty files remain
+untouched except for this append-only turn.
+
+Implementation results before commit:
+
+- Deleted the membrane assembler/solver, inversion penalty, OML log-barrier
+  optimizer, tangential smoother, parameterized projection path, and all 14
+  tracked legacy backup snapshots. Ordinary OML projection, graph motion,
+  quadratic distortion, and N-gon affine regularization remain.
+- Collapsed the E175 pipeline to unconditional graph load stepping and removed
+  the one-valued surface `mode`. The same acceptance grep exposed the likewise
+  one-valued `use_corotational_reference=True` graph-solver option; its active
+  owner-reference formulation is now unconditional and the unreachable
+  absolute-formulation branch/helpers are gone.
+- All removed-API greps are empty over `bsm3/` and `tests/`. The only seven
+  `barrier` hits are the permitted MPI method/calls; the independent SDF
+  `tangential_smoothing_step` remains.
+- Focused results in `central_geom`: boundary surface **41 passed**; N-gon plus
+  projection **8 passed**; driver/derivative gates **10 passed**; SDF/MPI
+  survivors **29 passed**. Full dirty-tree suite: **171 passed** in 33.49 s
+  (includes the intentionally excluded untracked hybrid-volume tests).
+- Import smoke and every public `__all__` lookup pass. Named files compile.
+  Ruff and pyflakes are not installed in `central_geom`; the base environment
+  has neither Ruff nor a compatible CSDL API. `git diff --check` is clean over
+  every allowlisted implementation path. A directory-wide compile also reports
+  a pre-existing `IndentationError` in excluded untracked
+  `cfd_mesh_volume_movement_test.py`; it is outside this turn.
+
+Status:    active — implementation complete; commit/clone verification pending

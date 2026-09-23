@@ -260,7 +260,7 @@ nothing in the end state and removes the risk of silently dropping live code.
 |----|------|-------|--------|------------|
 | M1.1 | Generalize config. `E175ModelFiles` -> `ModelFiles`; component/intersection specs become `list[ComponentSpec]` / `list[IntersectionSpec]`; geometry parameterization becomes a user-supplied protocol rather than the frozen `E175GeometryVariables`. | Codex | not started | E175 driver runs through the generic API with no `E175`-named type in the call path. |
 | M1.2 | Decompose `build_e175_mesh_motion_model` into stage functions matching the 5-step pipeline. Delete the ~50-line `LOCAL_ALIAS = config.field` block at lines 456-515. | Codex | not started | No function over 300 LOC in the pipeline module; derivative gate still passes. |
-| M1.3 | Delete the configured `membrane` surface-motion mode: 7 `membrane_*` fields, 6 `mode != "graph"` validation rules in `SurfaceMotionConfig.__post_init__`, and the branches at pipeline lines 1069 and 1521. Re-check `inversion_barrier.py` reachability afterward. **Turn-3 note:** Turn 2 added two tests that construct the removed mode to assert graph-only validation; these must be rewritten, not deleted: keep the `quad_bracing_mode` and negative-weight assertions. **Turn-9 addition:** commit C2 brought in two standalone coupled-assembler tests that Turn 3 could not have seen. Judge them against surviving graph coverage rather than mechanically porting them. | Codex | **complete Turn 10** | No membrane setting or branch remains in the E175 config/pipeline, and tests contain no membrane reference. The one-valued `mode="graph"` field remains for tracked-call-site compatibility pending M1.1. The separately exported lower-level assembler/solver and its independently used inversion barrier remain outside this configured-mode removal. |
+| M1.3 | Delete the configured `membrane` surface-motion mode: 7 `membrane_*` fields, 6 `mode != "graph"` validation rules in `SurfaceMotionConfig.__post_init__`, and the branches at pipeline lines 1069 and 1521. Re-check `inversion_barrier.py` reachability afterward. **Turn-3 note:** Turn 2 added two tests that construct the removed mode to assert graph-only validation; these must be rewritten, not deleted: keep the `quad_bracing_mode` and negative-weight assertions. **Turn-9 addition:** commit C2 brought in two standalone coupled-assembler tests that Turn 3 could not have seen. Judge them against surviving graph coverage rather than mechanically porting them. | Codex | **OPEN — scope extended Turn 13** (membrane + barrier + OML log-barrier + tangential smoothing) | No **live/package** source or test contains a membrane implementation, an optimization barrier, the tangential-smoothing API, or a one-valued compatibility field. All acceptance greps are scoped to `-- bsm3/ tests/` (Turn 17); `docs/overhaul/` records are append-only history and are exempt by design. `inversion_barrier.py`, `oml_quality.py`, `tangential_smoothing.py` and `_dafoam_mpi_refactor_backups/` deleted. Permitted survivors: MPI `Barrier` at four files, KS/SDF logarithms, and `tangential_smoothing_step` in `analytical_SDF_anchor_attraction_noarg.py`. |corotational|tangential_smooth' -- bsm3/ tests/` empty; `git grep -i barrier -- bsm3/ tests/` returns only MPI `comm.Barrier()`; `inversion_barrier.py`, `oml_quality.py`, `tangential_smoothing.py` deleted; no stale exports, dead imports, or orphaned helpers. |
 | M1.4 | **N-gon, mandatory (decision 6).** Requires a *true six-gon load-step/VJP regression*, not merely loading the mixed-N-gon asset. Turn-3 measurement: in the M0.3 gate, changing `lambda_ngon` from 0.0 to 0.3 moves the solution by 3.3e-16 and the derivative by 1.8e-15 — the deformation is a pure affine ramp on a uniform quad grid, which lies in the **nullspace** of the affine penalty. Formally, `range(A_e) = range(Q_e) = 𝒜_e`, and the residual projector `(I - Q_e Q_e^T)` annihilates any correction in that affine subspace. The N-gon path is *executed* (graph grows 2666 -> 3080 nodes) but its contribution is unobservable, so a sign, scale, or transpose error in its VJP would pass today. M1.4 must construct a polygon6 correction with a provably nonzero component in the orthogonal complement of `range(Q_e)`, giving a genuine hourglass mode whose primal response changes with `lambda_ngon` by construction. | Codex | **COMPLETE** — implemented Turn 8, independently audited and accepted Turn 9 | Polygon6 projector, analytic primal limits, observable load-step VJP/centered-FD, mixed-polygon quality, and trusted wall-asset assembly all pass. `ngon_affine.py` required no change. |
 | M1.5 | Carve `bsm3.meshgen` out of the ~40k LOC of gmsh/OCC scripting. Keep one rudimentary path per the high-level plan; delete the rest. | Codex | not started | Core imports nothing from `meshgen`; one example regenerates a surface mesh from STEP. |
 | M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | not started | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
@@ -275,6 +275,302 @@ every test we have, so it is both the one mandatory capability (decision 6) and
 the one with no working regression. Proving it before the refactor means the
 refactor has a gate; proving it after means the refactor is unguarded on
 exactly the code path the user made mandatory.
+
+---
+
+### Turn-17 ruling: Turn-16 stop upheld; all acceptance commands audited
+
+Third correct stop-rule invocation in five turns, and the third time the defect
+was Claude's. Ruling: **acceptance greps are scoped to live/package content.**
+
+**Defect 1 — a self-referential acceptance command.**
+`git grep -n "_dafoam_mpi_refactor_backups" -- .` can never return empty,
+because `docs/overhaul/LOG.md`, `PLAN.md` and `CODEX_NEXT.md` *intentionally*
+document the directory and its disposition. `LOG.md` is explicitly append-only;
+satisfying that command would have required destroying the audit trail the user
+asked for. Corrected to
+`git grep -n "_dafoam_mpi_refactor_backups" -- bsm3/ tests/`, which must be
+empty once the two live pointers in `DAFOAM_MPI_RANK0_HANDOFF.md` (lines 4 and
+86) are removed and the directory is deleted. **Historical references in
+`docs/overhaul/LOG.md`, `PLAN.md` and `CODEX_NEXT.md` are permitted and expected
+to remain.**
+
+**Defect 2 — found by Claude's Turn-17 audit, not yet reached by Codex.** The
+definition of done said `git grep -i barrier` matches "only MPI `comm.Barrier()`
+at the six named sites," listing three files under `bsm3/`. Simulating the grep
+against the post-deletion tree shows a **fourth** file survives:
+`tests/test_geometry_volume_mpi.py:69`, `def Barrier(self):` — a mock MPI
+communicator. It is not in the allowlist, so the criterion as written was
+unsatisfiable. The corrected permitted-survivor set is **seven sites across four
+files**:
+
+| File | Sites |
+|---|---|
+| `bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py` | 346 |
+| `bsm3/core/boundary_surface_movement/geometry_volume_mpi.py` | 77 |
+| `bsm3/core/boundary_surface_movement/run_dafoam_gmsh.py` | 653, 656, 911, 954 |
+| `tests/test_geometry_volume_mpi.py` | 69 |
+
+**Full audit of every acceptance command.** Each pattern was run against the
+tracked tree and every matching file classified as allowlisted (resolved by the
+work), inside the deleted directory, or surviving:
+
+| Check | Files matched | Verdict |
+|---|---:|---|
+| membrane | 5 | all resolved |
+| corotational | 4 | all resolved |
+| tangential API (narrowed) | 12 | all resolved |
+| deleted modules | 6 | all resolved |
+| parameterized projection | 6 | all resolved |
+| `mode="graph"` | 5 | all resolved |
+| `ELASTIC_STRATEGY` | 1 | all resolved |
+| backups dir, scoped to `bsm3/ tests/` | 1 | resolved by the HANDOFF edit |
+| barrier | 16 | 3 permitted survivors — **one was unlisted** |
+
+Every other `git grep` in the prompt was already scoped to `bsm3/` or
+`bsm3/ tests/`; only the backups command was repo-wide. No further contradiction
+found.
+
+**Unchanged:** the 20-path allowlist and every other Turn-16 implementation
+instruction.
+
+M1.3 remains open.
+
+---
+
+### Turn-15 ruling: Turn-14 stop upheld; allowlist and grep corrected
+
+Codex invoked the stop rule a second time, correctly. Both findings verified
+independently; both are Claude's defects, not implementation problems.
+
+**Defect 1 — the acceptance grep was too broad.** Turn 13 specified
+`git grep -iE "tangential_smooth|TangentialSmoothing"`, which matches
+`tangential_smoothing_step` in `analytical_SDF_anchor_attraction_noarg.py`
+(lines 74, 936, 942, 1119). That is an **unrelated algorithm**: a scalar
+relaxation coefficient applying a projected surface-Laplacian step inside an SDF
+anchor-attraction point-projection loop. It has **zero imports** from the removed
+subsystem, is live tracked code with its own test
+(`tests/test_analytical_sdf_anchor_attraction.py`), and is a pattern collision,
+not a dependency. Codex's reading is correct.
+
+**Corrected criterion — grep the removed API, not the word.** Validated in
+Turn 15 to match exactly the twelve files in scope and to return **0** hits in
+`analytical_SDF_anchor_attraction_noarg.py`:
+
+```
+TangentialSmoothingConfig | FixedProjectedTangentialSmoother
+| assemble_fixed_projected_tangential_smoother | tangential_smoother
+| TANGENTIAL_SMOOTHING | tangential_smoothing= | tangential_smoothing import
+| surface.tangential_smoothing | tangential_smoothing_ids
+```
+
+`tangential_smoothing_step` joins MPI `comm.Barrier()` and the KS/SDF logarithms
+as an **explicitly identified permitted survivor**.
+
+**Defect 2 — two backup snapshots were outside the allowlist.**
+`…cfd_mesh_dafoam_analysis.py.pre_level6_20260730_084717` and
+`…pre_level6fix_20260730_092729` both import `TangentialSmoothingConfig` (49)
+and construct `mode="graph"` / `tangential_smoothing=` (138-143). Turn 13
+allowlisted only the sibling `.py` file.
+
+**Ruling: delete the entire `_dafoam_mpi_refactor_backups/` directory (14 tracked
+files).** Editing them was never an option — their own `README.txt` states they
+are *"Pristine backups … the exact content before the first edit in this
+effort,"* so editing one to remove a reference to a deleted class would falsify
+the only purpose it has. The remaining choice was delete or permanently exempt,
+and delete is correct:
+
+- **Inert.** Eleven of fourteen carry `.pre_level6*` timestamp extensions, so
+  they are not Python modules. The three `.py` files sit in a directory with no
+  `__init__.py`, under `__`-mangled names, outside `testpaths`, matching neither
+  `python_files = test_*.py` nor any import.
+- **Unreferenced.** Nothing in live code touches the directory; only
+  `DAFOAM_MPI_RANK0_HANDOFF.md` mentions it.
+- **Superseded.** They snapshot a *completed* refactor on
+  `dafoam-mpi-rank0-refactor`, a branch replaced by `production-ready-overhaul`.
+- **Not lost.** Git history holds them, and M3.2 pushes full history to a
+  separate archive remote.
+- **Otherwise permanent.** Keeping them means carrying a grep exclusion through
+  every future acceptance criterion.
+
+This **replaces** Turn 13's instruction to edit the one `.py` file in that
+directory. `DAFOAM_MPI_RANK0_HANDOFF.md` is tracked and points at the directory,
+so it joins the allowlist to have that pointer removed.
+
+**Allowlist: 19 -> 20 paths.** Removed the single backup-file edit; added the
+whole-directory deletion and the handoff doc.
+
+M1.3 remains open.
+
+---
+
+### Turn-13 ruling: M1.3 scope extended; Turn-12 block resolved
+
+**Turn 12 stopped correctly.** The Turn-11 prompt was self-contradictory: it
+ordered whole-file deletion of `oml_quality.py` while explicitly preserving
+tangential smoothing, and `e175_mesh_motion_pipeline.py:1184` calls
+`oml_quality.select_fixed_vertex_band` to build the smoothing band. Codex
+refused to invent an architectural destination for the helper and invoked the
+stop rule. That was the correct behaviour and the contradiction was Claude's.
+
+**User ruling, binding:** tangential smoothing is *also* unwanted.
+`select_fixed_vertex_band` is deleted with `oml_quality.py` — not moved, not
+preserved. This dissolves the contradiction rather than working around it.
+
+**Corrected M1.3 scope — four subsystems, removed as one clean break:**
+membrane assembler/solver; inversion-repair penalty and fallback; final OML
+log-barrier optimization; tangential smoothing. Plus every associated export,
+import, helper, config field, pipeline branch, driver setting, test and
+manifest entry, and `SurfaceMotionConfig.mode`.
+
+**Two dependencies the Turn-11 audit missed, both found downstream:**
+
+1. **`select_fixed_vertex_band`** (`oml_quality.py:98` -> pipeline 1184) — the
+   Turn-12 block, now resolved by deletion.
+2. **The stale `ELASTIC_STRATEGY == "graph"` branch** (pipeline 1238) with a
+   dead `else:` arm at 1292 calling `motion.train()`. Turn 10 removed the
+   binding but left the branch. It must collapse to the graph load-step path.
+
+**New ruling — parameterized projection is deleted.** Traced every tracked
+reference. `parameterize_final_projection` is set **only** as
+`(FINAL_QUALITY_STRATEGY == "oml")` at pipeline 1253-1255, and the stale `else:`
+arm calls `project_onto_oml_parameterized` only under the same condition. Its
+other consumers are `oml_quality.py` (deleted) and
+`tests/test_boundary_surface_movement.py:981`, which lies **inside**
+`test_fixed_oml_quality_repairs_on_surface_and_ift_vjp_matches_fd` (deleted).
+**Zero independent tracked consumers remain**, so `ParameterizedProjection`,
+`ParameterizedProjectionGroup` and `project_onto_oml_parameterized` go, together
+with the `load_stepping.py` plumbing that carries them.
+
+**Ordinary projection survives.** `projection.py` is a mixed-purpose file:
+`project_onto_oml` (65), `reevaluate_vertices` (412), `combine_vertices` (452)
+and `VertexBatch` (32) stay. The private helpers `_project_group` (478) and
+`_coefficient_subset` (501) are **shared** by both the ordinary and
+parameterized paths — verified by call-graph trace — so they stay too.
+
+**Tests: five deletions, two rewrites.**
+
+| Test | File:line | Action |
+|---|---|---|
+| `test_fixed_projected_tangential_smoother_preserves_reference_and_has_fixed_vjp` | `test_boundary_surface_movement.py:639` | delete |
+| `test_final_only_tangential_smoother_defers_projection_and_differentiates` | `:699` | delete |
+| `test_corner_barrier_repairs_quad_and_ift_vjp_matches_finite_difference` | `:877` | delete |
+| `test_fixed_oml_quality_repairs_on_surface_and_ift_vjp_matches_fd` | `:951` | delete |
+| `test_final_only_tangential_reprojection_is_a_supported_fixed_option` | `test_e175_driver_configuration.py:138` | delete |
+| `test_default_volume_motion_is_final_only_and_differentiable` | `:56` | rewrite — drop the `tangential_smoothing.reprojection` assertion |
+| `test_quad_diagonal_controls_are_validated` | `:147` | rewrite — drop the `mode="unsupported"` arm |
+
+Every deletion is a test *of* a removed component, not an independent consumer.
+
+**Expected: 162 passed / 1 skipped -> 157 passed / 1 skipped** in a genuine
+clone (working tree 176 collected -> 171).
+
+**Allowlist delta from Turn 11** (16 -> 19 paths): **added**
+`tangential_smoothing.py` (whole-file delete), `load_stepping.py`,
+`projection.py`. `load_stepping.py` and `projection.py` were on Turn 11's
+*prohibited* list; that prohibition is lifted for the named symbols only.
+
+**Preserved:** graph Laplacian motion, N-gon affine regularization, quadratic
+distortion regularization, ordinary OML projection and reevaluation, symmetry
+enforcement, surface and volume quality diagnostics (`quality.py` — no barrier;
+its only `log|barrier` hit is the word "logic" at line 178), STEP-to-aero mesh
+support, MPI `comm.Barrier()`, and KS/SDF logarithms unrelated to optimization
+barriers.
+
+M1.3 remains open pending Codex's corrective implementation.
+
+---
+
+### Turn-11 ruling: M1.3 is REOPENED — user overrules Turn 10
+
+> "The membrane approach and log-barrier are not wanted and must not be kept."
+
+Binding. Turn 10 removed the *configured E175 membrane branch* but preserved the
+lower-level membrane solver, assembler, barrier implementation, exports and
+tests, on the grounds that they sat outside a literal seven-file allowlist and
+that three tracked call sites still passed `mode="graph"`. That reasoning
+defended compatibility with code the user wants deleted. It is overruled.
+
+**The corrective scope is a dependency audit, not a guess.** Findings from
+`git grep` and import tracing:
+
+**Membrane surface (5 tracked production files, 1 test file, 4 docs):**
+
+| File | Membrane content |
+|---|---|
+| `elasticity.py` | `CoupledAssembledSystem` (64), `CorotationalMembraneAssembler` (246), `_polygon_membrane_stiffness` (547), `_cst_stiffness` (634), `_scatter_coupled_element` (658), `_scatter_edge_regularization` (703) — all reachable **only** from the membrane assembler |
+| `motion.py` | `CorotationalMembraneMotionSolver` (870-1111); the `from .inversion_barrier import` at 55; all four `use_inversion_barrier` sites (899, 951, 954, 1029) lie **inside that class** |
+| `inversion_barrier.py` | Entire file; its only importers are `__init__.py` (102) and `motion.py` (55) |
+| `__init__.py` | Imports at 17, 18, 61, 102-109; nine `__all__` entries (174, 178, 179, 189-192, 222, 223); docstring line 11 |
+| `oml_quality.py` | Docstring line 3 |
+
+**Barrier formulations — the naming is inverted from intuition:**
+
+- **`inversion_barrier.py` is NOT a logarithmic barrier.** `_objective`
+  (391-440) is a *quadratic penalty*:
+  `0.5·w·Σ(ratio − target)²` over violating corners plus a quadratic data term.
+  Zero `log` calls in the file. The filename is a misnomer. It is removed
+  because its sole remaining reachability is the membrane solver — not because
+  of its formulation.
+- **`oml_quality.py` IS the log barrier.** Line 494:
+  `-(1.0 - normalized)**2 * jnp.log(safe)` — the IPC form, and the module
+  docstring (line 13) says so: "a smooth IPC-style log barrier". It is the only
+  genuine optimization log barrier in tracked live code.
+- `movement_test_csdl_static_seam.py:537`, `movement_test_new.py:436`,
+  `movement_test_new_2.py:670` use `np.log` for **KS smooth-union SDF
+  aggregation**. Not barriers, not in the retained manifest. Leave untouched.
+
+**Ruling on `oml_quality.py` and `FinalSurfaceQualityConfig`: REMOVE.** It is a
+nonlinear geometry-correction method driven by a log barrier, which is exactly
+what the overhaul brief named ("hooks for nonlinear geometry deformation methods
+with log-barriers"). It is dormant — `FinalSurfaceQualityConfig.mode` defaults
+to `"none"` and no tracked driver enables it — while publicly exposing
+`barrier_floor`, `barrier_activation` and `barrier_weight`. Keeping a dormant
+1,065-line log-barrier optimizer after this ruling is not defensible.
+
+**Mesh-quality diagnostics are a different module and survive.** `quality.py`
+(`evaluate_mesh_quality`, `check_element_inversion`) contains no barrier — its
+only `log`/`barrier` grep hit is the word "logic" in a comment at line 178.
+
+**Ruling on `SurfaceMotionConfig.mode`: REMOVE.** Turn 10 kept it as a
+one-valued `"graph"` field to avoid breaking three tracked call sites. Two are
+live drivers (`cfd_mesh_movement_test.py:119`,
+`cfd_mesh_dafoam_analysis.py:139`) and updating them is a one-line edit each.
+The third is `_dafoam_mpi_refactor_backups/…:127`, a tracked but dead snapshot —
+**no test, `pytest.ini`, or `ruff.toml` references that directory**, so it is not
+policy-live. A one-valued validated field is exactly the "compatibility field"
+this ruling forbids.
+
+**"Barrier" that legitimately survives: MPI collectives only.** After deletion,
+`git grep -i barrier -- bsm3/` should match nothing but `comm.Barrier()` in
+`cfd_mesh_dafoam_analysis.py:346`, `geometry_volume_mpi.py:77`, and
+`run_dafoam_gmsh.py:653/656/911/954` — process synchronization, unrelated to
+optimization barriers.
+
+**Tests: two deletions, one rewrite.**
+
+| Test | Action | Why |
+|---|---|---|
+| `test_corner_barrier_repairs_quad_and_ift_vjp_matches_finite_difference` (`test_boundary_surface_movement.py:877`) | **delete** | Exercises `CornerInversionBarrierModel`/`Operation` directly; it is a test *of* the barrier, not an independent consumer |
+| `test_fixed_oml_quality_repairs_on_surface_and_ift_vjp_matches_fd` (`test_boundary_surface_movement.py:951`) | **delete** | Same relationship to `oml_quality` |
+| `test_e175_driver_configuration.py:147` `SurfaceMotionConfig(mode="unsupported")` | **rewrite** | The assertion disappears with the field; the surrounding test keeps its other arms |
+
+**Expected count: 162 passed / 1 skipped -> 160 passed / 1 skipped** in a
+genuine clone (working tree 176 collected -> 174).
+
+**Accepted public API breaks (clean break, decision 3):** nine `__all__` entries
+from `bsm3.core.boundary_surface_movement`; six `oml_quality` exports;
+`FinalSurfaceQualityConfig` (config `__all__` line 340) and the
+`SurfaceMotionConfig.final_quality` field; `SurfaceMotionConfig.mode`.
+
+**Trap for the implementer.** `final_quality` is an *overloaded name* in
+`e175_mesh_motion_pipeline.py`. Lines 351-403 bind it to a **volume mesh quality
+metrics** object (`inverted_tetrahedra`, `minimum_relative_jacobian`,
+`mean_ratio_p001`) that has nothing to do with `FinalSurfaceQualityConfig`. Only
+line 462 (`surface.final_quality`) and the aliases at 493-499 belong to the
+config. Deleting the wrong ones silently breaks volume diagnostics.
+
+M1.3 remains open pending Codex's corrective implementation.
 
 ---
 

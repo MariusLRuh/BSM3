@@ -45,26 +45,6 @@ class E175ModelFiles:
 
 
 @dataclass(frozen=True)
-class TangentialSmoothingConfig:
-    enabled: bool = True
-    layers: int = 16
-    iterations: int = 3
-    relaxation: float = 1.0
-    preserve_reference: bool = False
-    reprojection: str = "final_only"
-
-    def __post_init__(self):
-        if self.layers < 1 or self.iterations < 1:
-            raise ValueError("Smoothing layers and iterations must be positive.")
-        if not 0.0 < self.relaxation <= 1.0:
-            raise ValueError("Smoothing relaxation must lie in (0, 1].")
-        if self.reprojection not in ("every_iteration", "final_only"):
-            raise ValueError(
-                "Smoothing reprojection must be every_iteration or final_only."
-            )
-
-
-@dataclass(frozen=True)
 class GraphDistanceWeightingConfig:
     enabled: bool = True
     beta: float = 2.0
@@ -114,33 +94,11 @@ class NgonAffineRegularizationConfig:
 
 
 @dataclass(frozen=True)
-class FinalSurfaceQualityConfig:
-    mode: str = "none"
-    layers: int = 16
-    barrier_floor: float = 0.01
-    feasibility_target: float = 0.12
-    barrier_activation: float = 0.20
-    barrier_weight: float = 10.0
-    maximum_iterations: int = 250
-    solver: str = "lbfgs"
-
-    def __post_init__(self):
-        if self.mode not in ("none", "oml"):
-            raise ValueError("Final surface quality mode must be none or oml.")
-        if self.layers < 1 or self.maximum_iterations < 1:
-            raise ValueError("Quality layers and iterations must be positive.")
-
-
-@dataclass(frozen=True)
 class SurfaceMotionConfig:
-    mode: str = "graph"
     load_steps: int = 2
     stiffening_exponent: float = 1.5
     quad_diagonal_weight: float = 0.0
     quad_bracing_mode: str = "both_diagonals"
-    tangential_smoothing: TangentialSmoothingConfig = field(
-        default_factory=TangentialSmoothingConfig
-    )
     graph_distance_weighting: GraphDistanceWeightingConfig = field(
         default_factory=GraphDistanceWeightingConfig
     )
@@ -150,16 +108,11 @@ class SurfaceMotionConfig:
     ngon_affine: NgonAffineRegularizationConfig = field(
         default_factory=NgonAffineRegularizationConfig
     )
-    final_quality: FinalSurfaceQualityConfig = field(
-        default_factory=FinalSurfaceQualityConfig
-    )
     wing_free_span_fraction: float = 0.3
     tail_free_span_fraction: float = 0.3
     fuselage_free_x_range: tuple[float, float] = (0.05, 0.97)
 
     def __post_init__(self):
-        if self.mode != "graph":
-            raise ValueError("Surface motion mode must be graph.")
         if self.load_steps < 1:
             raise ValueError("Surface load_steps must be positive.")
         if (
@@ -337,13 +290,11 @@ __all__ = [
     "E175MeshMotionResult",
     "E175ModelFiles",
     "E175PipelineConfig",
-    "FinalSurfaceQualityConfig",
     "FiniteDifferenceConfig",
     "GraphDistanceWeightingConfig",
     "MeshQualityOutputConfig",
     "NgonAffineRegularizationConfig",
     "SurfaceMotionConfig",
-    "TangentialSmoothingConfig",
     "VisualizationConfig",
     "VolumeMotionConfig",
 ]

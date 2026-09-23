@@ -47,7 +47,6 @@ from bsm3.core.boundary_surface_movement.e175_mesh_motion_config import (
     GraphDistanceWeightingConfig,
     MeshQualityOutputConfig,
     SurfaceMotionConfig,
-    TangentialSmoothingConfig,
     VisualizationConfig,
     VolumeMotionConfig,
 )
@@ -136,16 +135,8 @@ def create_geometry_design_variables() -> E175GeometryVariables:
 # ---------------------------------------------------------------------------
 MESH_MOTION = E175PipelineConfig(
     surface_motion=SurfaceMotionConfig(
-        mode="graph",
         load_steps=2,
         stiffening_exponent=1.5,
-        tangential_smoothing=TangentialSmoothingConfig(
-            enabled=True,
-            layers=16,
-            iterations=3,
-            relaxation=1.0,
-            reprojection="final_only",
-        ),
         graph_distance_weighting=GraphDistanceWeightingConfig(
             enabled=True,
             beta=2.0,

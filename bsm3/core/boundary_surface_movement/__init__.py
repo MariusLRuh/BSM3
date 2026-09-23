@@ -8,14 +8,11 @@ final vertices are projected to explicit component/patch restrictions.
 
 Propagation is a strategy: ``RBFMotionSolver`` wraps the meshless RBF field and
 ``ElasticityMotionSolver`` is the reference-config graph-Laplacian / edge-spring
-solve; ``CorotationalMembraneMotionSolver`` adds the coupled membrane/barrier
-path.  All implement the ``MeshMotionSolver`` / ``MeshMotionField`` contract.
+solve. Both implement the ``MeshMotionSolver`` / ``MeshMotionField`` contract.
 """
 
 from .elasticity import (
     AssembledSystem,
-    CorotationalMembraneAssembler,
-    CoupledAssembledSystem,
     GraphLaplacianAssembler,
     StiffnessAssembler,
     element_neighbors,
@@ -58,7 +55,6 @@ from .graph_distance import (
 )
 from .motion import (
     ComponentReevaluation,
-    CorotationalMembraneMotionSolver,
     ElasticityMotionField,
     ElasticityMotionSolver,
     GraphLoadStepState,
@@ -75,10 +71,6 @@ from .load_stepping import (
     GraphLoadStepResult,
     linear_load_fractions,
     run_graph_load_steps,
-)
-from .tangential_smoothing import (
-    FixedProjectedTangentialSmoother,
-    assemble_fixed_projected_tangential_smoother,
 )
 from .quadratic_distortion import (
     CurrentGraphDistortionModel,
@@ -99,30 +91,11 @@ from .ngon_affine import (
     NgonAffineConfig,
     NgonAffineSystem,
 )
-from .inversion_barrier import (
-    BarrierSolveInfo,
-    CornerInversionBarrierModel,
-    CornerInversionBarrierOperation,
-    CornerInversionBarrierVJP,
-    FallbackCornerInversionBarrierOperation,
-    FallbackCornerInversionBarrierVJP,
-)
 from .projection import (
-    ParameterizedProjection,
-    ParameterizedProjectionGroup,
     VertexBatch,
     combine_vertices,
     project_onto_oml,
-    project_onto_oml_parameterized,
     reevaluate_vertices,
-)
-from .oml_quality import (
-    OMLQualityModel,
-    OMLQualityOperation,
-    OMLQualitySolveInfo,
-    OMLQualityVJP,
-    optimize_mesh_on_oml,
-    select_fixed_vertex_band,
 )
 from .quality import (
     ElementInversionReport,
@@ -171,12 +144,9 @@ from .volume_mesh_motion import (
 __all__ = [
     "AssembledSystem",
     "AxisRange",
-    "BarrierSolveInfo",
     "ComponentDisplacementData",
     "ComponentFreeRegion",
     "ComponentReevaluation",
-    "CorotationalMembraneAssembler",
-    "CorotationalMembraneMotionSolver",
     "CurrentGraphNgonAffineModel",
     "CurrentGraphNgonAffineSolveOperation",
     "CurrentGraphNgonAffineSolveVJP",
@@ -186,10 +156,6 @@ __all__ = [
     "DAFoamAnalysisOperation",
     "DAFoamAnalysisVJP",
     "DAFoamBackend",
-    "CornerInversionBarrierModel",
-    "CornerInversionBarrierOperation",
-    "CornerInversionBarrierVJP",
-    "CoupledAssembledSystem",
     "DisplacementInterpolationParameters",
     "DisplacementInterpolator",
     "DisplacementSurrogate",
@@ -212,16 +178,7 @@ __all__ = [
     "NgonAffineAssembler",
     "NgonAffineConfig",
     "NgonAffineSystem",
-    "OMLQualityModel",
-    "OMLQualityOperation",
-    "OMLQualitySolveInfo",
-    "OMLQualityVJP",
-    "ParameterizedProjection",
-    "ParameterizedProjectionGroup",
     "PYDAFoamBackend",
-    "FallbackCornerInversionBarrierOperation",
-    "FallbackCornerInversionBarrierVJP",
-    "FixedProjectedTangentialSmoother",
     "RBFMotionSolver",
     "SPDFactor",
     "SPDSolveOperation",
@@ -234,7 +191,6 @@ __all__ = [
     "WallPositionHistory",
     "assemble_elastic_volume_system",
     "assemble_graph_volume_system",
-    "assemble_fixed_projected_tangential_smoother",
     "add_csdl_inputs_to_da_options",
     "build_graph_distance_weighting",
     "build_local_volume_coordinate_map",
@@ -258,15 +214,12 @@ __all__ = [
     "load_wall_to_volume_map",
     "make_boundary_partition",
     "make_patch_velocity",
-    "optimize_mesh_on_oml",
     "project_onto_oml",
-    "project_onto_oml_parameterized",
     "reevaluate_vertices",
     "read_gmsh22_volume",
     "read_wall_position_history",
     "run_forward_volume_load_steps",
     "run_graph_load_steps",
-    "select_fixed_vertex_band",
     "select_free_vertices",
     "solve_intersection",
     "stack_component_coefficients",

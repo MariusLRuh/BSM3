@@ -37,7 +37,6 @@ from bsm3.core.projections.function_set_evaluation_custom_op import (
 from bsm3.preprocessing.mesh_io import _as_mesh_data
 
 from .elasticity import (
-    CorotationalMembraneAssembler,
     GraphLaplacianAssembler,
     StiffnessAssembler,
     element_neighbors,
@@ -51,10 +50,6 @@ from .intersections import (
     IntersectionParameters,
     IntersectionSolution,
     solve_intersection,
-)
-from .inversion_barrier import (
-    CornerInversionBarrierModel,
-    FallbackCornerInversionBarrierOperation,
 )
 from .rbf import (
     DisplacementInterpolationParameters,
@@ -179,7 +174,6 @@ class ElasticityMotionSolver:
         components: Sequence[object],
         component_reevaluations: Sequence[ComponentReevaluation] = (),
         stiffening_exponent: float = 0.0,
-        use_corotational_reference: bool = True,
         use_query_seam_reference: bool = True,
         symmetry_plane_ids: np.ndarray | None = None,
         assembler: StiffnessAssembler | None = None,
@@ -189,7 +183,6 @@ class ElasticityMotionSolver:
         quad_diagonal_weight: float = 0.0,
         quad_bracing_mode: str = "both_diagonals",
     ):
-        self.use_corotational_reference = bool(use_corotational_reference)
         self.use_query_seam_reference = bool(use_query_seam_reference)
         self.mesh = _as_mesh_data(mesh)
         self.initial_vertices = np.asarray(self.mesh.vertices, dtype=float).reshape((-1, 3))
@@ -248,12 +241,7 @@ class ElasticityMotionSolver:
                 if vertex_id in self._prescribed_local and vertex_id not in self._seam_row_source:
                     self._seam_row_source[vertex_id] = (solution_index, solution_row)
 
-        # Frozen prescribed rows: parametric reevaluation on their owner
-        # component.  Group by owner and anchor the displacement to the
-        # *baseline* reevaluation (mirrors the seam baseline-anchor rule) so
-        # every prescribed displacement is exactly zero at the baseline design.
         self._patch_to_component = _patch_to_component_map(self.components)
-        self._frozen_groups = self._build_frozen_groups()
 
         # Factor L_ff once on the reference mesh; L_fp is constant.  The optional
         # fixed reference-geodesic distance weighting multiplies every edge; it
@@ -268,7 +256,7 @@ class ElasticityMotionSolver:
             int(vertex): row for row, vertex in enumerate(self.free_ids)
         }
 
-        # Corotational reference: each free vertex references its owner
+        # Owner reference: each free vertex follows its component's rigid
         # component's rigid motion, and the elastic solve carries only the
         # seam's *departure* from that rigid motion.  The departure is zero at
         # the rigid outboard boundary, so the free/rigid interface does not fold
@@ -446,53 +434,6 @@ class ElasticityMotionSolver:
             reference[solution_index] = (coordinates, baseline_positions)
         return reference
 
-    def _build_frozen_groups(self) -> tuple["_FrozenGroup", ...]:
-        frozen_ids = np.array(
-            [
-                int(vertex)
-                for vertex in self.prescribed_ids
-                if int(vertex) not in self._seam_row_source
-            ],
-            dtype=np.int64,
-        )
-        component_by_id = {id(component): component for component in self.components}
-        rows_by_component: dict[int, list[int]] = {}
-        for vertex in frozen_ids:
-            patch_id = int(round(float(self.parametric_coordinates[vertex, 0])))
-            component = self._patch_to_component.get(patch_id)
-            if component is None:
-                raise ValueError(
-                    f"Frozen prescribed vertex {vertex} has patch {patch_id} that "
-                    "belongs to no supplied component."
-                )
-            rows_by_component.setdefault(id(component), []).append(int(vertex))
-
-        groups = []
-        for component_key, vertex_list in rows_by_component.items():
-            component = component_by_id[component_key]
-            vertex_array = np.asarray(vertex_list, dtype=np.int64)
-            coordinates = self.parametric_coordinates[vertex_array]
-            baseline_positions = np.asarray(
-                FunctionSetEvaluationModel(component).evaluate(
-                    stack_component_coefficients_numpy(component),
-                    coordinates,
-                ),
-                dtype=float,
-            ).reshape((-1, 3))
-            prescribed_rows = np.asarray(
-                [self._prescribed_local[int(vertex)] for vertex in vertex_array],
-                dtype=np.int64,
-            )
-            groups.append(
-                _FrozenGroup(
-                    component=component,
-                    vertex_ids=vertex_array,
-                    parametric_coordinates=coordinates,
-                    baseline_positions=baseline_positions,
-                    prescribed_rows=prescribed_rows,
-                )
-            )
-        return tuple(groups)
 
     def _solve_geometry(
         self,
@@ -599,51 +540,33 @@ class ElasticityMotionSolver:
             query_component_coeffs=query_component_coeffs,
         )
 
-        if self.use_corotational_reference:
-            # Corotational reference displacement (owner rigid motion) per free
-            # row, plus a per-component deviation solve.  L_ff is block diagonal
-            # across the free component-blocks (they are separated by the
-            # prescribed seam), so one factorization serves every block; each
-            # block carries only the seam's departure from that block component's
-            # rigid motion.
-            reference = self._assemble_free_reference(
-                driving_by_id=driving_by_id,
-                query_component_coeffs=query_component_coeffs,
-            )
-            if self.symmetry_plane_ids is None:
-                deviation_rhs = self._build_deviation_rhs(
-                    system=self.system,
-                    free_reference_groups=self._free_reference_groups,
-                    seam_index=self._seam_prescribed_by_solution,
-                    num_prescribed=int(self.prescribed_ids.size),
-                    num_free=int(self.free_ids.size),
-                    solutions=solutions,
-                    driving_by_id=driving_by_id,
-                    query_component_coeffs=query_component_coeffs,
-                )
-                free_deviation = SPDSolveOperation(
-                    self.system.factor
-                ).evaluate(deviation_rhs)
-                u_f = reference + free_deviation
-            else:
-                u_f = reference + self._solve_symmetric_deviation(
-                    solutions=solutions,
-                    driving_by_id=driving_by_id,
-                    query_component_coeffs=query_component_coeffs,
-                )
-        else:
-            # Absolute formulation: harmonic extension of the absolute prescribed
-            # displacement (seam bisection + frozen/rigid reevaluation).  Kept for
-            # comparison; it folds the free/rigid boundary of a moving component
-            # because a graph-harmonic field cannot reproduce that component's
-            # affine (planform-scaling) motion on a non-uniform mesh.
-            u_p = self._assemble_absolute_prescribed(
+        # Owner-reference displacement per free row plus a per-component
+        # deviation solve. L_ff is block diagonal across component blocks.
+        reference = self._assemble_free_reference(
+            driving_by_id=driving_by_id,
+            query_component_coeffs=query_component_coeffs,
+        )
+        if self.symmetry_plane_ids is None:
+            deviation_rhs = self._build_deviation_rhs(
+                system=self.system,
+                free_reference_groups=self._free_reference_groups,
+                seam_index=self._seam_prescribed_by_solution,
+                num_prescribed=int(self.prescribed_ids.size),
+                num_free=int(self.free_ids.size),
                 solutions=solutions,
                 driving_by_id=driving_by_id,
                 query_component_coeffs=query_component_coeffs,
             )
-            rhs = -1.0 * csdl.sparse.matmat(self.system.coupling, u_p)
-            u_f = SPDSolveOperation(self.system.factor).evaluate(rhs)
+            free_deviation = SPDSolveOperation(self.system.factor).evaluate(
+                deviation_rhs
+            )
+            u_f = reference + free_deviation
+        else:
+            u_f = reference + self._solve_symmetric_deviation(
+                solutions=solutions,
+                driving_by_id=driving_by_id,
+                query_component_coeffs=query_component_coeffs,
+            )
 
         return ElasticityMotionField(
             free_ids=self.free_ids,
@@ -656,39 +579,6 @@ class ElasticityMotionSolver:
                 driving_by_id, query_component_coeffs
             ),
         )
-
-    def _assemble_absolute_prescribed(
-        self,
-        *,
-        solutions: Sequence[IntersectionSolution],
-        driving_by_id: Mapping[int, object],
-        query_component_coeffs: Mapping[object, object],
-    ) -> csdl.Variable:
-        """Absolute prescribed displacement u_p (seam bisection + frozen reeval)."""
-
-        num_prescribed = int(self.prescribed_ids.size)
-        u_p = csdl.Variable(value=np.zeros((num_prescribed, 3), dtype=float))
-        for solution_index, (prescribed_rows, solution_rows, _) in (
-            self._seam_prescribed_by_solution.items()
-        ):
-            solution = solutions[solution_index]
-            seam_displacement = solution.deformed_vertices - solution.initial_vertices
-            u_p = u_p.set(
-                _row_slice(prescribed_rows),
-                seam_displacement[_row_slice(solution_rows)],
-            )
-        for group in self._frozen_groups:
-            coefficients = _resolve_component_coefficients(
-                group.component, driving_by_id, query_component_coeffs
-            )
-            moved = FunctionSetEvaluationOperation(
-                FunctionSetEvaluationModel(group.component)
-            ).evaluate(coefficients, group.parametric_coordinates)
-            u_p = u_p.set(
-                _row_slice(group.prescribed_rows),
-                moved - group.baseline_positions,
-            )
-        return u_p
 
     def _assemble_free_reference(
         self,
@@ -866,255 +756,6 @@ class ElasticityMotionSolver:
             )
         return resolved
 
-
-class CorotationalMembraneMotionSolver(ElasticityMotionSolver):
-    """Coupled membrane correction about the component-following reference.
-
-    This is the deliberately linear first milestone of the corotational
-    membrane path: a coupled reference-configuration CST plane-stress system
-    solves the absolute prescribed-displacement problem.  It is selectable
-    independently of the graph path and establishes the membrane assembly,
-    BCs, interleaved DOF layout, symmetry constraint, and adjoint before a
-    configuration-dependent element-rotation iteration is introduced.
-
-    The membrane assembler includes a 3D normal stabilization because a pure
-    surface membrane has out-of-plane hinge mechanisms and therefore cannot
-    supply the SPD system assumed by the solve.
-    """
-
-    def __init__(
-        self,
-        *,
-        mesh,
-        free_ids: np.ndarray,
-        intersection_params: Sequence[IntersectionParameters],
-        parametric_coordinates: np.ndarray,
-        components: Sequence[object],
-        component_reevaluations: Sequence[ComponentReevaluation] = (),
-        poisson_ratio: float = 0.4,
-        area_stiffening_exponent: float = 0.0,
-        normal_stabilization: float = 2e-2,
-        use_query_seam_reference: bool = True,
-        symmetry_plane_ids: np.ndarray | None = None,
-        use_inversion_barrier: bool = True,
-        graph_fallback_stiffening_exponent: float = 0.9,
-        barrier_activation_margin: float = 0.4,
-        barrier_target_margin: float = 0.2,
-        barrier_max_iterations: int = 300,
-        barrier_verbose: bool = True,
-        assembler: CorotationalMembraneAssembler | None = None,
-    ):
-        membrane_assembler = assembler or CorotationalMembraneAssembler(
-            poisson_ratio=poisson_ratio,
-            area_stiffening_exponent=area_stiffening_exponent,
-            normal_stabilization=normal_stabilization,
-        )
-        free_ids = np.unique(np.asarray(free_ids, dtype=np.int64).reshape(-1))
-        prescribed_ids = element_neighbors(mesh, free_ids)
-        # Build all shared geometry/front-end metadata in the existing solver,
-        # but suppress its scalar symmetry split.  Coupled symmetry is imposed
-        # below by removing only the plane's y DOFs.
-        super().__init__(
-            mesh=mesh,
-            free_ids=free_ids,
-            intersection_params=intersection_params,
-            parametric_coordinates=parametric_coordinates,
-            components=components,
-            component_reevaluations=component_reevaluations,
-            use_corotational_reference=True,
-            use_query_seam_reference=use_query_seam_reference,
-            symmetry_plane_ids=None,
-            assembler=membrane_assembler,
-            prescribed_ids=prescribed_ids,
-        )
-        self.membrane_assembler = membrane_assembler
-        self.membrane_symmetry_plane_ids = np.empty(0, dtype=np.int64)
-        if symmetry_plane_ids is not None:
-            self.membrane_symmetry_plane_ids = np.intersect1d(
-                np.asarray(symmetry_plane_ids, dtype=np.int64).reshape(-1),
-                self.free_ids,
-            )
-        if self.membrane_symmetry_plane_ids.size:
-            constrained = np.asarray(
-                [
-                    3 * self._free_local[int(vertex)] + 1
-                    for vertex in self.membrane_symmetry_plane_ids
-                ],
-                dtype=np.int64,
-            )
-            self.system = membrane_assembler.assemble(
-                self.mesh,
-                free_ids=self.free_ids,
-                prescribed_ids=self.prescribed_ids,
-                constrained_free_dofs=constrained,
-            )
-        self.use_inversion_barrier = bool(use_inversion_barrier)
-        self.graph_fallback_system = None
-        self.barrier_model = None
-        if self.use_inversion_barrier:
-            self.graph_fallback_prescribed_ids = graph_neighbors(
-                self.mesh, self.free_ids
-            )
-            self.graph_fallback_system = GraphLaplacianAssembler(
-                stiffening_exponent=float(graph_fallback_stiffening_exponent)
-            ).assemble(
-                self.mesh,
-                free_ids=self.free_ids,
-                prescribed_ids=self.graph_fallback_prescribed_ids,
-            )
-            graph_prescribed_local = {
-                int(vertex): row
-                for row, vertex in enumerate(self.graph_fallback_prescribed_ids)
-            }
-            self._graph_seam_prescribed_by_solution = (
-                self._build_seam_prescribed_index(graph_prescribed_local)
-            )
-            self.barrier_model = CornerInversionBarrierModel(
-                self.mesh,
-                free_ids=self.free_ids,
-                prescribed_ids=self.prescribed_ids,
-                activation_margin=barrier_activation_margin,
-                target_margin=barrier_target_margin,
-                max_iterations=barrier_max_iterations,
-                verbose=barrier_verbose,
-            )
-
-    def train(
-        self,
-        *,
-        component_coeffs,
-        query_component_coeffs: Mapping[object, object] | None = None,
-    ) -> "ElasticityMotionField":
-        driving_coefficients = _resolve_driving_coefficients(
-            self.intersection_params, component_coeffs
-        )
-        query_component_coeffs = dict(query_component_coeffs or {})
-        driving_by_id = {
-            id(parameters.driving_component): coefficients
-            for parameters, coefficients in zip(
-                self.intersection_params, driving_coefficients
-            )
-        }
-        solutions: list[IntersectionSolution] = []
-        for parameters, coefficients in zip(
-            self.intersection_params, driving_coefficients
-        ):
-            query_coefficients = _component_mapping_get(
-                query_component_coeffs,
-                parameters.sdf_query_component,
-                stack_component_coefficients(parameters.sdf_query_component),
-            )
-            solutions.append(
-                solve_intersection(
-                    parameters,
-                    driving_coefficients=coefficients,
-                    query_coefficients=query_coefficients,
-                )
-            )
-
-        prescribed = self._assemble_absolute_prescribed(
-            solutions=solutions,
-            driving_by_id=driving_by_id,
-            query_component_coeffs=query_component_coeffs,
-        )
-        num_prescribed = int(self.prescribed_ids.size)
-        rhs = -1.0 * csdl.sparse.matmat(
-            self.system.coupling,
-            prescribed.reshape((3 * num_prescribed, 1)),
-        )
-        active_displacement = SPDSolveOperation(self.system.factor).evaluate(rhs)
-        membrane_displacement = csdl.sparse.matmat(
-            self.system.scatter, active_displacement
-        ).reshape((self.free_ids.size, 3))
-        if self.use_inversion_barrier:
-            graph_displacement = self._assemble_graph_fallback(
-                solutions=solutions,
-                driving_by_id=driving_by_id,
-                query_component_coeffs=query_component_coeffs,
-            )
-            baseline_free = csdl.Variable(
-                value=self.initial_vertices[self.free_ids]
-            )
-            baseline_prescribed = csdl.Variable(
-                value=self.initial_vertices[self.prescribed_ids]
-            )
-            repaired_positions = FallbackCornerInversionBarrierOperation(
-                self.barrier_model
-            ).evaluate(
-                baseline_free + membrane_displacement,
-                baseline_free + graph_displacement,
-                baseline_prescribed + prescribed,
-            )
-            u_f = repaired_positions - baseline_free
-        else:
-            u_f = membrane_displacement
-        return ElasticityMotionField(
-            free_ids=self.free_ids,
-            free_local=self._free_local,
-            free_reference=self.initial_vertices[self.free_ids],
-            free_displacement=u_f,
-            solutions=tuple(solutions),
-            component_reevaluations=self.component_reevaluations,
-            reevaluation_coefficients=self._resolve_reevaluation_coefficients(
-                driving_by_id, query_component_coeffs
-            ),
-        )
-
-    def _assemble_graph_fallback(
-        self,
-        *,
-        solutions: Sequence[IntersectionSolution],
-        driving_by_id: Mapping[int, object],
-        query_component_coeffs: Mapping[object, object],
-    ) -> csdl.Variable:
-        reference = self._assemble_free_reference(
-            driving_by_id=driving_by_id,
-            query_component_coeffs=query_component_coeffs,
-        )
-        num_free = int(self.free_ids.size)
-        num_prescribed = int(self.graph_fallback_prescribed_ids.size)
-        rhs = csdl.Variable(value=np.zeros((num_free, 3), dtype=float))
-        for group in self._free_reference_groups:
-            deviation = self._assemble_block_deviation(
-                component=group.component,
-                solutions=solutions,
-                driving_by_id=driving_by_id,
-                query_component_coeffs=query_component_coeffs,
-                seam_index=self._graph_seam_prescribed_by_solution,
-                num_prescribed=num_prescribed,
-            )
-            block_rhs = -1.0 * csdl.sparse.matmat(
-                self.graph_fallback_system.coupling, deviation
-            )
-            rhs = rhs.set(
-                _row_slice(group.free_rows),
-                block_rhs[_row_slice(group.free_rows)],
-            )
-        correction = SPDSolveOperation(
-            self.graph_fallback_system.factor
-        ).evaluate(rhs)
-        if self.membrane_symmetry_plane_ids.size:
-            plane_rows = np.asarray(
-                [
-                    self._free_local[int(vertex)]
-                    for vertex in self.membrane_symmetry_plane_ids
-                ],
-                dtype=np.int64,
-            )
-            correction = correction.set(
-                csdl.slice[plane_rows.tolist(), 1:2],
-                csdl.Variable(value=np.zeros((plane_rows.size, 1), dtype=float)),
-            )
-        return reference + correction
-
-
-@dataclass(frozen=True)
-class _FrozenGroup:
-    component: object
-    vertex_ids: np.ndarray
-    parametric_coordinates: np.ndarray
-    baseline_positions: np.ndarray
-    prescribed_rows: np.ndarray
 
 
 @dataclass(frozen=True)

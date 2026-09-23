@@ -16,15 +16,18 @@ Roots and abbreviations:
 
 | Key | Root | Files | Current LOC |
 |---|---|---:|---:|
-| S | STEP-to-surface motion: `bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py` | 45 | 24,358 |
-| D | DAFoam boundary: `bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py` | 48 | 26,528 |
-| P | VortexAD/panel: `bsm3/core/boundary_surface_movement/e175_panel_opt.py` | 45 | 24,519 |
+| S | STEP-to-surface motion: `bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py` | 42 | 20,895 |
+| D | DAFoam boundary: `bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py` | 45 | 23,066 |
+| P | VortexAD/panel: `bsm3/core/boundary_surface_movement/e175_panel_opt.py` | 42 | 21,066 |
 | V | Volume-motion boundary: `bsm3/core/boundary_surface_movement/geometry_volume_mpi.py` | 1 | 378 |
-| M | Mesh generation: `bsm3/core/boundary_surface_movement/gmsh_occ_oml_surface_mesh.py` | 44 | 26,750 |
-| L | Derivative ladder: `bsm3/core/boundary_surface_movement/e175_derivative_ladder.py` | 50 | 27,624 |
+| M | Mesh generation: `bsm3/core/boundary_surface_movement/gmsh_occ_oml_surface_mesh.py` | 41 | 23,578 |
+| L | Derivative ladder: `bsm3/core/boundary_surface_movement/e175_derivative_ladder.py` | 47 | 24,162 |
 
-The union is **54 files / 32,937 LOC** in the Turn-4 working tree. This
-reproduces Claude's 54-file closure. The five-line difference from Claude's
+The M1.3 union is **51 files / 29,465 LOC**, a net decrease of **3 files / 3,472
+LOC** from the Turn-4 snapshot. The three whole-file removals account for 2,101
+LOC; the remainder reflects the partial-file cleanup and intervening accepted
+changes in the retained closure. The original snapshot
+reproduced Claude's 54-file closure. The five-line difference from Claude's
 32,932-LOC result is the net effect of Turn 4's explicit trusted-pickle public
 API. Counts use `len(path.read_text().splitlines())`, so they are snapshots,
 not acceptance thresholds.
@@ -54,11 +57,9 @@ not acceptance thresholds.
 | `bsm3/core/boundary_surface_movement/gmsh_occ_oml_surface_mesh.py` | M |
 | `bsm3/core/boundary_surface_movement/graph_distance.py` | S, D, P, M, L |
 | `bsm3/core/boundary_surface_movement/intersections.py` | S, D, P, M, L |
-| `bsm3/core/boundary_surface_movement/inversion_barrier.py` | S, D, P, M, L |
 | `bsm3/core/boundary_surface_movement/load_stepping.py` | S, D, P, M, L |
 | `bsm3/core/boundary_surface_movement/motion.py` | S, D, P, M, L |
 | `bsm3/core/boundary_surface_movement/ngon_affine.py` | S, D, P, M, L |
-| `bsm3/core/boundary_surface_movement/oml_quality.py` | S, D, P, M, L |
 | `bsm3/core/boundary_surface_movement/projection.py` | S, D, P, M, L |
 | `bsm3/core/boundary_surface_movement/quadratic_distortion.py` | S, D, P, M, L |
 | `bsm3/core/boundary_surface_movement/quality.py` | S, D, P, M, L |
@@ -66,7 +67,6 @@ not acceptance thresholds.
 | `bsm3/core/boundary_surface_movement/run_dafoam_gmsh.py` | D, L |
 | `bsm3/core/boundary_surface_movement/smooth_existing_tip_cap.py` | M |
 | `bsm3/core/boundary_surface_movement/spd_solve_custom_op.py` | S, D, P, M, L |
-| `bsm3/core/boundary_surface_movement/tangential_smoothing.py` | S, D, P, M, L |
 | `bsm3/core/boundary_surface_movement/volume_mesh_motion.py` | S, D, P, M, L |
 | `bsm3/core/projections/function_set_closest_distance_custom_op.py` | S, D, P, M, L |
 | `bsm3/core/projections/function_set_evaluation_custom_op.py` | S, D, P, M, L |

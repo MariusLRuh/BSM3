@@ -16,7 +16,6 @@ from bsm3.core.boundary_surface_movement.e175_mesh_motion_config import (
     E175PipelineConfig,
     NgonAffineRegularizationConfig,
     SurfaceMotionConfig,
-    TangentialSmoothingConfig,
     VolumeMotionConfig,
 )
 
@@ -52,10 +51,6 @@ def test_public_e175_drivers_do_not_use_cli_configuration():
 
 def test_default_volume_motion_is_final_only_and_differentiable():
     config = E175PipelineConfig()
-    assert (
-        config.surface_motion.tangential_smoothing.reprojection
-        == "final_only"
-    )
     assert config.surface_motion.graph_distance_weighting.enabled
     assert config.volume_motion.mode == "elasticity"
     assert config.volume_motion.load_mode == "final"
@@ -133,18 +128,7 @@ def test_local_r4_driver_assets_exist_when_available():
     assert all(path.is_file() for path in local_assets)
 
 
-def test_final_only_tangential_reprojection_is_a_supported_fixed_option():
-    config = SurfaceMotionConfig(
-        tangential_smoothing=TangentialSmoothingConfig(
-            reprojection="final_only"
-        )
-    )
-    assert config.tangential_smoothing.reprojection == "final_only"
-
-
 def test_quad_diagonal_controls_are_validated():
-    with pytest.raises(ValueError, match="must be graph"):
-        SurfaceMotionConfig(mode="unsupported")
     with pytest.raises(ValueError, match="finite and non-negative"):
         SurfaceMotionConfig(quad_diagonal_weight=-0.1)
     with pytest.raises(ValueError, match="quad_bracing_mode"):

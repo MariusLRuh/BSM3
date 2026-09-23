@@ -455,11 +455,9 @@ def build_e175_mesh_motion_model(
     _ = recorder
 
     surface = config.surface_motion
-    smoothing = surface.tangential_smoothing
     distance = surface.graph_distance_weighting
     distortion = surface.distortion
     ngon_affine = surface.ngon_affine
-    final_quality = surface.final_quality
     volume = config.volume_motion
 
     # Local aliases keep the established numerical implementation readable
@@ -477,12 +475,6 @@ def build_e175_mesh_motion_model(
     DISTORTION_K_ROTATION = distortion.rotation
     DISTORTION_K_NORMAL = distortion.normal
     NGON_AFFINE_LAMBDA = ngon_affine.weight
-    TANGENTIAL_SMOOTHING = smoothing.enabled
-    TANGENTIAL_SMOOTHING_LAYERS = smoothing.layers
-    TANGENTIAL_SMOOTHING_ITERATIONS = smoothing.iterations
-    TANGENTIAL_SMOOTHING_RELAXATION = smoothing.relaxation
-    TANGENTIAL_SMOOTHING_PRESERVE_REFERENCE = smoothing.preserve_reference
-    TANGENTIAL_SMOOTHING_REPROJECTION = smoothing.reprojection
     GRAPH_DISTANCE_WEIGHT = distance.enabled
     GRAPH_DISTANCE_BETA = distance.beta
     GRAPH_DISTANCE_LENGTH = distance.length_scale
@@ -490,14 +482,6 @@ def build_e175_mesh_motion_model(
     GRAPH_DISTANCE_DECAY = distance.decay
     GRAPH_DISTANCE_POWER = distance.power
     GRAPH_DISTANCE_SEEDS = distance.seeds
-    FINAL_QUALITY_STRATEGY = final_quality.mode
-    OML_QUALITY_LAYERS = final_quality.layers
-    OML_QUALITY_BARRIER_FLOOR = final_quality.barrier_floor
-    OML_QUALITY_FEASIBILITY_TARGET = final_quality.feasibility_target
-    OML_QUALITY_BARRIER_ACTIVATION = final_quality.barrier_activation
-    OML_QUALITY_BARRIER_WEIGHT = final_quality.barrier_weight
-    OML_QUALITY_MAX_ITER = final_quality.maximum_iterations
-    OML_QUALITY_SOLVER = final_quality.solver
     VOLUME_METHODS = volume.methods
     VOLUME_LOAD_MODE = volume.load_mode
     WING_FREE_SPAN_FRACTION = surface.wing_free_span_fraction
@@ -804,7 +788,7 @@ def build_e175_mesh_motion_model(
     wing_aspect_ratio = geometry_variables.wing_aspect_ratio
     # Fuselage cross-section scaling.  This is the design variable that makes the
     # query component of both intersections *move*, exercising the query-side
-    # seam reference in the corotational solve.  Scaling about a pivot on y=0
+    # seam reference in the graph solve. Scaling about a pivot on y=0
     # keeps the symmetry plane at y=0.
     fuselage_diameter_scale = geometry_variables.fuselage_diameter_scale
 
@@ -841,7 +825,7 @@ def build_e175_mesh_motion_model(
     fuselage_pivot[1] = 0.0
     load_fractions = (
         bsm3.core.boundary_surface_movement.linear_load_fractions(
-            GRAPH_LOAD_STEPS if ELASTIC_STRATEGY == "graph" else 1
+            GRAPH_LOAD_STEPS
         )
     )
     component_coefficient_steps = []
@@ -932,8 +916,8 @@ def build_e175_mesh_motion_model(
         )
     )
     # -------------------------------------------------------------------------
-    # 6. Select the free (elastically solved) vertices, build the corotational
-    #    elastic propagator, and evaluate the preprojected mesh vertices.
+    # 6. Select the free (elastically solved) vertices, build the graph
+    #    propagator, and evaluate the preprojected mesh vertices.
     # -------------------------------------------------------------------------
     # Free vertices per component.  The band spans the lifting surfaces: the
     # inboard wing/tail is free so it blends between the moving seam and the
@@ -1068,7 +1052,6 @@ def build_e175_mesh_motion_model(
     motion = bsm3.core.boundary_surface_movement.ElasticityMotionSolver(
         **motion_common,
         stiffening_exponent=STIFFENING_EXPONENT,
-        use_corotational_reference=True,
         prescribed_ids=graph_prescribed_ids,
         symmetry_use_element_neighbors=(NGON_AFFINE_LAMBDA > 0.0),
         distance_weighting=distance_weighting,
@@ -1174,56 +1157,6 @@ def build_e175_mesh_motion_model(
             name="fuselage",
         ),
     ]
-    tangential_smoothing_ids = np.empty(0, dtype=np.int64)
-    tangential_smoother = None
-    if TANGENTIAL_SMOOTHING:
-        smoothing_excluded = np.unique(
-            np.concatenate((seam_ids, symmetry_plane_vertex_ids))
-        )
-        tangential_smoothing_ids = (
-            bsm3.core.boundary_surface_movement.select_fixed_vertex_band(
-                mesh,
-                seed_ids=wing_fuse_ids,
-                allowed_ids=fuselage_projection_ids,
-                excluded_ids=smoothing_excluded,
-                element_layers=TANGENTIAL_SMOOTHING_LAYERS,
-            )
-        )
-        smoothing_projection_metadata = [
-            bsm3.preprocessing.get_projection_metadata(
-                component=fuselage,
-                vertices=initial_vertices[tangential_smoothing_ids],
-                vertex_ids=tangential_smoothing_ids,
-                para_coords=None,
-                name="fixed_tangential_smoothing_fuselage",
-            )
-        ]
-        tangential_smoother = (
-            bsm3.core.boundary_surface_movement
-            .assemble_fixed_projected_tangential_smoother(
-                mesh,
-                active_ids=tangential_smoothing_ids,
-                projection_metadata=smoothing_projection_metadata,
-                iterations=TANGENTIAL_SMOOTHING_ITERATIONS,
-                relaxation=TANGENTIAL_SMOOTHING_RELAXATION,
-                preserve_reference=(
-                    TANGENTIAL_SMOOTHING_PRESERVE_REFERENCE
-                ),
-                projection_mode=TANGENTIAL_SMOOTHING_REPROJECTION,
-            )
-        )
-        print(
-            "[tangential-smoothing] "
-            f"active={tangential_smoothing_ids.size} "
-            f"fixed_neighbors={tangential_smoother.fixed_neighbor_ids.size} "
-            f"layers={TANGENTIAL_SMOOTHING_LAYERS} "
-            f"iterations={TANGENTIAL_SMOOTHING_ITERATIONS} "
-            f"relaxation={TANGENTIAL_SMOOTHING_RELAXATION:g} "
-            "weighting=inverse_edge_length "
-            f"reprojection={TANGENTIAL_SMOOTHING_REPROJECTION} "
-            f"preserve_reference={int(TANGENTIAL_SMOOTHING_PRESERVE_REFERENCE)}",
-            flush=True,
-        )
     reevaluation_metadata = (
         bsm3.preprocessing.identify_reevaluated_vertices(
             mesh=mesh,
@@ -1233,122 +1166,49 @@ def build_e175_mesh_motion_model(
             names=["wing", "horizontal_tail", "fuselage"],
         )
     )
-    parameterized_projection = None
     deformation_vertices = initial_vertices[deformation_vertex_ids]
-    if ELASTIC_STRATEGY == "graph":
-        load_step_result = (
-            bsm3.core.boundary_surface_movement.run_graph_load_steps(
-                motion=motion,
-                mesh=mesh,
-                initial_deformation_vertices=csdl.Variable(
-                    name="deformation_vertices",
-                    value=deformation_vertices,
-                ),
-                deformation_vertex_ids=deformation_vertex_ids,
-                component_coefficient_steps=component_coefficient_steps,
-                projection_metadata=projection_metadata,
-                reevaluation_metadata=reevaluation_metadata,
-                projection_options=projection_options,
-                load_fractions=load_fractions,
-                parameterize_final_projection=(
-                    FINAL_QUALITY_STRATEGY == "oml"
-                ),
-                distortion_config=(
-                    None
-                    if DISTORTION_LAMBDA == 0.0
-                    else bsm3.core.boundary_surface_movement.QuadraticDistortionConfig(
-                        lambda_dist=DISTORTION_LAMBDA,
-                        mode=DISTORTION_MODE,
-                        coefficients=(
-                            bsm3.core.boundary_surface_movement.DistortionModeCoefficients(
-                                area=DISTORTION_K_AREA,
-                                deviatoric=DISTORTION_K_DEVIATORIC,
-                                shear=DISTORTION_K_SHEAR,
-                                rotation=DISTORTION_K_ROTATION,
-                                normal=DISTORTION_K_NORMAL,
-                            )
-                        ),
+    load_step_result = bsm3.core.boundary_surface_movement.run_graph_load_steps(
+        motion=motion,
+        mesh=mesh,
+        initial_deformation_vertices=csdl.Variable(
+            name="deformation_vertices",
+            value=deformation_vertices,
+        ),
+        deformation_vertex_ids=deformation_vertex_ids,
+        component_coefficient_steps=component_coefficient_steps,
+        projection_metadata=projection_metadata,
+        reevaluation_metadata=reevaluation_metadata,
+        projection_options=projection_options,
+        load_fractions=load_fractions,
+        distortion_config=(
+            None
+            if DISTORTION_LAMBDA == 0.0
+            else bsm3.core.boundary_surface_movement.QuadraticDistortionConfig(
+                lambda_dist=DISTORTION_LAMBDA,
+                mode=DISTORTION_MODE,
+                coefficients=(
+                    bsm3.core.boundary_surface_movement.DistortionModeCoefficients(
+                        area=DISTORTION_K_AREA,
+                        deviatoric=DISTORTION_K_DEVIATORIC,
+                        shear=DISTORTION_K_SHEAR,
+                        rotation=DISTORTION_K_ROTATION,
+                        normal=DISTORTION_K_NORMAL,
                     )
                 ),
-                ngon_affine_config=(
-                    None
-                    if NGON_AFFINE_LAMBDA == 0.0
-                    else bsm3.core.boundary_surface_movement.NgonAffineConfig(
-                        lambda_ngon=NGON_AFFINE_LAMBDA,
-                    )
-                ),
-                tangential_smoother=tangential_smoother,
-                symmetry_plane_vertex_ids=symmetry_plane_vertex_ids,
-                symmetry_plane_axis=1,
             )
-        )
-        preprojected_mesh_vertices = (
-            load_step_result.final_preprojected_mesh_vertices
-        )
-        projected_mesh_vertices = load_step_result.final_mesh_vertices
-        parameterized_projection = (
-            load_step_result.final_parameterized_projection
-        )
-    else:
-        motion_field = motion.train(
-            component_coeffs=[wing_coefficients, tail_coefficients],
-            query_component_coeffs={id(fuselage): fuselage_coefficients},
-        )
-        preprojected_vertices = motion_field.evaluate(
-            vertices=csdl.Variable(
-                name="deformation_vertices",
-                value=deformation_vertices,
-            ),
-            vertex_ids=deformation_vertex_ids,
-        )
-        if FINAL_QUALITY_STRATEGY == "oml":
-            parameterized_projection = (
-                bsm3.core.boundary_surface_movement.project_onto_oml_parameterized(
-                    deformed_mesh_vertices=preprojected_vertices,
-                    deformed_mesh_vertex_ids=deformation_vertex_ids,
-                    projection_metadata=projection_metadata,
-                    component_coefficients=coefficient_map,
-                    projection_options=projection_options,
-                )
+        ),
+        ngon_affine_config=(
+            None
+            if NGON_AFFINE_LAMBDA == 0.0
+            else bsm3.core.boundary_surface_movement.NgonAffineConfig(
+                lambda_ngon=NGON_AFFINE_LAMBDA,
             )
-            projected_vertices = parameterized_projection.vertices
-        else:
-            projected_vertices = (
-                bsm3.core.boundary_surface_movement.project_onto_oml(
-                    deformed_mesh_vertices=preprojected_vertices,
-                    deformed_mesh_vertex_ids=deformation_vertex_ids,
-                    projection_metadata=projection_metadata,
-                    component_coefficients=coefficient_map,
-                    projection_options=projection_options,
-                )
-            )
-        reevaluated_vertices = (
-            bsm3.core.boundary_surface_movement.reevaluate_vertices(
-                mesh=mesh,
-                metadata=reevaluation_metadata,
-                component_coefficients=coefficient_map,
-            )
-        )
-        # The complete pre-projection surface consists of the elastically moved
-        # deformation rows *and* the surrounding rows already moved by
-        # parametric reevaluation.
-        preprojected_mesh_vertices = (
-            bsm3.core.boundary_surface_movement.combine_vertices(
-                oml_projected_vertices=
-                bsm3.core.boundary_surface_movement.VertexBatch(
-                    values=preprojected_vertices,
-                    vertex_ids=deformation_vertex_ids,
-                    num_mesh_vertices=initial_vertices.shape[0],
-                ),
-                reevaluated_mesh_vertices=reevaluated_vertices,
-            )
-        )
-        projected_mesh_vertices = (
-            bsm3.core.boundary_surface_movement.combine_vertices(
-                oml_projected_vertices=projected_vertices,
-                reevaluated_mesh_vertices=reevaluated_vertices,
-            )
-        )
+        ),
+        symmetry_plane_vertex_ids=symmetry_plane_vertex_ids,
+        symmetry_plane_axis=1,
+    )
+    preprojected_mesh_vertices = load_step_result.final_preprojected_mesh_vertices
+    projected_mesh_vertices = load_step_result.final_mesh_vertices
     # Projection is only guaranteed to satisfy the CAD surface.  Impose the
     # essential half-domain condition explicitly afterward for every motion
     # strategy, including the no-smoother path.
@@ -1366,37 +1226,7 @@ def build_e175_mesh_motion_model(
             axis=1,
         )
     )
-    if FINAL_QUALITY_STRATEGY == "oml":
-        quality_excluded = np.unique(
-            np.concatenate((seam_ids, symmetry_plane_vertex_ids))
-        )
-        quality_vertex_ids = (
-            bsm3.core.boundary_surface_movement.select_fixed_vertex_band(
-                mesh,
-                seed_ids=seam_ids,
-                allowed_ids=deformation_vertex_ids,
-                excluded_ids=quality_excluded,
-                element_layers=OML_QUALITY_LAYERS,
-            )
-        )
-        final_mesh_vertices = (
-            bsm3.core.boundary_surface_movement.optimize_mesh_on_oml(
-                mesh=mesh,
-                candidate_mesh_vertices=projected_mesh_vertices,
-                quality_vertex_ids=quality_vertex_ids,
-                parameter_groups=parameterized_projection.groups,
-                barrier_floor=OML_QUALITY_BARRIER_FLOOR,
-                feasibility_target=OML_QUALITY_FEASIBILITY_TARGET,
-                barrier_activation=OML_QUALITY_BARRIER_ACTIVATION,
-                barrier_weight=OML_QUALITY_BARRIER_WEIGHT,
-                max_feasibility_iterations=OML_QUALITY_MAX_ITER,
-                max_quality_iterations=OML_QUALITY_MAX_ITER,
-                quality_solver=OML_QUALITY_SOLVER,
-                verbose=True,
-            )
-        )
-    else:
-        final_mesh_vertices = projected_mesh_vertices
+    final_mesh_vertices = projected_mesh_vertices
     final_mesh_vertices = (
         bsm3.core.boundary_surface_movement.enforce_symmetry_plane(
             final_mesh_vertices,
@@ -1522,15 +1352,6 @@ def build_e175_mesh_motion_model(
             f"max_warp={load_step_result.ngon_affine_maximum_warp_ratio:.6g}"
         )
     print(
-        "[diagnostics] tangential_smoothing="
-        f"{int(TANGENTIAL_SMOOTHING)} "
-        f"active={tangential_smoothing_ids.size} "
-        f"layers={TANGENTIAL_SMOOTHING_LAYERS} "
-        f"iterations={TANGENTIAL_SMOOTHING_ITERATIONS} "
-        f"relaxation={TANGENTIAL_SMOOTHING_RELAXATION:g}"
-    )
-    print(f"[diagnostics] final_quality={FINAL_QUALITY_STRATEGY}")
-    print(
         "[diagnostics] symmetry-plane max |y| "
         f"PRE/POST: {pre_plane_error:.3e}/{final_plane_error:.3e}"
     )
@@ -1584,9 +1405,6 @@ def build_e175_mesh_motion_model(
             deformation_vertex_ids=_ids_to_full(deformation_vertex_ids),
             graph_free_ids=_ids_to_full(motion.free_ids),
             graph_prescribed_ids=_ids_to_full(motion.prescribed_ids),
-            tangential_smoothing_ids=_ids_to_full(
-                tangential_smoothing_ids
-            ),
             symmetry_plane_vertex_ids=_ids_to_full(
                 symmetry_plane_vertex_ids
             ),
