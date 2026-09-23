@@ -1,143 +1,236 @@
-# Codex review checklist — Turn 33 (M1.7a usability correction)
+# Claude Turn 34 — implement the bounded M1.7a correction
 
-Claude implemented the Turn-32 plan. Codex owns the acceptance ruling.
-Implementation commits: `987b8cf`, `37e3028`, plus the documentation commit.
-Baseline for comparison is `d3ae980`.
+You are the **implementer**. Codex is the **planner/reviewer**. Implement this
+turn, verify it, commit it in coherent commits, update the handoff documents,
+and leave `docs/overhaul/CODEX_NEXT.md` as a concise review checklist for Codex.
+Do not review or accept your own work.
 
-## 1. Allowlist and commit hygiene
+## Review ruling
 
-- [ ] Only the 15 allowed paths appear in `d3ae980..HEAD`; no pre-existing
-      dirty file and no untracked research artifact was staged.
-- [ ] Three reviewable commits, explicit `git add` paths, no history rewrite.
-- [ ] `bsm3/mesh_motion.py` and
-      `bsm3/core/boundary_surface_movement/geometry_model.py` are the only new
-      source files.
+Turn 32 is rejected pending this correction. Preserve its useful results: the
+compact five-stage example, the `bsm3.mesh_motion` namespace, intuitive public
+names, cache containment, unchanged derivative gates, and M1.4 polygon tests.
+Correct these three contract defects:
 
-## 2. Public vocabulary
+1. BSM3's core boundary must accept deformed component coefficients produced
+   by an external parameterization. `GeometryModel.add_lifting_surface` and
+   `add_body` are optional conveniences, not the only way into the pipeline.
+2. `GeometryModel` must not start or own global CSDL recorder state. Recorder
+   lifecycle must be explicit and caller-owned.
+3. The result currently calls the pre-reprojection report a baseline. Report
+   the input, preprojection, and final states separately and compare the same
+   metric at each state.
 
-- [ ] Every rejected name is absent from tracked live Python:
+## Literal path allowlist
+
+Only these paths may change:
+
+1. `bsm3/core/boundary_surface_movement/geometry_model.py`
+2. `bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py`
+3. `bsm3/core/boundary_surface_movement/mesh_motion_config.py`
+4. `bsm3/mesh_motion.py`
+5. `examples/e175_surface_deformation.py`
+6. `tests/test_e175_example.py`
+7. `tests/test_e175_driver_configuration.py`
+8. `docs/overhaul/PLAN.md`
+9. `docs/overhaul/LOG.md`
+10. `docs/overhaul/CODEX_NEXT.md`
+
+Do not widen this list silently. If the correction genuinely requires another
+path, stop and report the exact dependency and proposed path. Do not modify
+generated caches or tracked E175 assets.
+
+## 1. Make external coefficients a first-class geometry input
+
+Add a public, configuration-agnostic `GeometryModel.add_component(...)` path.
+Its essential inputs are:
+
+- a stable component `name`;
+- the STEP importer's `search_name`;
+- the component's externally produced `deformed_coefficients`;
+- an optional simple free-region declaration;
+- optional projection name/mode settings already understood by the pipeline.
+
+The external value may be either:
+
+- one stacked CSDL variable/array of shape `(N, 3)`, using sorted component
+  patch-ID order, which is the existing BSM3 convention; or
+- a mapping from patch ID to coefficient block, with the same shapes as the
+  imported LFS component patches.
+
+Resolve and validate this value after the STEP component is imported, when the
+canonical patch IDs and coefficient shapes are known. Reject missing/extra
+patch IDs, wrong block shapes, a wrong stacked row count, or a non-3D trailing
+dimension with clear errors. Preserve CSDL expressions; do not convert an
+external CSDL variable to NumPy.
+
+For load fraction `f`, supply
+`baseline_coefficients + f * (target_coefficients - baseline_coefficients)`.
+At `f=1`, the exact external target must reach the existing intersection,
+graph-Laplacian, and reprojection chain. Derivatives from the final reprojected
+mesh to the external coefficient variable must remain analytic.
+
+Keep `add_lifting_surface` and `add_body` working as convenience methods. Do
+not expose `_ComponentRecord`, coefficient-builder callbacks, free-region
+factories, or polygon helpers. A caller must not need to subclass BSM3.
+
+Use an uncluttered high-level free-region input rather than a callback. `None`
+must mean the whole imported component is free. If a restricted region is
+provided, accept a mapping whose keys are `x`, `y`, or `z` and whose values are
+`(lower, upper, mode)` tuples, then build the existing private `AxisRange` /
+`ComponentFreeRegion` objects internally. Bounds may be `None`; mode must use
+the existing vocabulary. Avoid adding a new public dataclass for this.
+
+`GeometryModel.validate()` must require at least one component but must no
+longer require a variable created by `GeometryModel.design_variable()`.
+External variables may be created and owned entirely by another package.
+
+Add focused tests that cover:
+
+- a stacked external CSDL coefficient variable;
+- a per-patch mapping;
+- key and shape validation failures;
+- load-fraction interpolation reaching the target exactly; and
+- a nonzero analytic derivative of a scalar made from the final reprojected
+  mesh with respect to an external coefficient/design variable, checked
+  against centered finite difference with the existing derivative tolerance.
+
+Use a small fixture for focused contract tests; do not make every case run the
+full E175 mesh. At least one end-to-end example-path test must exercise the
+external-coefficient entry point, even if the main E175 example continues to
+show the built-in convenience helpers for readability.
+
+## 2. Make recorder ownership explicit
+
+Remove `_recorder`, `_owns_recorder`, `recorder`, `owns_recorder`, and all
+automatic recorder creation/start/stop behavior from `GeometryModel`.
+`design_variable()` may return a CSDL variable only when a recorder is already
+active; fail immediately with a clear message otherwise.
+
+Make `recorder` a required argument of `bsm3.mesh_motion.run`. `run` must never
+start or stop it. It passes the recorder into the pipeline and retains it on
+the result. This preserves composition with DAFoam and other caller-owned CSDL
+graphs.
+
+In `examples/e175_surface_deformation.py`, explicitly create and start the
+recorder before stage 2, pass it in during stage 4, and stop it in a `finally`
+block after the run. Keep the five stages visibly distinct and the script
+compact. Four module imports (`Path`, `tempfile`, `csdl_alpha`, and
+`bsm3.mesh_motion`) are acceptable; do not restore a CLI, `mesh_kind`, local
+dataclasses, callbacks, or low-level geometry/polygon helpers.
+
+Test that:
+
+- `GeometryModel()` alone does not alter recorder state;
+- `design_variable()` without an active recorder raises clearly;
+- `mm.run` neither starts nor stops the supplied recorder; and
+- exceptions from `mm.run` do not change caller ownership.
+
+## 3. Correct inversion accounting
+
+Replace the misleading `baseline_inversion_report` result field with these
+three unambiguous fields:
+
+- `initial_inversion_report`, evaluated from `setup.initial_full_vertices`;
+- `preprojection_inversion_report`, evaluated from the deformed surface before
+  reprojection; and
+- `surface_inversion_report`, the final reprojected surface report.
+
+Update docstrings and `print_summary()` labels accordingly. There must be no
+compatibility alias for `baseline_inversion_report`; this overhaul permits a
+clean break. Compute the polygon fold count only once.
+
+For the unchanged tracked quad asset, the initial reference is:
+
+- 114 inverted **elements**;
+- 114 inverted corners;
+- 0 degenerate elements.
+
+Pin those values in the relevant integration test. The Turn-32 `118 -> 118`
+values were preprojection -> final, not input -> final. Turn 30's logged 116
+also included 116 inverted elements, so this was not merely a corner/element
+metric mismatch.
+
+Tune the example's high-level design values, keeping at least one deformation
+strictly nonzero, until both the preprojection and final inverted-element ID
+sets introduce no IDs outside the initial set. Compare ID sets, not only
+counts. The triangle wall must remain at zero initial/preprojection/final
+inversions and zero folds. If the unchanged asset does not reproduce the
+114/114/0 input reference, stop and report rather than changing the asset or
+the threshold.
+
+## Required regression gates
+
+Run the narrow tests first, then all affected integration and established
+numerical guards. At minimum:
 
 ```bash
-git grep -n -e ModelFiles -e PipelineConfig -e SurfaceMotionConfig \
-  -e VolumeMotionConfig -e GraphDistanceWeightingConfig \
-  -e NgonAffineRegularizationConfig -e DistortionRegularizationConfig \
-  -e MeshQualityOutputConfig -e VisualizationConfig \
-  -e FiniteDifferenceConfig -e DeclarativeGeometryParameterization \
-  -e GeometryParameterization -e ComponentSpec -e IntersectionSpec \
-  -e build_mesh_motion_model -- '*.py'        # expect empty
+conda run -n central_geom python -m pytest -q \
+  tests/test_e175_example.py \
+  tests/test_e175_driver_configuration.py
+
+conda run -n central_geom python -m pytest -q \
+  tests/test_e175_boundary_surface_movement_derivatives.py \
+  tests/test_polygon_regularization.py \
+  tests/test_ngon_affine_regularization.py
 ```
 
-- [ ] No deprecated aliases survive; `run_mesh_motion` replaced
-      `build_mesh_motion_model` outright.
-- [ ] Low-level names (`NgonAffineConfig`, `QuadraticDistortionConfig`,
-      `FlowConfig`) and the `ngon_affine` module are untouched.
-- [ ] Field renames applied: `InputFiles.geometry_file` / `cache_directory`;
-      `SurfaceMotion.distance_weighting` / `distortion_penalty` /
-      `polygon_regularization`; `MeshMotion.surface` / `volume` / `quality` /
-      `visualization` / `derivative_check`.
-
-## 3. Facade
-
-- [ ] `import bsm3.mesh_motion as mm` exposes only high-level names,
-      `GeometryModel`, `MeshMotionResult`, and `run`.
-- [ ] No component records, callbacks, polygon helpers, or solver-assembly
-      types leak through it.
-- [ ] `run(recorder=...)` does not take ownership of a supplied recorder.
-
-## 4. `GeometryModel`
-
-- [ ] No aircraft or component name is hardcoded in library code.
-- [ ] `add_lifting_surface` derives its pivot from the named intersection at
-      `pivot_chord_fraction`, uses the intersection's median absolute span as
-      the scaling root, interpolates over the load fraction, and uses
-      `root_half_width` for the root free region.
-- [ ] `add_body` uses the control-point bounding-box pivot, interpolates
-      diameter scale from 1.0, and honours `free_axial_fraction`.
-- [ ] Validation covers names, unknown references, fractions, dangling
-      `pivot_intersection`, and paired reference planform inputs.
-- [ ] **Design point to rule on:** `design_variable` returns a CSDL variable,
-      which needs an active recorder, but the example registers variables
-      before `mm.run`. `GeometryModel` starts an inline recorder when none is
-      active and hands ownership to `run`, which stops it. Confirm this is the
-      intended resolution, or specify another.
-
-## 5. Example
-
-```bash
-python - <<'PY'
-import ast
-from pathlib import Path
-s = Path('examples/e175_surface_deformation.py').read_text(); t = ast.parse(s)
-imports = [n for n in t.body if isinstance(n, (ast.Import, ast.ImportFrom))]
-functions = [n for n in ast.walk(t) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-assert len(s.splitlines()) <= 220
-assert len(imports) <= 5
-assert not [n for n in ast.walk(t) if isinstance(n, ast.ClassDef)]
-assert [n.name for n in functions] == ['main']
-for f in ('argparse','mesh_kind','ExampleRun','_wing_coefficients','_surface_cells','_polygon_normals','_count_polygon_folds'):
-    assert f not in s, f
-p = [s.index(f'# {i}.') for i in range(1, 6)]
-assert p == sorted(p)
-print(f'{len(s.splitlines())} lines; {len(imports)} imports; five ordered stages')
-PY
-```
-
-- [ ] Reported: **150 lines, 3 imports, five ordered stages**, one public
-      function, no class, no private function.
-- [ ] Path-based `main` signature; quad selection is a `SURFACE_MESH_FILE`
-      edit with no topology label or branch.
-- [ ] A single `PolygonRegularization(weight=0.3)` serves both meshes.
-
-## 6. Numerical guards — must be unchanged to 1e-12
-
-```bash
-python -m pytest -q tests/test_derivative_gate.py
-python -m pytest -q tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
-```
-
-Claude measured, against the pre-implementation baseline: projector rank **3**,
-retained fraction **1.0**, `‖P·1‖` **0**, hexagon modes **3**, `obj'(λ=0)`
-**4.0**, `obj'(λ=0.3)` **57/13**, observability **2/13** — all unchanged.
-
-## 7. Measured behaviour to re-verify proportionately
-
-| Run | Time | Result |
-|---|---:|---|
-| tri wall, clean clone | **106.3 s** | 16,400 vertices / 32,522 cells; **0 folds, 0 baseline and 0 final inversions, 0 degenerate**; 0 n-gon modes |
-| quad panel | **63.7 s** | 14,411 vertices / 15,122 cells; **2,535 n-gon modes**; 0 folds; **118 baseline → 118 final inverted elements** |
-
-- [ ] The quad motion introduced **no** new inversion (118 → 118). Note this is
-      `inversion_report.num_inverted` (inverted *elements*); Turn 30's "116"
-      was `quality.inverted_corners`, a different metric. Confirm the intended
-      comparison basis.
-- [ ] Polygon regularization is applicable-if-present: zero modes on the tri
-      wall with no raise, nonzero on the quad panel, selected inside
-      `mesh_motion_pipeline.py` and never by the example.
-
-## 8. Clean-clone acceptance
+After committing the implementation, use this exact clean-clone procedure.
+The destination must not already exist; if it does, choose a new explicit
+`/tmp` path rather than deleting an ambiguous directory.
 
 ```bash
 git clone --no-hardlinks --branch production-ready-overhaul \
   "file:///Users/mariusruh/Documents/Research/nasa_uli/mesh_movement/packages/BSM3" \
-  /tmp/bsm3-m17a-codex-verify
-cd /tmp/bsm3-m17a-codex-verify
+  /tmp/bsm3-m17a-turn34-verify
+cd /tmp/bsm3-m17a-turn34-verify
 git status --porcelain
-PYTHONPATH=/tmp/bsm3-m17a-codex-verify python examples/e175_surface_deformation.py
-PYTHONPATH=/tmp/bsm3-m17a-codex-verify python -m pytest -q tests
-git status --porcelain            # must still be empty
+PYTHONPATH=/tmp/bsm3-m17a-turn34-verify \
+  conda run -n central_geom python examples/e175_surface_deformation.py
+PYTHONPATH=/tmp/bsm3-m17a-turn34-verify \
+  conda run -n central_geom python -m pytest -q tests
+git status --porcelain
 ```
 
-- [ ] Claude observed an empty status before **and** after both commands, so
-      the STEP-import cache containment now lives in the library and no run
-      writes into the checkout.
-- [ ] Working-tree suite: **175 passed** (was 173). Clean clone: **161 passed, 1 skipped**
-      (was 159/1), empty status before and after.
+Run the example against the tracked triangle wall and tracked quad-dominant
+wall. Report each runtime. Stop and report if either exceeds approximately ten
+minutes; do not hide a runtime regression by weakening the test. Status must
+be empty both before and after the example and suite.
 
-## 9. Remaining M1 scope — unchanged
+The existing derivative reference values, M1.4 thresholds, and Turn-32 clean
+clone count (`161 passed, 1 skipped` before this turn's intentional test
+additions) are guards, not values to reconcile. Any unexpected numerical
+change is a bug to explain.
 
-M1.6 slices 2 (projections + preprocessing) and 3 (drivers, MPI/DAFoam), then
-M1.8 pickle retirement, then full M1.7 acceptance (R4 reproduction within
-tolerance, STEP-to-VortexAD). M1.7's carry-ins still stand: the
-`GraphDistanceWeighting.summary` `TypedDict`, and its dead `"decay"` key.
+Run these mechanical checks and report their output:
 
-No stop rule fired during implementation.
+```bash
+rg -n "baseline_inversion_report|owns_recorder|self\._recorder|geometry\.recorder" \
+  bsm3/mesh_motion.py \
+  bsm3/core/boundary_surface_movement/geometry_model.py \
+  bsm3/core/boundary_surface_movement/mesh_motion_config.py \
+  bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
+  examples/e175_surface_deformation.py tests/test_e175_example.py \
+  tests/test_e175_driver_configuration.py
+
+rg -n "argparse|mesh_kind|DeclarativeGeometryParameterization|class .*Config" \
+  examples/e175_surface_deformation.py
+
+git diff --check
+git status --short
+```
+
+The first two greps must return no matches. Keep the existing applicable-if-
+present polygon regularization behavior and do not reintroduce membrane,
+log-barrier, tangential-smoothing, pickle, or mesh-kind branches.
+
+## Commit and handoff
+
+Use small coherent commits (API/contract, example/tests, then documents is a
+reasonable split). Update `PLAN.md` and append a concise implementation record
+to `LOG.md`; do not rewrite prior entries. Replace this file with the exact
+Codex review checklist: commits, changed paths, API signatures, external-
+coefficient derivative evidence, recorder lifecycle evidence, the three
+inversion reports and ID-set comparisons for tri/quad, runtimes, test counts,
+clone commands/results, greps, and any deviations. Then hand back for Codex
+review. Do not mark M1.7a accepted yourself.

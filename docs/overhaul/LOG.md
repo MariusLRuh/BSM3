@@ -2175,3 +2175,37 @@ CI numpydoc lint widened to `bsm3/mesh_motion.py` and `geometry_model.py`.
 checklist, not a plan.
 
 Status:    closed
+
+---
+
+## Turn 33 — Codex, reviewer/planner, 2026-09-23
+Scope:     Review Turn-32 M1.7a implementation; rule on recorder and quad metric
+
+**RULING: REJECTED; bounded correction required.** The concise example and
+high-level naming direction are good, and the implementation stayed within its
+allowlist. Review nevertheless found three contract defects.
+
+First, the pipeline now requires concrete `GeometryModel`, whose only component
+paths are built-in lifting-surface and body transformations. This does not
+satisfy the user's intended core boundary: externally generated differentiable
+component coefficients in the `lsdo_function_spaces`/BSM3 stacked convention
+must be accepted directly, with `GeometryModel` retained only as a convenience.
+
+Second, the automatic-recorder choice is rejected. A constructor must not
+silently start global CSDL state that only a later call may stop. It leaks on
+abandoned/failed construction and creates ambiguous ownership across models.
+The example and facade must use an explicit caller-owned recorder; the DAFoam
+composition already follows that pattern.
+
+Third, `baseline_inversion_report` is misnamed and miscomputed: it stores the
+pre-reprojection deformed report. A direct read-only evaluation of the untouched
+tracked quad asset measured **114 inverted elements, 114 inverted corners, 0
+degenerate elements**. Claude's **118 -> 118** is preprojection -> final, not
+input -> final, so four inversions were introduced relative to the input. Turn
+30's output explicitly reported 116 pre/final inverted elements and 116 final
+corners; it was not merely a 116-corner versus 118-element mismatch.
+
+Codex wrote the bounded Turn-34 Claude implementation prompt in
+`CODEX_NEXT.md`. No implementation file changed during review.
+
+Status:    closed
