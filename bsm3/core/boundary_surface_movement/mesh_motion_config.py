@@ -11,7 +11,7 @@ import numpy as np
 
 
 @dataclass(frozen=True)
-class ModelFiles:
+class InputFiles:
     """Geometry and surface/optional-volume mesh inputs for one analysis.
 
     When volume motion is enabled, ``surface_mesh_file`` must be the
@@ -21,7 +21,7 @@ class ModelFiles:
 
     Parameters
     ----------
-    geometry_step_file
+    geometry_file
         STEP file containing the source geometry.
     surface_mesh_file
         Surface mesh whose nodes are moved and reprojected.
@@ -29,19 +29,19 @@ class ModelFiles:
         Optional volume mesh associated with the surface mesh.
     volume_wall_map_file
         Optional surface-to-volume node map.
-    setup_cache_directory
+    cache_directory
         Optional directory for reusable setup data.
     """
 
-    geometry_step_file: Path
+    geometry_file: Path
     surface_mesh_file: Path
     volume_mesh_file: Path | None = None
     volume_wall_map_file: Path | None = None
-    setup_cache_directory: Path | None = None
+    cache_directory: Path | None = None
 
     def __post_init__(self):
         for name in (
-            "geometry_step_file",
+            "geometry_file",
             "surface_mesh_file",
             "volume_mesh_file",
             "volume_wall_map_file",
@@ -49,16 +49,16 @@ class ModelFiles:
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, Path(value).expanduser())
-        if self.setup_cache_directory is not None:
+        if self.cache_directory is not None:
             object.__setattr__(
                 self,
-                "setup_cache_directory",
-                Path(self.setup_cache_directory).expanduser(),
+                "cache_directory",
+                Path(self.cache_directory).expanduser(),
             )
 
 
 @dataclass(frozen=True)
-class GraphDistanceWeightingConfig:
+class DistanceWeighting:
     """Configure distance-dependent graph-edge stiffening.
 
     Parameters
@@ -111,7 +111,7 @@ class GraphDistanceWeightingConfig:
 
 
 @dataclass(frozen=True)
-class DistortionRegularizationConfig:
+class DistortionPenalty:
     """Configure the fixed quadratic element-distortion penalty.
 
     Parameters
@@ -151,7 +151,7 @@ class DistortionRegularizationConfig:
 
 
 @dataclass(frozen=True)
-class NgonAffineRegularizationConfig:
+class PolygonRegularization:
     """Configure the element-local affine-residual polygon penalty.
 
     Parameters
@@ -178,7 +178,7 @@ class NgonAffineRegularizationConfig:
 
 
 @dataclass(frozen=True)
-class SurfaceMotionConfig:
+class SurfaceMotion:
     """Configure graph-Laplacian surface-mesh propagation.
 
     Parameters
@@ -191,11 +191,11 @@ class SurfaceMotionConfig:
         Nonnegative weight for optional quadrilateral bracing.
     quad_bracing_mode
         Bracing topology used when diagonal weighting is active.
-    graph_distance_weighting
+    distance_weighting
         Settings for distance-dependent graph stiffening.
     distortion
         Optional quadratic distortion penalty.
-    ngon_affine
+    polygon_regularization
         Optional affine-residual polygon penalty.
 
     Raises
@@ -208,14 +208,14 @@ class SurfaceMotionConfig:
     stiffening_exponent: float = 1.5
     quad_diagonal_weight: float = 0.0
     quad_bracing_mode: str = "both_diagonals"
-    graph_distance_weighting: GraphDistanceWeightingConfig = field(
-        default_factory=GraphDistanceWeightingConfig
+    distance_weighting: DistanceWeighting = field(
+        default_factory=DistanceWeighting
     )
-    distortion: DistortionRegularizationConfig = field(
-        default_factory=DistortionRegularizationConfig
+    distortion_penalty: DistortionPenalty = field(
+        default_factory=DistortionPenalty
     )
-    ngon_affine: NgonAffineRegularizationConfig = field(
-        default_factory=NgonAffineRegularizationConfig
+    polygon_regularization: PolygonRegularization = field(
+        default_factory=PolygonRegularization
     )
 
     def __post_init__(self):
@@ -237,7 +237,10 @@ class SurfaceMotionConfig:
                 "Surface quad_bracing_mode must be single_diagonal, "
                 "both_diagonals, or virtual_center."
             )
-        if self.distortion.weight > 0.0 and self.ngon_affine.weight > 0.0:
+        if (
+            self.distortion_penalty.weight > 0.0
+            and self.polygon_regularization.weight > 0.0
+        ):
             raise ValueError(
                 "The first-milestone n-gon study does not combine affine and "
                 "quadratic distortion regularization."
@@ -245,7 +248,7 @@ class SurfaceMotionConfig:
 
 
 @dataclass(frozen=True)
-class VolumeMotionConfig:
+class VolumeMotion:
     """Configure propagation from the surface into a volume mesh.
 
     Parameters
@@ -274,14 +277,14 @@ class VolumeMotionConfig:
         If a mode or physical/numerical parameter is invalid.
     """
 
-    mode: str = "elasticity"
+    mode: str = "off"
     load_mode: str = "final"
     synchronized_load_steps: int | None = None
     graph_stiffening_exponent: float = 0.3
     elasticity_poisson_ratio: float = 0.3
     elasticity_stiffening_exponent: float = 0.75
     output_directory: Path | None = None
-    write_meshes: bool = True
+    write_meshes: bool = False
 
     def __post_init__(self):
         if self.mode not in ("off", "graph", "elasticity", "both"):
@@ -324,7 +327,7 @@ class VolumeMotionConfig:
 
 
 @dataclass(frozen=True)
-class MeshQualityOutputConfig:
+class QualityChecks:
     """Configure surface and volume quality evaluation.
 
     Parameters
@@ -342,14 +345,14 @@ class MeshQualityOutputConfig:
     """
 
     surface: bool = True
-    volume: bool = True
-    gmsh_volume_metrics: bool = True
+    volume: bool = False
+    gmsh_volume_metrics: bool = False
     fail_on_surface_inversion: bool = True
     fail_on_volume_inversion: bool = True
 
 
 @dataclass(frozen=True)
-class VisualizationConfig:
+class Visualization:
     """Configure optional interactive surface visualization.
 
     Parameters
@@ -360,12 +363,12 @@ class VisualizationConfig:
         Surface opacity supplied to the plotting backend.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     opacity: float = 1.0
 
 
 @dataclass(frozen=True)
-class FiniteDifferenceConfig:
+class DerivativeCheck:
     """Configure the optional driver-level finite-difference sweep.
 
     Parameters
@@ -390,20 +393,20 @@ class FiniteDifferenceConfig:
 
 
 @dataclass(frozen=True)
-class PipelineConfig:
+class MeshMotion:
     """Collect all mesh-motion pipeline settings.
 
     Parameters
     ----------
-    surface_motion
+    surface
         Surface graph-motion configuration.
-    volume_motion
+    volume
         Optional volume-motion configuration.
     quality
         Quality evaluation and failure policy.
     visualization
         Interactive visualization settings.
-    finite_difference
+    derivative_check
         Optional derivative-sweep settings.
     symmetry
         Whether a fixed symmetry plane is enforced.
@@ -428,20 +431,20 @@ class PipelineConfig:
         If a tolerance, resolution, or patch mode is invalid.
     """
 
-    surface_motion: SurfaceMotionConfig = field(
-        default_factory=SurfaceMotionConfig
+    surface: SurfaceMotion = field(
+        default_factory=SurfaceMotion
     )
-    volume_motion: VolumeMotionConfig = field(
-        default_factory=VolumeMotionConfig
+    volume: VolumeMotion = field(
+        default_factory=VolumeMotion
     )
-    quality: MeshQualityOutputConfig = field(
-        default_factory=MeshQualityOutputConfig
+    quality: QualityChecks = field(
+        default_factory=QualityChecks
     )
-    visualization: VisualizationConfig = field(
-        default_factory=VisualizationConfig
+    visualization: Visualization = field(
+        default_factory=Visualization
     )
-    finite_difference: FiniteDifferenceConfig = field(
-        default_factory=FiniteDifferenceConfig
+    derivative_check: DerivativeCheck = field(
+        default_factory=DerivativeCheck
     )
     symmetry: bool = False
     symmetry_plane_tolerance: float = 1.0e-8
@@ -466,7 +469,7 @@ class PipelineConfig:
 
 
 @dataclass(frozen=True)
-class ComponentSpec:
+class _ComponentRecord:
     """Describe one geometry component without embedding aircraft-specific logic.
 
     Parameters
@@ -497,19 +500,19 @@ class ComponentSpec:
 
     def __post_init__(self):
         if not self.name or not self.name.isidentifier():
-            raise ValueError("ComponentSpec.name must be a nonempty identifier.")
+            raise ValueError("_ComponentRecord.name must be a nonempty identifier.")
         if not self.search_name:
-            raise ValueError("ComponentSpec.search_name cannot be empty.")
+            raise ValueError("_ComponentRecord.search_name cannot be empty.")
         if self.projection_mode not in ("lifting_surface", "all"):
             raise ValueError(
-                "ComponentSpec.projection_mode must be lifting_surface or all."
+                "_ComponentRecord.projection_mode must be lifting_surface or all."
             )
         if self.projection_name is None:
             object.__setattr__(self, "projection_name", self.name)
 
 
 @dataclass(frozen=True)
-class IntersectionSpec:
+class _IntersectionRecord:
     """Describe one independent closed component-intersection curve.
 
     Parameters
@@ -540,7 +543,7 @@ class IntersectionSpec:
     def __post_init__(self):
         if not self.name or not self.name.isidentifier():
             raise ValueError(
-                "IntersectionSpec.name must be a nonempty identifier."
+                "_IntersectionRecord.name must be a nonempty identifier."
             )
         if self.driving_component == self.query_component:
             raise ValueError(
@@ -548,74 +551,6 @@ class IntersectionSpec:
             )
         if self.solver_name is None:
             object.__setattr__(self, "solver_name", self.name)
-
-
-class GeometryParameterization(Protocol):
-    """Specify design variables and declarative component behavior.
-
-    Attributes
-    ----------
-    design_variables
-        Named differentiable geometry controls.
-    component_specs
-        Component declarations used to build geometry coefficients.
-    intersection_specs
-        Independent closed-intersection declarations.
-    """
-
-    design_variables: Mapping[str, csdl.Variable]
-    component_specs: list[ComponentSpec]
-    intersection_specs: list[IntersectionSpec]
-
-
-@dataclass(frozen=True)
-class DeclarativeGeometryParameterization:
-    """Store a validated declarative geometry parameterization.
-
-    Parameters
-    ----------
-    design_variables
-        Nonempty mapping of geometry control names to CSDL variables.
-    component_specs
-        Nonempty component declarations with unique names.
-    intersection_specs
-        Intersection declarations with unique names and known components.
-
-    Raises
-    ------
-    ValueError
-        If names are missing, duplicated, or reference unknown components.
-    """
-
-    design_variables: Mapping[str, csdl.Variable]
-    component_specs: list[ComponentSpec]
-    intersection_specs: list[IntersectionSpec]
-
-    def __post_init__(self):
-        design_variables = dict(self.design_variables)
-        component_specs = list(self.component_specs)
-        intersection_specs = list(self.intersection_specs)
-        if not design_variables:
-            raise ValueError("At least one geometry design variable is required.")
-        component_names = [spec.name for spec in component_specs]
-        if not component_names or len(set(component_names)) != len(component_names):
-            raise ValueError("ComponentSpec names must be nonempty and unique.")
-        intersection_names = [spec.name for spec in intersection_specs]
-        if len(set(intersection_names)) != len(intersection_names):
-            raise ValueError("IntersectionSpec names must be unique.")
-        known = set(component_names)
-        for spec in intersection_specs:
-            referenced = {spec.driving_component, spec.query_component}
-            if not referenced.issubset(known):
-                missing = ", ".join(sorted(referenced.difference(known)))
-                raise ValueError(
-                    f"IntersectionSpec {spec.name!r} references unknown "
-                    f"components: {missing}."
-                )
-        object.__setattr__(self, "design_variables", design_variables)
-        object.__setattr__(self, "component_specs", component_specs)
-        object.__setattr__(self, "intersection_specs", intersection_specs)
-
 
 @dataclass
 class MeshMotionResult:
@@ -649,8 +584,8 @@ class MeshMotionResult:
         Loaded surface-mesh object.
     """
 
-    model_files: ModelFiles
-    geometry_parameterization: GeometryParameterization
+    input_files: InputFiles
+    geometry: Any
     initial_surface_coordinates: np.ndarray
     preprojected_surface_coordinates: csdl.Variable
     surface_coordinates: csdl.Variable
@@ -661,22 +596,54 @@ class MeshMotionResult:
     volume_quality_summary: dict | None
     volume_mesh: Any | None
     surface_mesh: Any
+    recorder: Any = None
+    elapsed_seconds: float = 0.0
+    surface_fold_count: int = 0
+    surface_cell_count: int = 0
+    surface_ngon_mode_count: int = 0
+    baseline_inversion_report: Any = None
+
+    def print_summary(self) -> None:
+        """Print a concise forward-diagnostic summary of this solve.
+
+        Reports mesh size, load stepping, fold and inversion counts, elapsed
+        wall-clock time, and the aggregate surface-quality metrics that the
+        pipeline already computed. Nothing is recomputed here.
+        """
+        vertices = int(self.initial_surface_coordinates.shape[0])
+        print("mesh motion summary")
+        print(f"  surface vertices    : {vertices}")
+        print(f"  surface cells       : {self.surface_cell_count}")
+        print(f"  n-gon modes         : {self.surface_ngon_mode_count}")
+        print(f"  elapsed             : {self.elapsed_seconds:.1f} s")
+        print(f"  folds               : {self.surface_fold_count}")
+        baseline = self.baseline_inversion_report
+        if baseline is not None:
+            print(f"  inverted (baseline) : {baseline.num_inverted}")
+        if self.surface_inversion_report is not None:
+            print(
+                "  inverted (final)    : "
+                f"{self.surface_inversion_report.num_inverted}"
+            )
+        report = self.surface_quality_report
+        if report is not None:
+            print(f"  degenerate elements : {report.degenerate_elements}")
+            print(
+                "  min scaled Jacobian : "
+                f"{report.minimum_scaled_jacobian:.4g}"
+            )
 
 
 __all__ = [
-    "ComponentSpec",
-    "DeclarativeGeometryParameterization",
-    "DistortionRegularizationConfig",
-    "FiniteDifferenceConfig",
-    "GeometryParameterization",
-    "GraphDistanceWeightingConfig",
-    "IntersectionSpec",
+    "DerivativeCheck",
+    "DistanceWeighting",
+    "DistortionPenalty",
+    "InputFiles",
+    "MeshMotion",
     "MeshMotionResult",
-    "MeshQualityOutputConfig",
-    "ModelFiles",
-    "NgonAffineRegularizationConfig",
-    "PipelineConfig",
-    "SurfaceMotionConfig",
-    "VisualizationConfig",
-    "VolumeMotionConfig",
+    "PolygonRegularization",
+    "QualityChecks",
+    "SurfaceMotion",
+    "Visualization",
+    "VolumeMotion",
 ]

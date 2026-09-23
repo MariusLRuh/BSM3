@@ -42,7 +42,7 @@ import numpy as np
 import csdl_alpha as csdl
 
 if TYPE_CHECKING:
-    from .mesh_motion_config import GeometryParameterization
+    from .geometry_model import GeometryModel
 
 
 @runtime_checkable
@@ -282,7 +282,7 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
         pipeline_config: Any,
         *,
         parameterization_factory: Callable[
-            [Mapping[str, csdl.Variable]], GeometryParameterization
+            [Mapping[str, csdl.Variable]], GeometryModel
         ],
         aerodynamic_volume_method: str = "elasticity",
         build_eagerly: bool = False,
@@ -311,7 +311,7 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
     ) -> "tuple[dict[str, csdl.Variable], csdl.Variable]":
         # Defer the pipeline import until the private model is constructed.
         from bsm3.core.boundary_surface_movement.mesh_motion_pipeline import (
-            build_mesh_motion_model,
+            run_mesh_motion,
         )
 
         design_variables = {
@@ -321,7 +321,7 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
         geometry_parameterization = self._parameterization_factory(
             design_variables
         )
-        result = build_mesh_motion_model(
+        result = run_mesh_motion(
             recorder=recorder,
             model_files=self._model_files,
             geometry_parameterization=geometry_parameterization,
@@ -333,7 +333,7 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
         if method not in result.volume_coordinates:
             raise ValueError(
                 f"Volume method {method!r} is not available; enable it in the "
-                "VolumeMotionConfig used to build this backend."
+                "VolumeMotion used to build this backend."
             )
         self._last_mesh_motion_result = result
         volume_output = result.volume_coordinates[method]

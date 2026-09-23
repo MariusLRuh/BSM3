@@ -9,6 +9,7 @@ environment variables.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import time
 from typing import Any, Callable, Mapping
@@ -18,14 +19,14 @@ import lsdo_function_spaces as lfs
 import numpy as np
 
 import bsm3
+from .geometry_model import GeometryModel
 from .mesh_motion_config import (
-    GeometryParameterization,
-    IntersectionSpec,
+    _IntersectionRecord,
     MeshMotionResult,
-    MeshQualityOutputConfig,
-    ModelFiles,
-    PipelineConfig,
-    VolumeMotionConfig,
+    QualityChecks,
+    InputFiles,
+    MeshMotion,
+    VolumeMotion,
 )
 
 
@@ -103,6 +104,22 @@ def _polygon_normals(vertices, connectivity):
     return normals
 
 
+def _surface_has_ngons(connectivity) -> bool:
+    """Report whether any cell has four or more sides.
+
+    Parameters
+    ----------
+    connectivity
+        Sequence of per-cell vertex-index arrays.
+
+    Returns
+    -------
+    bool
+        ``True`` when at least one cell can carry an affine hourglass mode.
+    """
+    return any(len(cell) >= 4 for cell in connectivity)
+
+
 def _count_polygon_folds(initial_vertices, final_vertices, connectivity):
     """A polygon has folded if its area-weighted normal flipped direction from
     the undeformed to the deformed mesh (dot < 0)."""
@@ -147,15 +164,15 @@ def _run_volume_motion(
     wall_position_history,
     load_fractions,
     *,
-    volume_config: VolumeMotionConfig,
-    quality_config: MeshQualityOutputConfig,
+    volume_config: VolumeMotion,
+    quality_config: QualityChecks,
     output_directory: Path,
     surface_mesh_file: Path,
     surface_distortion_weight: float,
 ):
     """Run and write the requested volume propagators.
 
-    ``VolumeMotionConfig.load_mode`` selects the volume path independently of the number
+    ``VolumeMotion.load_mode`` selects the volume path independently of the number
     of surface load steps:
 
     * ``final`` -- one differentiable reference-stiffness ``evaluate`` solve
@@ -425,7 +442,7 @@ bisection_max_iter = 80
 
 @dataclass(frozen=True)
 class _IntersectionSetup:
-    spec: IntersectionSpec
+    spec: _IntersectionRecord
     parametric_coordinates: np.ndarray
     vertices: np.ndarray
     vertex_ids: np.ndarray
@@ -475,34 +492,36 @@ class _SurfaceResult:
 class _SurfaceDiagnostics:
     inversion_report: Any
     quality_report: Any
+    fold_count: int = 0
+    baseline_inversion_report: Any = None
 
 
 def _resolve_model_paths(
-    model_files: ModelFiles,
-    config: PipelineConfig,
+    input_files: InputFiles,
+    config: MeshMotion,
 ) -> dict[str, Any]:
     """Resolve and validate all paths before expensive geometry setup."""
 
-    geometry_file = model_files.geometry_step_file.resolve()
-    mesh_file = model_files.surface_mesh_file.resolve()
+    geometry_file = input_files.geometry_file.resolve()
+    mesh_file = input_files.surface_mesh_file.resolve()
     volume_mesh_file = (
-        model_files.volume_mesh_file.resolve()
-        if model_files.volume_mesh_file is not None
+        input_files.volume_mesh_file.resolve()
+        if input_files.volume_mesh_file is not None
         else None
     )
     volume_wall_map_file = (
-        model_files.volume_wall_map_file.resolve()
-        if model_files.volume_wall_map_file is not None
+        input_files.volume_wall_map_file.resolve()
+        if input_files.volume_wall_map_file is not None
         else None
     )
-    setup_cache_directory = (
-        model_files.setup_cache_directory.resolve()
-        if model_files.setup_cache_directory is not None
+    cache_directory = (
+        input_files.cache_directory.resolve()
+        if input_files.cache_directory is not None
         else geometry_file.parent
     )
     volume_output_directory = (
-        Path(config.volume_motion.output_directory).expanduser().resolve()
-        if config.volume_motion.output_directory is not None
+        Path(config.volume.output_directory).expanduser().resolve()
+        if config.volume.output_directory is not None
         else (
             volume_mesh_file.parent
             if volume_mesh_file is not None
@@ -513,7 +532,7 @@ def _resolve_model_paths(
     if not geometry_file.is_file():
         raise FileNotFoundError(f"STEP geometry not found: {geometry_file}")
     surface_exists = mesh_file.is_file()
-    if config.volume_motion.methods:
+    if config.volume.methods:
         if volume_mesh_file is None or volume_wall_map_file is None:
             raise ValueError(
                 "Volume motion requires volume_mesh_file and "
@@ -531,8 +550,8 @@ def _resolve_model_paths(
         raise FileNotFoundError(
             f"Surface mesh not found for surface-only motion: {mesh_file}"
         )
-    setup_cache_directory.mkdir(parents=True, exist_ok=True)
-    if config.volume_motion.methods:
+    cache_directory.mkdir(parents=True, exist_ok=True)
+    if config.volume.methods:
         volume_output_directory.mkdir(parents=True, exist_ok=True)
     print(
         "[inputs] "
@@ -545,24 +564,36 @@ def _resolve_model_paths(
         "mesh_file": mesh_file,
         "volume_mesh_file": volume_mesh_file,
         "volume_wall_map_file": volume_wall_map_file,
-        "setup_cache_directory": setup_cache_directory,
+        "cache_directory": cache_directory,
         "volume_output_directory": volume_output_directory,
         "surface_exists": surface_exists,
     }
 
 
 def _setup_geometry_and_mesh(
-    model_files: ModelFiles,
-    parameterization: GeometryParameterization,
-    config: PipelineConfig,
+    input_files: InputFiles,
+    geometry: GeometryModel,
+    config: MeshMotion,
 ) -> _GeometrySetup:
     """Import geometry/meshes and cache baseline ownership and intersections."""
 
     started_at = time.perf_counter()
-    paths = _resolve_model_paths(model_files, config)
-    component_specs = tuple(parameterization.component_specs)
-    intersection_specs = tuple(parameterization.intersection_specs)
-    geometry = lfs.import_file_patched(paths["geometry_file"], parallelize=False)
+    paths = _resolve_model_paths(input_files, config)
+    component_specs = tuple(geometry.component_records)
+    intersection_specs = tuple(geometry.intersection_records)
+    # ``lsdo_function_spaces`` writes its STEP-import cache relative to the
+    # process working directory. Contain that third-party side effect next to
+    # the configured cache directory so a run never dirties the checkout.
+    _cache_root = paths.get("cache_directory") or paths["geometry_file"].parent
+    _previous_directory = Path.cwd()
+    try:
+        Path(_cache_root).mkdir(parents=True, exist_ok=True)
+        os.chdir(_cache_root)
+        geometry = lfs.import_file_patched(
+            paths["geometry_file"], parallelize=False
+        )
+    finally:
+        os.chdir(_previous_directory)
     imported_components = bsm3.preprocessing.create_components(
         search_names=[spec.search_name for spec in component_specs],
         geometry=geometry,
@@ -601,7 +632,7 @@ def _setup_geometry_and_mesh(
         f"{len(polygon_connectivity)} polygons (no triangulation) "
         f"[{block_summary}]"
     )
-    if config.volume_motion.methods:
+    if config.volume.methods:
         if volume_mesh is None:
             volume_mesh = bsm3.core.boundary_surface_movement.read_gmsh22_volume(
                 paths["volume_mesh_file"]
@@ -655,7 +686,7 @@ def _setup_geometry_and_mesh(
         "warm_start_nu": config.setup_projection_resolution,
         "warm_start_nv": config.setup_projection_resolution,
     }
-    cache_path = paths["setup_cache_directory"] / (
+    cache_path = paths["cache_directory"] / (
         f"_setup_cache_{paths['mesh_file'].stem}_{paths['geometry_file'].stem}"
         f"_nu{config.setup_projection_resolution}_sym{int(config.symmetry)}.npz"
     )
@@ -798,14 +829,14 @@ def _setup_geometry_and_mesh(
 
 def _parameterize_geometry(
     setup: _GeometrySetup,
-    parameterization: GeometryParameterization,
-    config: PipelineConfig,
+    geometry: GeometryModel,
+    config: MeshMotion,
 ) -> _DeformationSetup:
     """Evaluate driver-supplied component deformations at every load step."""
 
     load_fractions = tuple(
         bsm3.core.boundary_surface_movement.linear_load_fractions(
-            config.surface_motion.load_steps
+            config.surface.load_steps
         )
     )
     intersection_vertices = {
@@ -814,7 +845,7 @@ def _parameterize_geometry(
     steps: list[dict[int, Any]] = []
     for load_fraction in load_fractions:
         step: dict[int, Any] = {}
-        for spec in parameterization.component_specs:
+        for spec in geometry.component_records:
             component = setup.components[spec.name]
             step[id(component)] = spec.coefficient_builder(
                 component,
@@ -835,8 +866,8 @@ def _concatenate_ids(blocks) -> np.ndarray:
 def _build_intersections_and_graph(
     setup: _GeometrySetup,
     deformation: _DeformationSetup,
-    parameterization: GeometryParameterization,
-    config: PipelineConfig,
+    geometry: GeometryModel,
+    config: MeshMotion,
 ) -> _SurfaceSystem:
     """Build exact intersection constraints and the graph-Laplacian system."""
 
@@ -865,7 +896,7 @@ def _build_intersections_and_graph(
     )
     free_regions = [
         spec.free_region_factory(setup.components[spec.name])
-        for spec in parameterization.component_specs
+        for spec in geometry.component_records
     ]
     free_ids = bsm3.core.boundary_surface_movement.select_free_vertices(
         free_regions=free_regions,
@@ -878,7 +909,7 @@ def _build_intersections_and_graph(
     )
     projection_ids: dict[str, np.ndarray] = {}
     claimed = np.empty(0, dtype=np.int64)
-    for spec in parameterization.component_specs:
+    for spec in geometry.component_records:
         component_free_ids = np.intersect1d(
             free_ids, setup.component_ids[spec.name]
         )
@@ -891,10 +922,10 @@ def _build_intersections_and_graph(
         projection_ids[spec.name] = np.setdiff1d(candidate, claimed)
         claimed = np.union1d(claimed, projection_ids[spec.name])
     deformation_vertex_ids = np.concatenate(
-        [projection_ids[spec.name] for spec in parameterization.component_specs]
+        [projection_ids[spec.name] for spec in geometry.component_records]
     ).astype(np.int64)
 
-    distance = config.surface_motion.graph_distance_weighting
+    distance = config.surface.distance_weighting
     distance_weighting = None
     if distance.enabled:
         seed_names = (
@@ -954,9 +985,9 @@ def _build_intersections_and_graph(
             f"{summary['multiplier_max']:.3g}",
             flush=True,
         )
-    surface = config.surface_motion
+    surface = config.surface
     prescribed_ids = None
-    if surface.distortion.weight > 0.0 or surface.ngon_affine.weight > 0.0:
+    if surface.distortion_penalty.weight > 0.0 or surface.polygon_regularization.weight > 0.0:
         prescribed_ids = bsm3.core.boundary_surface_movement.element_neighbors(
             setup.mesh, free_ids
         )
@@ -971,7 +1002,7 @@ def _build_intersections_and_graph(
         symmetry_plane_ids=setup.symmetry_plane_vertex_ids,
         stiffening_exponent=surface.stiffening_exponent,
         prescribed_ids=prescribed_ids,
-        symmetry_use_element_neighbors=(surface.ngon_affine.weight > 0.0),
+        symmetry_use_element_neighbors=(surface.polygon_regularization.weight > 0.0),
         distance_weighting=distance_weighting,
         quad_diagonal_weight=surface.quad_diagonal_weight,
         quad_bracing_mode=surface.quad_bracing_mode,
@@ -1041,13 +1072,13 @@ def _reproject_and_reevaluate(
     setup: _GeometrySetup,
     deformation: _DeformationSetup,
     system: _SurfaceSystem,
-    parameterization: GeometryParameterization,
-    config: PipelineConfig,
+    geometry: GeometryModel,
+    config: MeshMotion,
 ) -> _SurfaceResult:
     """Solve load steps, reproject selected nodes, and reevaluate the rest."""
 
     projection_metadata = []
-    for spec in parameterization.component_specs:
+    for spec in geometry.component_records:
         component = setup.components[spec.name]
         vertex_ids = system.projection_ids[spec.name]
         if spec.projection_mode == "lifting_surface":
@@ -1083,13 +1114,13 @@ def _reproject_and_reevaluate(
         parametric_coords=setup.initial_parametric_coordinates,
         components=[
             setup.components[spec.name]
-            for spec in parameterization.component_specs
+            for spec in geometry.component_records
         ],
-        names=[spec.projection_name for spec in parameterization.component_specs],
+        names=[spec.projection_name for spec in geometry.component_records],
     )
-    surface = config.surface_motion
-    distortion = surface.distortion
-    ngon_affine = surface.ngon_affine
+    surface = config.surface
+    distortion = surface.distortion_penalty
+    polygon_regularization = surface.polygon_regularization
     projection_options = {
         "warm_start_nu": config.projection_warm_start_resolution,
         "warm_start_nv": config.projection_warm_start_resolution,
@@ -1124,11 +1155,15 @@ def _reproject_and_reevaluate(
                 ),
             )
         ),
+        # Positive polygon regularization is applicable-if-present: a
+        # triangle-only surface has no hourglass modes, so the affine model is
+        # skipped rather than assembled on a structurally zero matrix.
         ngon_affine_config=(
             None
-            if ngon_affine.weight == 0.0
+            if polygon_regularization.weight == 0.0
+            or not _surface_has_ngons(setup.polygon_connectivity)
             else bsm3.core.boundary_surface_movement.NgonAffineConfig(
-                lambda_ngon=ngon_affine.weight,
+                lambda_ngon=polygon_regularization.weight,
             )
         ),
         symmetry_plane_vertex_ids=setup.symmetry_plane_vertex_ids,
@@ -1168,13 +1203,13 @@ def _run_volume_handoff(
     setup: _GeometrySetup,
     deformation: _DeformationSetup,
     surface_result: _SurfaceResult,
-    config: PipelineConfig,
+    config: MeshMotion,
 ) -> tuple[dict[str, csdl.Variable], dict | None]:
     """Extend the surface displacement into the optional volume mesh."""
 
     if setup.volume_mesh is None:
         return {}, None
-    if config.surface_motion.load_steps == 1:
+    if config.surface.load_steps == 1:
         wall_history = (surface_result.final_mesh_vertices,)
     else:
         wall_history = surface_result.load_step_result.projected_mesh_history
@@ -1190,11 +1225,11 @@ def _run_volume_handoff(
         surface_result.final_mesh_vertices,
         wall_history,
         deformation.load_fractions,
-        volume_config=config.volume_motion,
+        volume_config=config.volume,
         quality_config=config.quality,
         output_directory=setup.volume_output_directory,
         surface_mesh_file=setup.mesh_file,
-        surface_distortion_weight=config.surface_motion.distortion.weight,
+        surface_distortion_weight=config.surface.distortion_penalty.weight,
     )
 
 
@@ -1254,7 +1289,7 @@ def _evaluate_surface_diagnostics(
     setup: _GeometrySetup,
     system: _SurfaceSystem,
     surface_result: _SurfaceResult,
-    config: PipelineConfig,
+    config: MeshMotion,
 ) -> _SurfaceDiagnostics:
     """Evaluate and report surface quality without changing pipeline values."""
 
@@ -1303,17 +1338,17 @@ def _evaluate_surface_diagnostics(
             np.min(np.linalg.norm(seam_vertices - centroid, axis=1))
         ) < 1.0:
             near_seam += 1
-    surface = config.surface_motion
+    surface = config.surface
     load_result = surface_result.load_step_result
     print(
         f"[diagnostics] elasticity=graph chi={surface.stiffening_exponent} "
         f"quad_bracing_mode={surface.quad_bracing_mode} "
         f"quad_diagonal_weight={surface.quad_diagonal_weight:g} "
         f"surface_load_steps={surface.load_steps} "
-        f"volume_load_mode={config.volume_motion.load_mode} "
-        f"distortion_lambda={surface.distortion.weight:g} "
-        f"distortion_mode={surface.distortion.mode} "
-        f"ngon_affine_lambda={surface.ngon_affine.weight:g}"
+        f"volume_load_mode={config.volume.load_mode} "
+        f"distortion_lambda={surface.distortion_penalty.weight:g} "
+        f"distortion_mode={surface.distortion_penalty.mode} "
+        f"ngon_affine_lambda={surface.polygon_regularization.weight:g}"
     )
     if load_result.distortion_normalization_scale is not None:
         print(
@@ -1325,7 +1360,7 @@ def _evaluate_surface_diagnostics(
         )
     if load_result.ngon_affine_normalization_scale is not None:
         print(
-            "[diagnostics] ngon_affine "
+            "[diagnostics] polygon_regularization "
             f"normalization={load_result.ngon_affine_normalization_scale:.6g} "
             f"elements={load_result.ngon_affine_num_elements} "
             f"modes={load_result.ngon_affine_num_modes} "
@@ -1388,15 +1423,22 @@ def _evaluate_surface_diagnostics(
         f"[cfd] polygon folds (normal-flip): {cfd_folds} of "
         f"{len(setup.polygon_connectivity)} polygons"
     )
-    return _SurfaceDiagnostics(inversion, quality)
+    fold_count, _ = _count_polygon_folds(
+        np.asarray(setup.full_mesh.vertices, dtype=float),
+        final_np,
+        setup.polygon_connectivity,
+    )
+    return _SurfaceDiagnostics(
+        inversion, quality, int(fold_count), pre_inversion
+    )
 
 
-def build_mesh_motion_model(
+def run_mesh_motion(
     *,
     recorder: csdl.Recorder,
-    model_files: ModelFiles,
-    geometry_parameterization: GeometryParameterization,
-    config: PipelineConfig,
+    input_files: InputFiles,
+    geometry: GeometryModel,
+    config: MeshMotion,
     aerodynamic_analysis: Callable[
         [csdl.Variable], Mapping[str, csdl.Variable]
     ]
@@ -1409,9 +1451,9 @@ def build_mesh_motion_model(
     ----------
     recorder
         Active recorder that owns the supplied design variables.
-    model_files
+    input_files
         Geometry, surface-mesh, and optional volume-mesh inputs.
-    geometry_parameterization
+    geometry
         User-supplied component/intersection declarations and differentiable
         coefficient builders.
     config
@@ -1427,19 +1469,21 @@ def build_mesh_motion_model(
     MeshMotionResult
         Differentiable mesh outputs and forward quality diagnostics.
     """
+    _started_at = time.perf_counter()
+    geometry.validate()
 
     _ = recorder
     setup = _setup_geometry_and_mesh(
-        model_files, geometry_parameterization, config
+        input_files, geometry, config
     )
     deformation = _parameterize_geometry(
-        setup, geometry_parameterization, config
+        setup, geometry, config
     )
     system = _build_intersections_and_graph(
-        setup, deformation, geometry_parameterization, config
+        setup, deformation, geometry, config
     )
     surface_result = _reproject_and_reevaluate(
-        setup, deformation, system, geometry_parameterization, config
+        setup, deformation, system, geometry, config
     )
     volume_outputs, volume_summary = _run_volume_handoff(
         setup, deformation, surface_result, config
@@ -1447,13 +1491,17 @@ def build_mesh_motion_model(
     diagnostics = _evaluate_surface_diagnostics(
         setup, system, surface_result, config
     )
+    _ngon_mode_count = (
+        getattr(surface_result.load_step_result, "ngon_affine_num_modes", 0)
+        or 0
+    )
     aerodynamic_outputs: dict[str, csdl.Variable] = {}
     if aerodynamic_analysis is not None:
         if aerodynamic_volume_method not in volume_outputs:
             raise ValueError(
                 "The requested aerodynamic volume method "
                 f"{aerodynamic_volume_method!r} is unavailable. Enable that "
-                "method in VolumeMotionConfig before adding CFD."
+                "method in VolumeMotion before adding CFD."
             )
         aerodynamic_outputs = dict(
             aerodynamic_analysis(volume_outputs[aerodynamic_volume_method])
@@ -1474,8 +1522,8 @@ def build_mesh_motion_model(
             inverted_elements=diagnostics.inversion_report,
         )
     return MeshMotionResult(
-        model_files=model_files,
-        geometry_parameterization=geometry_parameterization,
+        input_files=input_files,
+        geometry=geometry,
         initial_surface_coordinates=setup.initial_full_vertices,
         preprojected_surface_coordinates=(
             surface_result.preprojected_mesh_vertices
@@ -1488,6 +1536,12 @@ def build_mesh_motion_model(
         volume_quality_summary=volume_summary,
         volume_mesh=setup.volume_mesh,
         surface_mesh=setup.full_mesh,
+        recorder=recorder,
+        elapsed_seconds=time.perf_counter() - _started_at,
+        surface_fold_count=diagnostics.fold_count,
+        surface_cell_count=len(setup.polygon_connectivity),
+        surface_ngon_mode_count=int(_ngon_mode_count),
+        baseline_inversion_report=diagnostics.baseline_inversion_report,
     )
 
 
@@ -1598,7 +1652,7 @@ def run_fd_sweep(
 
 
 __all__ = [
-    "build_mesh_motion_model",
+    "run_mesh_motion",
     "run_fd_sweep",
     "select_fd_objective",
 ]
