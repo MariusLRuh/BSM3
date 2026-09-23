@@ -493,7 +493,8 @@ class _SurfaceDiagnostics:
     inversion_report: Any
     quality_report: Any
     fold_count: int = 0
-    baseline_inversion_report: Any = None
+    initial_inversion_report: Any = None
+    preprojection_inversion_report: Any = None
 
 
 def _resolve_model_paths(
@@ -1295,6 +1296,17 @@ def _evaluate_surface_diagnostics(
 
     preprojected = surface_result.preprojected_mesh_vertices
     final = surface_result.final_mesh_vertices
+    # Three states, one metric: the untouched input mesh, the deformed surface
+    # before reprojection, and the final reprojected surface. Comparing any two
+    # of these is only meaningful because they use the same check.
+    initial_inversion = (
+        bsm3.core.boundary_surface_movement.check_element_inversion(
+            mesh=setup.full_mesh,
+            final_mesh_vertices=np.asarray(
+                setup.initial_full_vertices, dtype=float
+            ),
+        )
+    )
     pre_inversion = bsm3.core.boundary_surface_movement.check_element_inversion(
         mesh=setup.full_mesh, final_mesh_vertices=preprojected
     )
@@ -1423,13 +1435,8 @@ def _evaluate_surface_diagnostics(
         f"[cfd] polygon folds (normal-flip): {cfd_folds} of "
         f"{len(setup.polygon_connectivity)} polygons"
     )
-    fold_count, _ = _count_polygon_folds(
-        np.asarray(setup.full_mesh.vertices, dtype=float),
-        final_np,
-        setup.polygon_connectivity,
-    )
     return _SurfaceDiagnostics(
-        inversion, quality, int(fold_count), pre_inversion
+        inversion, quality, int(cfd_folds), initial_inversion, pre_inversion
     )
 
 
@@ -1541,7 +1548,10 @@ def run_mesh_motion(
         surface_fold_count=diagnostics.fold_count,
         surface_cell_count=len(setup.polygon_connectivity),
         surface_ngon_mode_count=int(_ngon_mode_count),
-        baseline_inversion_report=diagnostics.baseline_inversion_report,
+        initial_inversion_report=diagnostics.initial_inversion_report,
+        preprojection_inversion_report=(
+            diagnostics.preprojection_inversion_report
+        ),
     )
 
 

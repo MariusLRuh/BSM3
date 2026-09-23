@@ -33,7 +33,12 @@ import numpy as np
 from bsm3.component_parameters import FuselageParameters, WingParameters
 
 from .free_region import AxisRange, ComponentFreeRegion
-from .geometry import deform_geometry
+from .geometry import (
+    component_patch_ids,
+    deform_geometry,
+    stack_component_coefficients,
+    stack_component_coefficients_numpy,
+)
 from .mesh_motion_config import _ComponentRecord, _IntersectionRecord
 
 __all__ = ["GeometryModel"]
@@ -107,6 +112,136 @@ def _bounding_box_pivot(component) -> np.ndarray:
     return pivot.reshape((1, 3))
 
 
+def _free_region(component, region: Mapping[str, Any] | None):
+    """Build a component free region from a high-level axis mapping.
+
+    Parameters
+    ----------
+    component
+        Imported geometry component.
+    region
+        ``None`` leaves the whole component free. Otherwise a mapping whose
+        keys are ``"x"``, ``"y"``, or ``"z"`` and whose values are
+        ``(lower, upper, mode)`` tuples. Bounds may be ``None``.
+
+    Returns
+    -------
+    ComponentFreeRegion
+        Region restricted to the requested axis ranges.
+
+    Raises
+    ------
+    ValueError
+        If an axis key or a range tuple is malformed.
+    """
+    if not region:
+        return ComponentFreeRegion(component=component)
+    axes: dict[str, AxisRange] = {}
+    for axis, bounds in dict(region).items():
+        if axis not in ("x", "y", "z"):
+            raise ValueError(
+                f"Free-region axis must be x, y, or z; got {axis!r}."
+            )
+        try:
+            lower, upper, mode = bounds
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"Free-region entry {axis!r} must be a "
+                "(lower, upper, mode) tuple."
+            ) from error
+        axes[axis] = AxisRange(lower=lower, upper=upper, mode=mode)
+    return ComponentFreeRegion(component=component, **axes)
+
+
+def _resolve_external_coefficients(component, value, name: str):
+    """Validate external coefficients against the imported component patches.
+
+    Parameters
+    ----------
+    component
+        Imported geometry component, whose patch IDs and block shapes are
+        canonical.
+    value
+        Either one stacked ``(N, 3)`` CSDL variable or array in sorted
+        patch-ID order, or a mapping from patch ID to coefficient block.
+    name
+        Component name, used in error messages.
+
+    Returns
+    -------
+    Any
+        A stacked ``(N, 3)`` value in the pipeline's convention. CSDL
+        expressions are preserved, never converted to NumPy.
+
+    Raises
+    ------
+    ValueError
+        If patch IDs are missing or unexpected, a block shape disagrees with
+        the imported patch, the stacked row count is wrong, or the trailing
+        dimension is not 3.
+    """
+    patch_ids = list(component_patch_ids(component))
+    expected_blocks = {
+        patch_id: np.asarray(
+            component.functions[patch_id].coefficients.value, dtype=float
+        ).reshape((-1, 3)).shape[0]
+        for patch_id in patch_ids
+    }
+    total_rows = sum(expected_blocks.values())
+
+    if isinstance(value, Mapping):
+        supplied = set(value)
+        expected = set(patch_ids)
+        missing = expected - supplied
+        extra = supplied - expected
+        if missing or extra:
+            raise ValueError(
+                f"Component {name!r} external coefficients have wrong patch "
+                f"IDs; missing={sorted(missing)} unexpected={sorted(extra)}."
+            )
+        blocks = []
+        for patch_id in patch_ids:
+            block = value[patch_id]
+            shape = tuple(getattr(block, "shape", ()))
+            if len(shape) < 2 or shape[-1] != 3:
+                raise ValueError(
+                    f"Component {name!r} patch {patch_id} coefficients must "
+                    f"have a trailing dimension of 3; got shape {shape}."
+                )
+            rows = int(np.prod(shape[:-1]))
+            if rows != expected_blocks[patch_id]:
+                raise ValueError(
+                    f"Component {name!r} patch {patch_id} expects "
+                    f"{expected_blocks[patch_id]} coefficient rows; got "
+                    f"{rows}."
+                )
+            blocks.append(
+                csdl.reshape(block, (rows, 3))
+                if isinstance(block, csdl.Variable)
+                else np.asarray(block, dtype=float).reshape((rows, 3))
+            )
+        if any(isinstance(block, csdl.Variable) for block in blocks):
+            return (
+                blocks[0]
+                if len(blocks) == 1
+                else csdl.concatenate(tuple(blocks), axis=0)
+            )
+        return np.vstack(blocks)
+
+    shape = tuple(getattr(value, "shape", ()))
+    if len(shape) != 2 or shape[1] != 3:
+        raise ValueError(
+            f"Component {name!r} stacked coefficients must have shape "
+            f"(N, 3); got {shape}."
+        )
+    if shape[0] != total_rows:
+        raise ValueError(
+            f"Component {name!r} stacked coefficients must have "
+            f"{total_rows} rows in sorted patch-ID order; got {shape[0]}."
+        )
+    return value
+
+
 class GeometryModel:
     """Declare design variables and the components they move.
 
@@ -123,33 +258,15 @@ class GeometryModel:
     def __init__(self) -> None:
         """Create an empty geometry model.
 
-        Design variables are CSDL variables, so a recorder must be active
-        before any are registered. If none is, an inline recorder is started
-        here and handed to :func:`bsm3.mesh_motion.run`, which stops it. A
-        caller that manages its own recorder keeps full control.
+        Constructing a model never touches global CSDL state. The caller owns
+        the recorder and must have started it before registering any design
+        variable through :meth:`design_variable`.
         """
-        try:
-            self._recorder = csdl.get_current_recorder()
-            self._owns_recorder = False
-        except Exception:
-            self._recorder = csdl.Recorder(inline=True)
-            self._recorder.start()
-            self._owns_recorder = True
         self._design_variables: dict[str, csdl.Variable] = {}
         self._components: list[_ComponentRecord] = []
         self._intersections: list[_IntersectionRecord] = []
         self._names: set[str] = set()
         self._pivot_refs: dict[str, str] = {}
-
-    @property
-    def recorder(self) -> Any:
-        """CSDL recorder active when this model registered its variables."""
-        return self._recorder
-
-    @property
-    def owns_recorder(self) -> bool:
-        """Whether this model started the recorder and expects it stopped."""
-        return self._owns_recorder
 
     @property
     def design_variables(self) -> Mapping[str, csdl.Variable]:
@@ -197,11 +314,22 @@ class GeometryModel:
         ------
         ValueError
             If the name is invalid or already registered.
+        RuntimeError
+            If no CSDL recorder is active.
         """
         if not name or not name.isidentifier():
             raise ValueError("A design-variable name must be an identifier.")
         if name in self._design_variables:
             raise ValueError(f"Design variable {name!r} is already defined.")
+        try:
+            csdl.get_current_recorder()
+        except Exception as error:
+            raise RuntimeError(
+                "A CSDL recorder must be active before registering a design "
+                "variable. Start one with csdl.Recorder(inline=True).start() "
+                "and stop it yourself; GeometryModel never owns recorder "
+                "state."
+            ) from error
         variable = csdl.Variable(name=name, value=float(value))
         if lower is not None or upper is not None or scaler is not None:
             variable.set_as_design_variable(
@@ -209,6 +337,75 @@ class GeometryModel:
             )
         self._design_variables[name] = variable
         return variable
+
+    def add_component(
+        self,
+        *,
+        name: str,
+        search_name: str,
+        deformed_coefficients: Any,
+        free_region: Mapping[str, Any] | None = None,
+        projection_name: str | None = None,
+        projection_mode: str = "all",
+    ) -> None:
+        """Add a component driven by externally produced coefficients.
+
+        This is the general entry point. The caller supplies the deformed
+        coefficients from any differentiable parameterization;
+        :meth:`add_lifting_surface` and :meth:`add_body` are conveniences
+        layered on the same mechanism.
+
+        Parameters
+        ----------
+        name
+            Unique component identifier.
+        search_name
+            Name passed to the STEP importer's component search.
+        deformed_coefficients
+            Target coefficients at full load, either one stacked ``(N, 3)``
+            CSDL variable or array in sorted patch-ID order, or a mapping from
+            patch ID to coefficient block. CSDL expressions are preserved, so
+            derivatives through the final reprojected mesh stay analytic.
+        free_region
+            ``None`` leaves the whole component free. Otherwise a mapping of
+            ``"x"``/``"y"``/``"z"`` to ``(lower, upper, mode)``.
+        projection_name
+            Diagnostic projection name; defaults to ``name``.
+        projection_mode
+            ``"all"`` or ``"lifting_surface"``.
+
+        Raises
+        ------
+        ValueError
+            If the name collides. Coefficient shapes and patch IDs are
+            validated later, once the STEP component is imported and the
+            canonical patch IDs are known.
+        """
+        self._check_name(name)
+
+        def build(component, fraction, intersections):
+            del intersections
+            target = _resolve_external_coefficients(
+                component, deformed_coefficients, name
+            )
+            baseline = stack_component_coefficients_numpy(component)
+            if fraction == 1.0:
+                # Hand the exact external target to the solve chain.
+                return target
+            return baseline + fraction * (target - baseline)
+
+        self._components.append(
+            _ComponentRecord(
+                name=name,
+                search_name=search_name,
+                coefficient_builder=build,
+                free_region_factory=(
+                    lambda component: _free_region(component, free_region)
+                ),
+                projection_name=projection_name,
+                projection_mode=projection_mode,
+            )
+        )
 
     def add_lifting_surface(
         self,
@@ -305,9 +502,10 @@ class GeometryModel:
                 name=name,
                 search_name=search_name,
                 coefficient_builder=build,
-                free_region_factory=lambda component: ComponentFreeRegion(
-                    component=component,
-                    y=AxisRange(upper=root_half_width, mode="abs"),
+                free_region_factory=(
+                    lambda component: _free_region(
+                        component, {"y": (None, root_half_width, "abs")}
+                    )
                 ),
                 projection_name=projection_name,
                 projection_mode="lifting_surface",
@@ -366,9 +564,10 @@ class GeometryModel:
                 name=name,
                 search_name=search_name,
                 coefficient_builder=build,
-                free_region_factory=lambda component: ComponentFreeRegion(
-                    component=component,
-                    x=AxisRange(lower=lower, upper=upper, mode="extent"),
+                free_region_factory=(
+                    lambda component: _free_region(
+                        component, {"x": (lower, upper, "extent")}
+                    )
                 ),
                 projection_name=projection_name,
                 projection_mode="all",
@@ -431,11 +630,11 @@ class GeometryModel:
         Raises
         ------
         ValueError
-            If no design variable or no component has been registered, or if a
-            lifting surface references an undefined intersection.
+            If no component has been registered, or if a lifting surface
+            references an undefined intersection. Design variables may be
+            created and owned entirely by another package, so none is
+            required here.
         """
-        if not self._design_variables:
-            raise ValueError("At least one design variable is required.")
         if not self._components:
             raise ValueError("At least one component is required.")
         defined = {record.name for record in self._intersections}

@@ -572,8 +572,13 @@ class MeshMotionResult:
         Deformed volume coordinates keyed by motion method.
     aerodynamic_outputs
         Optional downstream aerodynamic results.
+    initial_inversion_report
+        Surface-orientation diagnostics of the untouched input mesh.
+    preprojection_inversion_report
+        Diagnostics of the deformed surface before OML reprojection.
     surface_inversion_report
-        Surface-orientation diagnostics.
+        Diagnostics of the final reprojected surface. All three use the same
+        metric, so any two may be compared directly.
     surface_quality_report
         Aggregate surface-quality diagnostics.
     volume_quality_summary
@@ -601,7 +606,8 @@ class MeshMotionResult:
     surface_fold_count: int = 0
     surface_cell_count: int = 0
     surface_ngon_mode_count: int = 0
-    baseline_inversion_report: Any = None
+    initial_inversion_report: Any = None
+    preprojection_inversion_report: Any = None
 
     def print_summary(self) -> None:
         """Print a concise forward-diagnostic summary of this solve.
@@ -617,14 +623,15 @@ class MeshMotionResult:
         print(f"  n-gon modes         : {self.surface_ngon_mode_count}")
         print(f"  elapsed             : {self.elapsed_seconds:.1f} s")
         print(f"  folds               : {self.surface_fold_count}")
-        baseline = self.baseline_inversion_report
-        if baseline is not None:
-            print(f"  inverted (baseline) : {baseline.num_inverted}")
-        if self.surface_inversion_report is not None:
-            print(
-                "  inverted (final)    : "
-                f"{self.surface_inversion_report.num_inverted}"
-            )
+        for label, report in (
+            ("input", self.initial_inversion_report),
+            ("preprojection", self.preprojection_inversion_report),
+            ("final", self.surface_inversion_report),
+        ):
+            if report is not None:
+                print(
+                    f"  inverted ({label:<13}): {report.num_inverted}"
+                )
         report = self.surface_quality_report
         if report is not None:
             print(f"  degenerate elements : {report.degenerate_elements}")

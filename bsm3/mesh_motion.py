@@ -58,7 +58,7 @@ def run(
     inputs: InputFiles,
     geometry: GeometryModel,
     motion: MeshMotion,
-    recorder: csdl.Recorder | None = None,
+    recorder: csdl.Recorder,
     aerodynamic_analysis: Any = None,
     aerodynamic_volume_method: str = "elasticity",
 ) -> MeshMotionResult:
@@ -73,10 +73,9 @@ def run(
     motion
         Surface, volume, quality, visualization, and derivative-check settings.
     recorder
-        Optional CSDL recorder. When ``None`` an inline recorder is created,
-        started, and stopped here, and retained on the result. When supplied,
-        its lifecycle belongs to the caller and is not touched, so this call
-        composes inside a larger graph such as the DAFoam driver.
+        Active CSDL recorder, owned by the caller. This call never starts or
+        stops it, so mesh motion composes inside a larger graph such as the
+        DAFoam driver. It is retained on the result for convenience.
     aerodynamic_analysis
         Optional downstream builder receiving the selected volume coordinates.
     aerodynamic_volume_method
@@ -88,26 +87,13 @@ def run(
         Differentiable outputs plus forward diagnostics. Call
         :meth:`MeshMotionResult.print_summary` for a readable report.
     """
-    if recorder is not None:
-        active, owned = recorder, False
-    elif getattr(geometry, "owns_recorder", False):
-        # GeometryModel started an inline recorder so design variables could
-        # be created before this call; stopping it is this call's job.
-        active, owned = geometry.recorder, True
-    else:
-        active, owned = csdl.Recorder(inline=True), True
-        active.start()
-    try:
-        result = run_mesh_motion(
-            recorder=active,
-            input_files=inputs,
-            geometry=geometry,
-            config=motion,
-            aerodynamic_analysis=aerodynamic_analysis,
-            aerodynamic_volume_method=aerodynamic_volume_method,
-        )
-    finally:
-        if owned:
-            active.stop()
-    result.recorder = active
+    result = run_mesh_motion(
+        recorder=recorder,
+        input_files=inputs,
+        geometry=geometry,
+        config=motion,
+        aerodynamic_analysis=aerodynamic_analysis,
+        aerodynamic_volume_method=aerodynamic_volume_method,
+    )
+    result.recorder = recorder
     return result
