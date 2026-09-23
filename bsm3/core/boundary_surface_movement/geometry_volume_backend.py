@@ -28,13 +28,21 @@ reverse pass, and the geometry parameterization.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping, Protocol, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Mapping,
+    Protocol,
+    runtime_checkable,
+)
 
 import numpy as np
 
 import csdl_alpha as csdl
 
-from .mesh_motion_config import GeometryParameterization
+if TYPE_CHECKING:
+    from .mesh_motion_config import GeometryParameterization
 
 
 @runtime_checkable
@@ -301,7 +309,7 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
     def _build_model(
         self, recorder: csdl.Recorder
     ) -> "tuple[dict[str, csdl.Variable], csdl.Variable]":
-        # Imported here so the module imports without the mesh-motion stack.
+        # Defer the pipeline import until the private model is constructed.
         from bsm3.core.boundary_surface_movement.mesh_motion_pipeline import (
             build_mesh_motion_model,
         )
