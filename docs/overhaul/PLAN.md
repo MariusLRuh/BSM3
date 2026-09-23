@@ -265,7 +265,7 @@ nothing in the end state and removes the risk of silently dropping live code.
 | M1.5 | Decide the `bsm3.meshgen` boundary without adopting untested local scripts. The only credible STEP-to-surface implementation is a circular, untracked 4,758-LOC pair, so implementation is deferred to M3 pending a minimal API, fixture, and end-to-end test. | Codex | **COMPLETE** — disposition: defer adoption to M3 (Turn 24), accepted Turn 25 | Core imports nothing from mesh-generation scripts; the candidate closure and prerequisites for later adoption are recorded in `MANIFEST.md`. |
 | M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | **slice 1 of 3 COMPLETE** (`1c402e9`, accepted Turn 29 — 132/132); slices 2-3 OPEN | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
 | M1.8 | **New (Turn 5).** Retire the internal legacy polygon-pickle branch in the E175 pipeline. Turn 4 made the *public* importer safe by removing `.pkl` from suffix dispatch, but the pipeline retains an internal trusted-pickle path, and `bsm3/core/projections/refitted_fun_set.pkl` is an untracked executable pickle used as a warm-start default. Convert `wall_surface.pkl` to `.npz` per `ASSETS.md` and delete the branch. | Codex | not started | No pickle load remains reachable from any retained root except through an explicitly named trusted API; `wall_surface.pkl` replaced by a non-executable container with identical coordinates and connectivity. |
-| M1.7a | Runnable, documented E175 surface-deformation example using only the generalized API and tracked curated assets, protected by an end-to-end integration smoke test. | Codex | **IMPLEMENTED** — `476b10d` + cache containment `a9c2830`, awaiting Claude review | Clean-clone tri run completes with zero folds/inversions and leaves the checkout clean; quad switch enables the real-mesh n-gon affine path; integration test and documentation checks pass. |
+| M1.7a | Runnable, documented E175 surface-deformation example using only the generalized API and tracked curated assets, protected by an end-to-end integration smoke test. | Claude implements; Codex plans/reviews | **REJECTED BY USER; CORRECTION OPEN** — first attempt `476b10d` + `a9c2830` is numerically sound but too low-level | No CLI or `mesh_kind`; paths and high-level values editable in one uncluttered main script; five executable stages; no example-local dataclass/callback/polygon helpers; compact namespace API; no `Config` suffix in the high-level mesh-motion family; intuitive replacement for `DeclarativeGeometryParameterization`; clean-clone tri and real quad paths retain their numerical gates. |
 | M1.7 | Acceptance run. Must exercise a **STEP-to-VortexAD path** if practical, alongside the surface-motion path — the VortexAD root is the one the Turn-1 trace missed entirely, so it is the least protected by existing tests. **Turn-27 carry-ins:** (a) consider a `TypedDict` for `GraphDistanceWeighting.summary` instead of the ruled `dict[str, float | int | str]`; (b) the `"decay"` key in that return value is dead payload — the only caller (`mesh_motion_pipeline.py:941`) never reads it — so removing it would allow `dict[str, float | int]`. Both are public-return changes, deliberately out of scope for the M1.6 docstring slices. | Codex | not started | Generalized driver reproduces current R4 output within tolerance; derivative gate passes; quad and mixed-N-gon examples clean; a STEP-to-VortexAD path runs end to end or is recorded as impractical with the reason. |
 
 **Turn-28 user steering.** After M1.6 slice 1 is reviewed, prioritize a
@@ -320,7 +320,7 @@ all remain required.
 
 | Order | Task |
 |---|---|
-| next | Claude review of **M1.7a** implementation `476b10d` |
+| next | Claude implements the Codex-planned **M1.7a usability correction** |
 | then | M1.6 slice 2 (projections + preprocessing), slice 3 (drivers, MPI/DAFoam) |
 | then | M1.8 pickle retirement |
 | last | M1.7 full acceptance |
@@ -344,6 +344,33 @@ example cache lives under the operating-system temporary directory, not under
 `bsm3/`. Peak memory was not available because the sandbox denied the macOS
 `sysctl` query. M1.6 slices 2-3, M1.8, and full M1.7 remain in their recorded
 order after Claude reviews this implementation.
+
+### Turn-31 planning: user rejection and role reversal
+
+The user rejected the first M1.7a example on usability grounds while retaining
+its numerical result as a useful baseline. The correction must remove the CLI,
+`mesh_kind`, example-local dataclass, coefficient callbacks, and polygon
+diagnostic implementation; expose paths and high-level design values directly;
+show the five executable stages clearly; simplify the import/configuration
+surface; remove `Config` from the high-level mesh-motion class family; and
+replace `DeclarativeGeometryParameterization` with an intuitive abstraction.
+
+Roles reverse here: **Codex is now planner/reviewer and Claude is implementer.**
+Codex traced the tracked reference closure and specified the corrective API in
+the Turn-32 prompt. The proposed vocabulary is `InputFiles`,
+`DistanceWeighting`, `DistortionPenalty`, `PolygonRegularization`,
+`SurfaceMotion`, `VolumeMotion`, `QualityChecks`, `Visualization`,
+`DerivativeCheck`, `MeshMotion`, and `GeometryModel`. The example consumes
+these through the single namespace `bsm3.mesh_motion`; low-level solver types
+such as `NgonAffineConfig` and `QuadraticDistortionConfig` are not part of this
+high-level rename.
+
+The intended `GeometryModel` owns general `add_lifting_surface`, `add_body`,
+and `connect` helpers. This removes callback and control-point mechanics from
+the example without encoding E175 names in the core. The result owns fold and
+n-gon diagnostics, and STEP-import cache containment moves into the library.
+The remaining order is unchanged: corrected M1.7a, M1.6 slices 2-3, M1.8,
+then full M1.7.
 
 ---
 

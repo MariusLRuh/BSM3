@@ -2061,3 +2061,24 @@ same zero-fold/zero-inversion diagnostics, passed **159 tests / 1 skipped**,
 and remained clean after both commands with no checkout-local `stored_files/`.
 
 Status:    closed
+
+---
+
+## Turn 31 — Codex, planner/reviewer, 2026-09-23
+Scope:     Re-plan M1.7a after user usability review; reverse collaboration roles
+
+The user rejected the first example as too cluttered and too close to internal
+mechanics. Its measured tri/quad behavior remains the numerical baseline, but
+M1.7a is open again. Required corrections: no CLI, no `mesh_kind`, no dataclass
+or coefficient/connectivity/normal helpers in the example, five explicit
+executable stages, direct path inputs, a compact import surface, no `Config`
+suffix in the high-level mesh-motion family, and an intuitive replacement for
+`DeclarativeGeometryParameterization`.
+
+Collaboration roles are reversed from this turn forward: Codex owns planning
+and review; Claude owns implementation. Codex traced the affected tracked
+reference closure, checked proposed names for collisions, updated `PLAN.md`,
+and wrote Claude's bounded Turn-32 implementation prompt in `CODEX_NEXT.md`.
+No implementation file changed in this turn.
+
+Status:    closed
