@@ -350,6 +350,8 @@ def test_external_coefficients_drive_the_real_pipeline(tmp_path):
     parameterization, and hands the result to ``add_component``. BSM3 supplies
     no transformation here.
     """
+    import os
+
     import lsdo_function_spaces as lfs
 
     import bsm3
@@ -362,7 +364,16 @@ def test_external_coefficients_drive_the_real_pipeline(tmp_path):
     try:
         cache = tmp_path / "external-cache"
         cache.mkdir(parents=True, exist_ok=True)
-        imported = lfs.import_file_patched(STEP_FILE, parallelize=False)
+        # lsdo_function_spaces writes its STEP-import cache relative to the
+        # process working directory. The library contains that side effect
+        # internally; a direct import here must contain it too, or the test
+        # dirties the checkout.
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(cache)
+            imported = lfs.import_file_patched(STEP_FILE, parallelize=False)
+        finally:
+            os.chdir(previous_directory)
         wing, tail, fuselage = bsm3.preprocessing.create_components(
             geometry=imported,
             search_names=["wing", "HT", "fuselage"],
