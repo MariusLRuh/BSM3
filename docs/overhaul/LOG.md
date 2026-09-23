@@ -1525,3 +1525,177 @@ implemented and await Claude's Turn-23 independent review before being marked
 complete.
 
 Status:    closed
+
+---
+
+## Turn 23 — Claude, planner/reviewer, 2026-09-23
+Scope:     Independent review of the M1.1 + M1.2 implementation (872c0f1, 8ded2dc)
+
+**RULING: M1.1 + M1.2 ACCEPTED.** Every check in `CODEX_NEXT.md` executed
+independently in `central_geom`. One minor finding, recorded below and folded
+into the next turn; not blocking.
+
+**Allowlist compliance: perfect.** 14 files across `1c5a860..8ded2dc`,
+**zero violations**. The two core-module renames
+(`e175_mesh_motion_config.py` -> `mesh_motion_config.py`,
+`e175_mesh_motion_pipeline.py` -> `mesh_motion_pipeline.py`) were explicitly
+permitted, and Codex's justification is correct: the "no `E175` string in the
+generic backend" criterion covers an import path. All 14 prohibited source
+files and all 5 prohibited test files verified untouched. `8ded2dc` is
+docs-only.
+
+**Structural checks — all pass:**
+
+| Check | Result |
+|---|---|
+| six-symbol stale grep over `bsm3/` `tests/` | **0 hits** ✓ |
+| `GeometryVolumeBackend` Protocol + `CSDLRecorderBackend` survive | both present ✓ |
+| `MeshMotionVolumeBackend` replaces the E175 class | present; module `__all__` resolves, no stale entry ✓ |
+| `E175` anywhere in `geometry_volume_backend.py` | **0 hits** ✓ |
+| `search_names=["wing"...]` | **0 hits** ✓ |
+| 27-line uppercase alias block | **0 hits** ✓ |
+| `elasticity._validate_partition` | removed; `ngon_affine.py:453` and `quadratic_distortion.py:732` copies untouched ✓ |
+| package `__all__` | **108/108 resolve** (86 before, +22 for the new API) ✓ |
+| all 8 new generic symbols exported | ✓ |
+
+**Decomposition verified independently.** `mesh_motion_pipeline.py` is 1,572 LOC
+across 20 functions. **No function exceeds 300 LOC.** The public builder is
+**98 LOC**, down from 1,076 — a 91% reduction. Largest: the preserved
+`_run_volume_motion` (271), then `_setup_geometry_and_mesh` (243),
+`_build_intersections_and_graph` (145), `_evaluate_surface_diagnostics` (139),
+`_reproject_and_reevaluate` (125). The five named stages match the plan's
+five-step pipeline.
+
+**Architecture: the factory callback is implemented exactly as ruled.**
+`MeshMotionVolumeBackend.__init__` takes a keyword-only
+`parameterization_factory: Callable[[Mapping[str, csdl.Variable]], GeometryParameterization]`;
+`_build_model` builds the design-variable dict and calls the factory instead of
+naming an E175 type; the lazy import now pulls `build_mesh_motion_model` from
+`mesh_motion_pipeline`. Both drivers pass their own factory.
+
+**Numerical guard — this is the check that matters, and it passes exactly.**
+"Pass" is not the same as "unchanged", so seven quantities were re-measured
+against the values recorded in Turns 7 and 9, **pre-refactor**:
+
+| Quantity | Now | Pre-refactor | |
+|---|---|---|---|
+| projector rank | 3 | 3 | ✓ |
+| hourglass retained fraction | 1.000000000000 | 1.0 | ✓ |
+| `‖P·1‖` | 0.000000000000 | 0 | ✓ |
+| hexagon hourglass modes | 3 | 3 | ✓ |
+| `obj'` at `λ=0` | 4.000000000000 | 4.0 | ✓ |
+| `obj'` at `λ=0.3` | 4.384615384615 | 57/13 | ✓ |
+| observability `‖Δ‖∞` | 0.153846153846 | 2/13 | ✓ |
+
+**All seven identical to 1e-12. The refactor moved nothing.**
+
+**Tests:** guard suite (derivative gate + M1.4 operator + load-step) **6 passed
+in 7.62 s**; MPI tripwire **26 passed** and **verified untouched by the diff**,
+exactly as the prompt required; driver config **9 passed**; full dirty-tree
+suite **171 passed in 31.07 s**; **genuine clone of `8ded2dc`: empty
+`git status --porcelain`, six-symbol grep empty, both old module filenames gone,
+157 passed / 1 skipped in 30.52 s.** Count unchanged from M1.3, as a refactor
+requires.
+
+**Static review.** Ruff remains unavailable in `central_geom` (confirmed
+again). An AST equivalent over the nine edited files flagged nine
+quadratic-distortion names in `__init__.py`; investigated and **dismissed as
+false positives** — they were never in `__all__` (0 of 9 before *and* after),
+and `QuadraticDistortionConfig` is consumed via the package attribute path at
+`mesh_motion_pipeline.py:1113`, which AST cannot see. **No genuine dead imports,
+no orphaned private helpers.**
+
+**Finding (minor, non-blocking): the backend's lazy-import intent is now
+defeated.** `geometry_volume_backend.py` carries the comment *"Imported here so
+the module imports without the mesh-motion stack."* Measured against both
+commits:
+
+- **at `1c5a860`**: importing the backend pulled **neither** config nor pipeline
+- **at `8ded2dc`**: it pulls **both**
+
+Two contributing causes, both introduced by this commit:
+1. `__init__.py:62,79` now import `mesh_motion_config` and
+   `mesh_motion_pipeline` for the new re-exports — and any submodule import
+   executes the parent `__init__`, so this alone defeats it;
+2. `geometry_volume_backend.py:37` is a **module-level**
+   `from .mesh_motion_config import GeometryParameterization`.
+
+Nothing fails — the MPI suite passes — but the comment at line 304 is now false,
+and the rank-0 design intends non-root MPI ranks to avoid the heavy stack.
+Cheap partial fix: `from __future__ import annotations` is already present at
+line 29, so the annotation needs no runtime import; guard line 37 with
+`TYPE_CHECKING`. Whether to stop re-exporting the pipeline from `__init__` is a
+judgment call deferred to M1.6/M3. Folded into the next turn as a cleanup item.
+
+**M1.1 + M1.2 are COMPLETE.** `PLAN.md` updated. Next: **M1.5**, the
+`bsm3.meshgen` carve-out. Scoped this turn: the core already imports nothing
+from any gmsh/OCC script (verified), and all nine candidate meshgen modules
+(~11,254 LOC) are **untracked**, so M1.5 is primarily a decision about what to
+adopt rather than what to delete. Prompt written to `CODEX_NEXT.md`.
+
+Status:    closed
+
+---
+
+## Turn 24 — Codex, implementer/reviewer, 2026-09-23
+Scope:     M1.5 mesh-generation disposition and deferred backend cleanup
+
+Claimed the turn after confirming that the five-path allowlist covers the only
+authorized implementation cleanup and collaboration records.
+
+### Task 1 recommendation — defer `bsm3.meshgen` adoption to M3
+
+Do **not** adopt mesh-generation code in M1.5. The core already has zero imports
+from the candidate Gmsh/OCC scripts, so adopting an untested generator now would
+increase the release surface without improving core separation.
+
+The only credible STEP-to-surface candidate is manifest root M,
+`gmsh_occ_oml_surface_mesh.py` (2,475 LOC). Its four deferred imports lead to
+`smooth_existing_tip_cap.py` (2,283 LOC), and the latter imports the former, so
+adopting the working pair means accepting **4,758 untested LOC** with a circular
+dependency. This exceeds the prompt's ~800-LOC stop threshold by nearly 6x.
+The 502-LOC `generate_e175_panel_mesh.py` is only an E175-specific wrapper over
+that pair, not an independent smaller implementation. The other candidates are
+volume generators, format converters, remeshers, or OpenVSP-based paths rather
+than the required general STEP-to-surface entry point.
+
+A new thin module is also the wrong M1.5 action: with every test path prohibited
+and no proven small subset of the OCC healing/meshing logic, it would either be
+an untested facade over untracked code or a second implementation with no
+equivalence evidence. M3 should revisit adoption only with a minimal public
+`STEP -> surface mesh` API, a deterministic small STEP fixture, and an
+end-to-end topology/quality test. Until then, root M remains a local candidate,
+not release code. No `bsm3.meshgen` file is adopted, staged, or committed in
+this turn.
+
+The stop rule is **not** invoked because the recommendation is deferral, which
+the prompt explicitly permits; work proceeds only to the mandatory five-path
+cleanup and documentation.
+
+### Implementation and verification
+
+Commit `eb1ed5f` moves the `GeometryParameterization` import under
+`TYPE_CHECKING` and replaces the false lazy-import claim with the narrower fact
+that the pipeline import is deferred until private-model construction. Package
+re-exports still load config and pipeline when the submodule is imported; that
+known behavior remains deliberately out of scope. No `bsm3.meshgen` module or
+binary asset was adopted.
+
+The core-clean grep is empty. The backend imports successfully and exposes all
+four expected public symbols. The numerical guard was re-measured, not merely
+run: projector rank **3**, retained hourglass fraction **1.0**, `‖P·1‖` **0**,
+hexagon modes **3**, `obj'(λ=0)` **4.0**, `obj'(λ=0.3)` **57/13**, and the
+amplitude-normalized observable displacement **2/13**. All seven match the
+Turn-23 values to 1e-12.
+
+Focused tests: derivative gate **1 passed**; M1.4 N-gon operator/load-step
+**5 passed**; MPI tripwire **26 passed**. Full dirty-tree suite: **171 passed**.
+A genuine clone of `eb1ed5f` had empty status, an empty core-clean grep, and
+**157 passed / 1 skipped**. The five-path allowlist was respected; every
+pre-existing excluded dirty file remains outside the commit.
+
+**Codex recommends accepting M1.5 as complete as a disposition decision;
+implementation is deferred to M3 under the prerequisites recorded in
+`MANIFEST.md`. Claude's Turn-25 review will rule.**
+
+Status:    closed

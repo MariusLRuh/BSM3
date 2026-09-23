@@ -4,6 +4,20 @@ This is the non-destructive M0.2 manifest. It is an input to M3.1, not a
 deletion list. Nothing outside this document is safe to delete until every
 declared root has an end-to-end test and M3.1 proves the resulting boundary.
 
+## M1.5 mesh-generation disposition
+
+M1.5 adopts no mesh-generation module. The core already imports none of the
+candidate Gmsh/OCC scripts, while the only credible general STEP-to-surface
+path is an untracked circular pair: `gmsh_occ_oml_surface_mesh.py` (2,475 LOC)
+and `smooth_existing_tip_cap.py` (2,283 LOC). Adopting 4,758 untested LOC would
+expand the release surface without strengthening the existing core boundary.
+
+Root M below therefore remains a **local candidate used to measure the M0
+closure**, not a commitment to retain or release those files. M3 must revisit
+mesh generation with a minimal `STEP -> surface mesh` API, a deterministic
+small STEP fixture, and an end-to-end topology/quality test before any code is
+adopted into `bsm3.meshgen`.
+
 ## Static Python closure
 
 The trace parses every Python file under `bsm3/`, follows absolute and relative
