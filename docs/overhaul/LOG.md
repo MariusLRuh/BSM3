@@ -2342,3 +2342,94 @@ The bounded Turn-36 implementation prompt is in `CODEX_NEXT.md`. M1.7a remains
 open; no production source was changed by Codex.
 
 Status:    closed
+
+---
+
+## Turn 36 — Claude, implementer, 2026-09-23
+Scope:     Finish M1.7a — free_region=None, FD proof, DV registration, lifecycle, private records, large-deformation coverage
+
+All seven sections implemented in three commits, `537742f`, `f0b0eac`,
+`16de99c`. Six source/test paths plus docs, all inside the 9-path allowlist,
+**zero violations**. No stop rule fired.
+
+**§1 `free_region=None`.** `identify_reevaluated_vertices` now builds its
+component mask with explicit boolean dtype. Two asset-free unit regressions
+cover the empty and nonempty paths, and the skipped placeholder is replaced by
+an executable end-to-end case: output `(16400, 3)`, all finite, 0 folds, no new
+inversion IDs at preprojection or final. **118.4 s.**
+
+**§2 + §7 external derivative.** The real-pipeline case now drives a
+**relative** deformation — wing only, tail and fuselage held at baseline —
+over two load steps, and proves the derivative against centered FD on mean
+squared nodal displacement of the **final reprojected** coordinates:
+
+| quantity | value |
+|---|---|
+| wing shift | **0.35 m** (largest specified; no fallback needed) |
+| analytic | **5.0436177894e-02** |
+| centered FD | **5.0436177894e-02** |
+| best step | **1e-5** |
+| relative error | **4.21e-14** |
+| max nodal displacement | **0.3502 m** |
+
+0 folds, 0 final inversions. **243.2 s.**
+
+**§3 design variables.** `design_variable` always registers; a focused test
+asserts an unbounded variable appears in `recorder.design_variables`.
+
+**§4 lifecycle.** The example's `try` opens immediately after
+`recorder.start()`. A monkeypatched stage-2 failure test confirms no recorder
+remains active, without running the pipeline.
+
+**§5 private records.** `component_records` and `intersection_records` are now
+`_component_records` / `_intersection_records`; a test asserts neither public
+property exists and that `design_variables` still does.
+
+**§6 honest design point.** One `deformation_scale` interpolating between the
+neutral references and the full Turn-32 targets. The spec's exact 0.1 scale was
+tested first and **failed**, then the fallback ladder:
+
+| scale | preprojection new IDs | final new IDs | result |
+|---|---|---|---|
+| 0.10 | 8075, 14923 | 8075, 14923 | fail |
+| 0.05 | 8075, 14923 | 8075, 14923 | fail |
+| **0.02** | none | none | **selected** |
+
+Quad at 0.02 pins all three unchanged-input facts, evaluated on the result's
+own initial coordinates: **114 inverted elements, 114 inverted corners, 0
+degenerate**; 114/114/114 across the three states, no new IDs, 0 folds, 2,535
+n-gon modes. **67.2 s.**
+
+**§7 large deformation.** Triangle wall at `deformation_scale=1.0` — the full
+Turn-32 point (0.35 m shift, 0.75 deg incidence, 71.5 m^2 area, 1.2 deg tail,
+1.02 width) — over two load steps: **0/0/0 inversions, 0 folds**, max nodal
+displacement **0.4470 m** against a 0.1 m floor. **109.5 s.**
+
+**Verification.** Narrow tests 53 + 13 passed; derivative gate and both M1.4
+tests **6 passed**, values unchanged. Full suite **192 passed, no skips** in
+656.7 s. All three required greps empty; scoped `git diff --check` clean.
+
+**Clean clone** at `16de99c`: status **empty before**; example ran in
+**108.7 s** with 0/0/0 inversions and 0 folds; suite **178 passed, 1 skipped**
+in 659.9 s; status **empty after**. The count differs from the working tree's
+192 because 13 tests live in the untracked `test_hybrid_volume_mesh_motion.py`
+(192 - 13 = 179), and the single skip is the R4-asset integration check, whose
+inputs are deliberately untracked.
+
+**Errata required by the Turn-36 spec, recorded without rewriting history:**
+
+1. Turn 34 cites the cache-containment commit as `4a1d0e5`; the correct hash is
+   **`8f5907a`**.
+2. Turn 34 says the design point was "scaled down 10x". That describes only the
+   second of two reductions. Relative to Turn 32 the committed values were
+   roughly **70-100x** smaller, which is what Codex flagged as incoherent. Turn
+   36 replaces them with one coherent measured scale.
+3. Turn 34 describes `add_lifting_surface` / `add_body` as conveniences
+   "layered over the same mechanism" as `add_component`. They are conveniences
+   **alongside** the generic external path: each builds its own
+   `_ComponentRecord` directly and they were not refactored to call
+   `add_component`. They do share the free-region helper.
+
+M1.7a is **ready for Codex review**. Not accepted by me.
+
+Status:    closed

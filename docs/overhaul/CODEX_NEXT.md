@@ -1,283 +1,122 @@
-# Claude Turn 36 — finish the bounded M1.7a correction
+# Codex review checklist — Turn 37 (M1.7a completion)
 
-You are the **implementer**. Codex is the **planner/reviewer**. Turn 35 accepts
-the architecture but does not yet accept M1.7a. Implement this narrow
-correction, verify and commit it, update the handoff documents, and leave this
-file as a Codex review checklist. Do not accept your own work.
+Claude implemented Turn 36. Codex owns the acceptance ruling. Baseline is
+`1b6815e`. **M1.7a is not accepted by Claude.**
 
-## Codex rulings on your three questions
+## Commits and changed paths
 
-1. **Cache regression:** accepted. Commit `8f5907a` puts containment in the
-   correct place. The test directly calls the third-party LFS importer, so the
-   test—not BSM3's already-contained internal import—owns that side effect.
-2. **Blocked dependency:** allowlist expansion approved. Codex independently
-   reproduced the zero-reevaluation failure. `identify_reevaluated_vertices`
-   must produce a boolean empty mask; this is a general preprocessing edge
-   case, not an external-coefficient workaround.
-3. **Gate filenames:** substitution accepted. The wrong filenames were a
-   Codex planning error. The actual gates are `test_derivative_gate.py`,
-   `test_ngon_affine_operator.py`, and `test_ngon_affine_load_step.py`.
+| Commit | Paths |
+|---|---|
+| `537742f` | `bsm3/preprocessing/movement.py`, `geometry_model.py`, `mesh_motion_pipeline.py` |
+| `f0b0eac` | `examples/e175_surface_deformation.py`, `tests/test_boundary_surface_movement.py`, `tests/test_e175_example.py` |
+| `16de99c` + docs commit | `docs/overhaul/PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
 
-## Literal path allowlist
+- [ ] `git diff --name-only 1b6815e..HEAD` — Claude measured **6 source/test
+      paths + 3 docs, zero violations**. No stop rule fired.
 
-Only these paths may change:
+## §1 `free_region=None`
 
-1. `bsm3/preprocessing/movement.py`
-2. `bsm3/core/boundary_surface_movement/geometry_model.py`
-3. `bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py`
-4. `examples/e175_surface_deformation.py`
-5. `tests/test_boundary_surface_movement.py`
-6. `tests/test_e175_example.py`
-7. `docs/overhaul/PLAN.md`
-8. `docs/overhaul/LOG.md`
-9. `docs/overhaul/CODEX_NEXT.md`
+- [ ] `identify_reevaluated_vertices` builds `local_mask` with explicit
+      `dtype=bool`; no other behavioural change in `movement.py`.
+- [ ] Asset-free unit regressions for both the empty and nonempty keep-set.
+- [ ] Skipped placeholder replaced by an executable end-to-end case:
+      shape `(16400, 3)`, all finite, **0 folds**, no new inversion IDs.
+      **118.4 s.**
 
-Do not widen this list silently. Stop and report a newly discovered dependency
-with the exact path and reason.
+## §2 + §7 external-coefficient derivative
 
-## 1. Finish `free_region=None`
+Relative wing-only deformation, tail and fuselage held at baseline, two load
+steps, scalar = mean squared nodal displacement of the **final reprojected**
+coordinates, marked as objective.
 
-In `identify_reevaluated_vertices`, construct `local_mask` with explicit
-boolean dtype so an empty `kept_patch_ids` produces an empty boolean mask.
-Make no other behavioral change in `movement.py`.
+| | |
+|---|---|
+| wing shift | **0.35 m** — largest specified value, passed first try, no fallback |
+| analytic | **5.0436177894e-02** |
+| centered FD | **5.0436177894e-02** |
+| best step | **1e-5** |
+| relative error | **4.21e-14** (gate 1e-5) |
+| max nodal displacement | **0.3502 m** (floor 0.05) |
+| folds / final inversions | 0 / 0 |
+| runtime | **243.2 s** |
 
-Add a small, asset-free unit regression in
-`tests/test_boundary_surface_movement.py`: when every mesh vertex is already a
-deformation vertex, `identify_reevaluated_vertices(...)` returns an empty tuple
-without raising. Assert the nonempty behavior remains intact if the existing
-coverage does not already do so.
+- [ ] Nonzero assertion retained alongside the FD check.
+- [ ] The deformed expression is still built outside BSM3 and passed through
+      `add_component`; no built-in transformation substituted.
 
-Replace the dummy skipped E175 test with an executable end-to-end case using
-external coefficients and `free_region=None` for every component. It must run
-through the existing intersection, graph, and reprojection path, return finite
-coordinates of the correct shape, and leave no new inversions or folds. Remove
-the skip and its obsolete diagnosis.
+## §3 design-variable registration
 
-## 2. Prove the external derivative, not merely its existence
+- [ ] `design_variable` always calls `set_as_design_variable`, passing
+      bounds/scaler through.
+- [ ] Test asserts an **unbounded** variable appears in
+      `recorder.design_variables`; missing-recorder failure retained.
 
-The current real-pipeline test only checks that the analytic derivative is
-nonzero. That is necessary but insufficient. Change its scalar to a
-well-scaled quantity derived from the final **reprojected** coordinates (for
-example, a sum or average of displacement relative to the initial mesh), mark
-the scalar as the objective, and compare the analytic derivative with centered
-finite difference using the established CSDL/JAX derivative-check pattern.
-Check several step sizes if needed and require best relative error below
-`1e-5`, matching the existing derivative gate. Retain the nonzero assertion so
-a coincidentally zero pair cannot pass.
+## §4 example lifecycle
 
-This test must continue to build its deformed coefficient expression outside
-BSM3 and pass it through `GeometryModel.add_component`. Do not replace it with
-a built-in wing/body transformation.
+- [ ] `try` opens immediately after `recorder.start()`; stage 5 follows the
+      stop.
+- [ ] Monkeypatched stage-2 failure leaves no active recorder, without running
+      the pipeline.
+- [ ] Example still 194 lines, 4 imports, one public function, five ordered
+      stages, no CLI/`mesh_kind`/classes/callbacks.
 
-## 3. Correct design-variable registration
+## §5 private records
 
-`GeometryModel.design_variable()` currently calls
-`set_as_design_variable()` only when a bound or scaler is supplied. That makes
-the unbounded variables in the example ordinary CSDL variables despite the
-method name. Always register the returned variable as a design variable,
-passing optional bounds/scaler through unchanged.
+- [ ] `component_records` / `intersection_records` no longer exist as public
+      properties; `_component_records` / `_intersection_records` used by the
+      pipeline and one test. `design_variables` stays public.
 
-Add a focused test proving an unbounded variable appears in the active
-recorder's design-variable mapping, and retain the missing-recorder failure.
+## §6 honest design point
 
-## 4. Make the example lifecycle exception-safe
+One `deformation_scale` interpolating neutral → full Turn-32 targets.
 
-The example starts its recorder before stage 2 but enters `try/finally` only in
-stage 4. Move the `try` to immediately after `recorder.start()` so failures in
-geometry declaration, settings construction, or execution all stop the
-recorder. Stage 5 remains after the recorder is stopped. Keep the five stage
-labels clear; do not add a CLI, `mesh_kind`, local classes, callbacks, or
-low-level helpers.
+| scale | preprojection new IDs | final new IDs | result |
+|---|---|---|---|
+| 0.10 (spec's claimed 10×) | 8075, 14923 | 8075, 14923 | **fail** |
+| 0.05 | 8075, 14923 | 8075, 14923 | **fail** |
+| **0.02** | none | none | **selected default** |
 
-Add a lightweight structural or monkeypatched failure test demonstrating that
-an exception during stage 2 or 3 leaves no active recorder. Do not run the full
-E175 pipeline merely to test exception cleanup.
+- [ ] Confirm 0.02 is acceptable as the largest passing coherent scale.
+- [ ] Quad test pins **all three** unchanged-input facts — 114 inverted
+      elements, **114 inverted corners**, **0 degenerate** — evaluated on the
+      result's own initial coordinates, not the final report.
+- [ ] Quad: 114/114/114 across states, no new IDs, 0 folds, **2,535 n-gon
+      modes**, **67.2 s**.
 
-## 5. Hide private compiled records
+## §7 large-deformation coverage
 
-The public-looking `component_records` and `intersection_records` properties
-expose `_ComponentRecord`, `_IntersectionRecord`, and their callbacks, contrary
-to the API contract. Rename them to private accessors (or provide an equally
-small private compilation boundary), update only the pipeline and tests, and
-ensure neither public property remains. `design_variables` may remain public.
+- [ ] Triangle wall at `deformation_scale=1.0` — the full Turn-32 point
+      (0.35 m, 0.75°, 71.5 m², 1.2°, 1.02) — two load steps:
+      **0/0/0 inversions, 0 folds**, max nodal displacement **0.4470 m**
+      against a 0.1 m floor. **109.5 s.**
+- [ ] The full state is deliberately **not** imposed on the sliver-sensitive
+      quad asset, which keeps its own 0.02 point.
 
-The public API remains `GeometryModel.add_component`, `add_lifting_surface`,
-`add_body`, and `connect`; external callers must not handle coefficient-builder
-or free-region-factory callbacks.
+## Verification
 
-## 6. Use an honest, meaningful example design point
+- [ ] Narrow: `test_boundary_surface_movement.py` + driver config **53
+      passed**; non-integration example tests **13 passed**.
+- [ ] Gates: derivative gate + both M1.4 tests **6 passed**, values unchanged.
+- [ ] Full suite **192 passed, no skips** (656.7 s). The former skip is gone.
+- [ ] All three required greps returned **no matches**. Scoped
+      `git diff --check 597ba41..HEAD` clean.
+- [ ] Clean clone at `16de99c`: status **empty before**, example ran
+      (**108.7 s**, 0/0/0, 0 folds), suite **178 passed, 1 skipped** (659.9 s),
+      status **empty after**. The clone count is 13 below the working tree's
+      192 because `test_hybrid_volume_mesh_motion.py` is untracked; the single
+      skip is the R4-asset check whose inputs are deliberately untracked.
 
-The documentation says the Turn-32 deformation was scaled down 10×, but the
-committed values are approximately 75–100× smaller. Use one common scale
-relative to the Turn-32 targets and their neutral references. First verify the
-claimed 10× reduction, which is exactly:
+## Errata recorded in the Turn-36 log
 
-```text
-wing_shift       = 0.035
-wing_incidence   = 0.075
-wing_area        = 70.15    # neutral reference 70.0
-tail_incidence   = 0.12
-fuselage_width   = 1.002    # neutral reference 1.0
-```
+1. Turn 34 cites `4a1d0e5` for the cache fix; the correct hash is **`8f5907a`**.
+2. Turn 34's "scaled down 10×" described only the second of two reductions; the
+   committed values were roughly **70–100×** smaller than Turn 32.
+3. `add_lifting_surface` / `add_body` are conveniences **alongside**
+   `add_component`, each building its own `_ComponentRecord`; they were **not**
+   refactored to call it. They do share the free-region helper.
 
-If this exact point introduces no preprojection or final inverted-element IDs
-outside the initial set, use it. If it fails, test coherent common scales
-`0.05`, `0.02`, then `0.01` of the original deformation vector and use the
-largest passing scale. Do not tune five unrelated near-zero values. Record the
-tested scales and ID-set result. At least one deformation must remain
-materially nonzero.
+## Remaining M1 scope
 
-For the quad integration test, explicitly pin all three unchanged-input facts:
-114 inverted elements, 114 inverted corners, and 0 degenerate elements. The
-current test pins the first but reads degeneracy from the final report and does
-not pin initial inverted corners. Evaluate initial quality on the result's
-initial coordinates and surface mesh, then assert all three input values.
-Continue comparing preprojection/final inverted **ID sets** against the input.
-
-## 7. Add deliberate large-deformation coverage
-
-The maintained suite does not currently test a substantial E175 geometry
-change. Its synthetic derivative fixtures use roughly `0.1`-`0.2` coordinate
-units, while the large aircraft envelopes occur only in legacy diagnostic
-scripts and do not gate regressions. Add two complementary cases without
-turning every derivative test into an expensive aircraft run.
-
-First, give the example one intuitive high-level `deformation_scale` argument
-(defaulting to the coherent safe scale selected in section 6). Compute all
-five targets from the Turn-32 deformation vector and their neutral references;
-do not expose five more `main()` arguments. Add a dedicated triangle-wall
-integration test at `deformation_scale=1.0`, corresponding to:
-
-```text
-wing_shift       = 0.35 m
-wing_incidence   = 0.75 deg
-wing_area        = 71.5 m^2
-tail_incidence   = 1.2 deg
-fuselage_width   = 1.02
-```
-
-This state previously ran with zero triangle inversions and folds, but measure
-it again after the correction. Require finite output, the expected shape, zero
-new inversions, zero folds, and a maximum nodal displacement above `0.1 m` so
-the test cannot silently collapse to a near-null case. Use at least two load
-steps. Do not impose this full state on the sliver-sensitive quad asset; its
-separate test continues to define the safe quad-supported point.
-
-Second, strengthen the existing external-coefficient FD integration case. It
-currently applies the same `0.004 m` x-translation to wing, tail, and fuselage,
-which is essentially a small global rigid translation and weakly exercises the
-intersection/motion chain. Apply a substantial **relative** external
-deformation instead: drive the wing coefficients chordwise while keeping the
-tail and fuselage coefficient targets at baseline. Start at a `0.35 m` wing
-shift; if that fails the triangle no-new-inversion/fold criteria, try `0.25 m`
-then `0.1 m` and use the largest passing value. Use at least two load steps,
-retain the centered-FD proof from section 2, and assert maximum final nodal
-displacement above `0.05 m`. Record the tested values and selected result.
-
-These are robustness tests inside a supported measured envelope, not an
-assertion that arbitrarily extreme geometry must remain valid. A future
-beyond-envelope test should require an explicit diagnostic failure rather than
-blessing folded output.
-
-## Documentation corrections
-
-In the new Turn-36 log entry, record these errata without deleting history:
-
-- the cache-fix commit is `8f5907a`, not `4a1d0e5` as written in Turn 34;
-- the committed Turn-34 values were not a uniform 10× reduction; and
-- `add_lifting_surface`/`add_body` are conveniences **alongside** the generic
-  external path, not implementations layered through `add_component` unless
-  you actually refactor them that way.
-
-Update the M1.7a status only to “ready for Codex review,” never accepted.
-
-## Required verification
-
-Run the narrow tests first:
-
-```bash
-conda run -n central_geom python -m pytest -q \
-  tests/test_boundary_surface_movement.py \
-  tests/test_e175_example.py -m "not integration" \
-  tests/test_e175_driver_configuration.py
-
-conda run -n central_geom python -m pytest -q \
-  tests/test_derivative_gate.py \
-  tests/test_ngon_affine_operator.py \
-  tests/test_ngon_affine_load_step.py
-```
-
-Then run every integration test in `tests/test_e175_example.py`, including the
-external-coefficient FD case, whole-component-free case, triangle example, and
-quad example, plus the large built-in triangle case. Each individual test/run
-retains the approximately ten-minute stop threshold. Report runtimes and:
-
-- tri initial/preprojection/final inversion counts and folds;
-- quad initial/preprojection/final counts, new-ID sets, initial corners,
-  initial degenerates, folds, and n-gon modes;
-- the analytic derivative, centered-FD value, selected step, and relative
-  error;
-- whole-component-free output shape, finiteness, inversions, and folds.
-- both large-deformation target values, maximum nodal displacement, inversion
-  ID-set differences, folds, and load-step counts.
-
-Run the full suite and then verify from a fresh clone after all implementation
-commits:
-
-```bash
-git clone --no-hardlinks --branch production-ready-overhaul \
-  "file:///Users/mariusruh/Documents/Research/nasa_uli/mesh_movement/packages/BSM3" \
-  /tmp/bsm3-m17a-turn36-verify
-cd /tmp/bsm3-m17a-turn36-verify
-git status --porcelain
-PYTHONPATH=/tmp/bsm3-m17a-turn36-verify \
-  conda run -n central_geom python examples/e175_surface_deformation.py
-PYTHONPATH=/tmp/bsm3-m17a-turn36-verify \
-  conda run -n central_geom python -m pytest -q tests
-git status --porcelain
-```
-
-The destination must be absent before cloning; use a fresh explicit `/tmp`
-path if necessary. Status must be empty before and after. Do not delete an
-ambiguous existing directory.
-
-Run and report:
-
-```bash
-rg -n "baseline_inversion_report|owns_recorder|self\._recorder|geometry\.recorder" \
-  bsm3/mesh_motion.py \
-  bsm3/core/boundary_surface_movement/geometry_model.py \
-  bsm3/core/boundary_surface_movement/mesh_motion_config.py \
-  bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
-  examples/e175_surface_deformation.py tests/test_e175_example.py
-
-rg -n "def (component_records|intersection_records)|geometry\.(component_records|intersection_records)" \
-  bsm3/core/boundary_surface_movement/geometry_model.py \
-  bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
-  tests/test_e175_example.py
-
-rg -n "argparse|mesh_kind|DeclarativeGeometryParameterization|class .*Config" \
-  examples/e175_surface_deformation.py
-
-git diff --check 597ba41..HEAD -- \
-  bsm3/preprocessing/movement.py \
-  bsm3/core/boundary_surface_movement/geometry_model.py \
-  bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
-  examples/e175_surface_deformation.py \
-  tests/test_boundary_surface_movement.py tests/test_e175_example.py \
-  docs/overhaul/PLAN.md docs/overhaul/LOG.md docs/overhaul/CODEX_NEXT.md
-```
-
-All three greps must return no matches. Preserve the accepted cache fix,
-external coefficient formats and validation, explicit recorder ownership,
-three inversion reports, applicable-if-present polygon regularization, and all
-existing derivative/M1.4 numerical values. Do not reintroduce membrane,
-log-barrier, tangential smoothing, pickle, or mesh-kind branches.
-
-## Commit and handoff
-
-Use coherent implementation/test and documentation commits. Append the Turn-36
-record to `LOG.md`; do not rewrite historical log entries. Replace this file
-with a concise Codex review checklist containing commits, exact changed paths,
-test counts, runtimes, derivative/FD numbers, tri/quad/whole-free measurements,
-clone status, greps, and deviations. Hand back to Codex for acceptance review.
+M1.6 slices 2 and 3, then M1.8 pickle retirement, then full M1.7 acceptance.
+M1.7 carry-ins stand: the `GraphDistanceWeighting.summary` `TypedDict` and its
+dead `"decay"` key.
