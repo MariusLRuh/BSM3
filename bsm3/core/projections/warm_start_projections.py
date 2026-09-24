@@ -196,6 +196,23 @@ def _barycentric_coords_batch(
 
 @dataclass(frozen=True)
 class WarmStartResult:
+    """Newton seeds produced by the triangulation warm start.
+
+    Attributes
+    ----------
+    patch_id
+        Patch each query point should be projected onto, shape ``(N,)``.
+    uv0
+        Starting parametric coordinates on that patch, shape ``(N, 2)``.
+    closest_pts
+        Closest point found on the tessellation, shape ``(N, 3)``.
+    cell_ids
+        Tessellation cell that supplied the seed, shape ``(N,)``.
+    dist2
+        Squared distance to that tessellated point, shape ``(N,)``. This is a
+        seed distance, not the converged surface distance.
+    """
+
     patch_id: np.ndarray     # (N,) int32
     uv0: np.ndarray          # (N,2) float64
     closest_pts: np.ndarray  # (N,3) float64
@@ -421,6 +438,25 @@ def pick_best_newton_result(
     return best_x, best_pid, best_uv, best_dist2
 
 def sample_bounding_box_faces(bbox_min, bbox_max, num_samples_per_face=10):
+    """Sample points on the faces and edges of an axis-aligned bounding box.
+
+    Used to generate off-surface query points for projection diagnostics.
+
+    Parameters
+    ----------
+    bbox_min, bbox_max
+        Opposite corners of the box, each an ``(x, y, z)`` sequence.
+    num_samples_per_face
+        Number of random samples drawn per face. Edge interpolants are added
+        on top of these.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sampled points. Face samples are drawn with :func:`numpy.random.uniform`,
+        so results vary between calls unless the global seed is fixed.
+    """
+
     x_min_face = np.random.uniform(bbox_min[1], bbox_max[1], num_samples_per_face)
     y_min_face = np.random.uniform(bbox_min[2], bbox_max[2], num_samples_per_face)
     z_min_face = np.random.uniform(bbox_min[0], bbox_max[0], num_samples_per_face)
@@ -535,6 +571,27 @@ def unsort(inv_order: np.ndarray, *arrays_sorted):
 
 
 def load_function_set(pickle_path) -> lfs.FunctionSet:
+    """Rebuild a B-spline function set from a local pickle.
+
+    Each pickled entry supplies a patch degree, coefficient shape, and
+    coefficients, which are reassembled into ``lfs`` spaces and functions.
+
+    .. warning::
+       Python pickle executes arbitrary code on load. Use this only with a
+       trusted local file that you produced yourself. Never load a pickle
+       from an untrusted or remote source.
+
+    Parameters
+    ----------
+    pickle_path
+        Path to the pickled function-set description.
+
+    Returns
+    -------
+    lsdo_function_spaces.FunctionSet
+        Function set keyed by integer patch ID.
+    """
+
     with open(pickle_path, "rb") as f:
         wing_fun_set_data = pickle.load(f)
 

@@ -1,3 +1,19 @@
+"""Warm-started multi-candidate point projection onto a function set.
+
+A single Newton solve seeded from one patch is not reliable near patch
+boundaries: the closest location may lie on an edge, or on a neighbouring
+patch entirely. This module builds several candidate seeds per query point,
+solves each, and keeps the closest converged result.
+
+It also handles the two awkward cases that motivated it. Degenerate edges,
+where a patch boundary has collapsed to nearly a point, are excluded via a
+measured extent map. Points that "converge" only because the active set masked
+an outward residual at a boundary are flagged and retried, since such a point
+usually belongs on the other side of that edge.
+
+Everything here is pure NumPy and runs at setup time.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,6 +55,16 @@ POINT_CANDIDATE_AXIS = -2
 
 @dataclass(frozen=True)
 class NeighborEdgeMap:
+    """Topological link from one patch edge to the adjoining patch edge.
+
+    Attributes
+    ----------
+    neighbor_patch, neighbor_edge
+        The patch and named edge on the other side of this boundary.
+    reverse_along_edge
+        ``True`` when the two edges run in opposite parametric directions, so a
+        coordinate must be flipped when crossing.
+    """
     neighbor_patch: int
     neighbor_edge: EdgeName
     reverse_along_edge: bool = False
@@ -46,6 +72,28 @@ class NeighborEdgeMap:
 
 @dataclass
 class WarmStartCandidateProjectionResult:
+    """Per-point outcome of the warm-started multi-candidate projection.
+
+    Attributes
+    ----------
+    patch_id
+        Patch that won for each point.
+    uv
+        Converged parametric coordinates on that patch.
+    projected_points
+        Surface points at ``uv``.
+    dist2
+        Squared distance from each query point to its accepted projection.
+    residual, converged, iterations
+        Newton evidence for the accepted candidate.
+    candidate_kind
+        Which candidate type won for each point, for example a patch interior, a
+        named boundary edge, or a neighbouring patch.
+    warm_patch_id, warm_uv0
+        The seed the winning solve started from.
+    edge_map
+        Patch-edge adjacency used during the search.
+    """
     patch_id: np.ndarray
     uv: np.ndarray
     projected_points: np.ndarray
@@ -70,6 +118,23 @@ class _CandidateSpec:
 
 
 def load_function_set_from_pickle(pickle_path: Path = DEFAULT_FUN_SET_PATH):
+    """Load a function set from a local pickle.
+
+    .. warning::
+       Python pickle executes arbitrary code on load. Use this only with a
+       trusted local file that you produced yourself. Never load a pickle from an
+       untrusted or remote source.
+
+    Parameters
+    ----------
+    pickle_path
+        Path to the pickled function set.
+
+    Returns
+    -------
+    object
+        The unpickled function set.
+    """
     if lfs is None:
         raise ImportError("lsdo_function_spaces is required to load a FunctionSet from pickle.")
 
@@ -349,6 +414,18 @@ def build_edge_neighbor_map(
     atol: float = 1e-6,
     rtol: float = 1e-6,
 ) -> Dict[Tuple[int, EdgeName], NeighborEdgeMap]:
+    """Determine which patch edges adjoin which, and in what direction.
+
+    Matching is geometric: edges whose sampled points coincide within tolerance
+    are treated as adjoining, and the sample ordering decides whether the shared
+    edge runs forward or reversed.
+
+    Returns
+    -------
+    dict
+        Maps ``(patch_id, edge_name)`` to a :class:`NeighborEdgeMap`. Edges with
+        no match are simply absent, which is the normal case at an open boundary.
+    """
     _require_numpy_bspline_factory()
 
     if patch_indices is None:
@@ -997,6 +1074,29 @@ def project_points_with_warm_start_candidates_numpy(
     retry_normal_dot_min: float = -0.25,
     params: OrthogonalityNewtonParams = OrthogonalityNewtonParams(),
 ) -> WarmStartCandidateProjectionResult:
+    """Project points by trying several warm-started candidates and keeping the best.
+
+    For each query point the search assembles candidate seeds: the nearest
+    tessellated vertex's own patch, optionally that patch's boundary edges, and
+    optionally the neighbouring patch and its edges. Each candidate is solved with
+    the Newton routines in :mod:`orthogonality_projection_numpy`, and the
+    candidate with the smallest squared distance wins.
+
+    Degenerate edges are excluded using the supplied extent map, because a
+    collapsed edge gives a seed that cannot converge usefully.
+
+    A point that converges only by boundary clamping, or that fails outright, is
+    routed into the retry path controlled by the ``retry_*`` arguments: additional
+    nearby edges, a local multi-scale search, and acceptance thresholds that let a
+    slightly worse but genuinely converged candidate replace a clamped one.
+
+    Returns
+    -------
+    WarmStartCandidateProjectionResult
+        The accepted candidate per point together with its convergence evidence
+        and the seed it started from. Points that never converged are returned
+        rather than raising.
+    """
     points = np.asarray(points, dtype=float)
     if points.ndim != 2:
         raise ValueError(f"points must have shape (M, phys_dim); got {points.shape}")

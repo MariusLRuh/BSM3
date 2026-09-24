@@ -1,3 +1,16 @@
+"""NumPy Newton projection of points onto B-spline patches.
+
+Two solves live here: an interior solve on the orthogonality residual, and an
+edge solve with one parametric coordinate pinned to a patch boundary. Both are
+pure NumPy and run at setup time; the differentiable CSDL layer sits above
+them.
+
+Neither solve raises on failure. Every point comes back inside a
+:class:`SurfaceProjectionResult` carrying its residual, step norm, iteration
+count, and convergence flag, so the caller can decide whether to retry, route
+the point to another patch, or accept it.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,6 +29,28 @@ except Exception:  # pragma: no cover
 
 @dataclass(frozen=True)
 class OrthogonalityNewtonParams:
+    """Tolerances and iteration limits for the orthogonality Newton solve.
+
+    Attributes
+    ----------
+    max_iter
+        Maximum Newton iterations per point.
+    tol_res
+        Residual norm below which a point is accepted as converged.
+    tol_step
+        Parametric step norm below which iteration stops.
+    use_active_set
+        Clamp parameters to the unit square and mask outward residual components
+        at a clamped bound, instead of letting the step leave the patch.
+    bound_eps
+        Distance from 0 or 1 at which a parameter counts as on the boundary.
+    snap_eps
+        Distance within which a converged parameter is snapped exactly to 0 or 1.
+    zero_residual_tol
+        Residual treated as exactly zero, used for coincident query points.
+    det_eps, diag_eps
+        Floors guarding the 2x2 solve and its diagonal against singularity.
+    """
     max_iter: int = 40
     tol_res: float = 1e-9
     tol_step: float = 1e-9
@@ -29,6 +64,31 @@ class OrthogonalityNewtonParams:
 
 @dataclass
 class SurfaceProjectionResult:
+    """Per-point outcome of a surface Newton projection.
+
+    Attributes
+    ----------
+    uv
+        Converged parametric coordinates, shape ``(num_points, 2)``.
+    projected_points
+        Surface points at ``uv``.
+    residual
+        Final residual norm per point.
+    step_norm
+        Final parametric step norm per point.
+    dist2
+        Squared distance from each query point to its projection.
+    converged
+        Boolean per point.
+    iterations
+        Newton iterations actually taken per point.
+    boundary_clamped
+        ``True`` where a point converged only because the active set masked an
+        outward residual at a patch boundary. Such a point sits on an edge and may
+        belong on a neighbouring patch, so the warm-start driver routes it into
+        the retry path. ``None`` for candidates that lie on a boundary by
+        construction.
+    """
     uv: np.ndarray
     projected_points: np.ndarray
     residual: np.ndarray
@@ -134,6 +194,18 @@ def make_surface_orthogonality_evaluator_numpy(
     degrees: Tuple[int, ...],
     knot_vectors: Tuple[np.ndarray, ...],
 ):
+    """Build a NumPy evaluator for the orthogonality residual and its Jacobian.
+
+    The residual is the surface tangent basis dotted with the offset from the
+    query point, so it vanishes exactly when that offset is orthogonal to the
+    surface.
+
+    Returns
+    -------
+    callable
+        Function of parametric coordinates and coefficients returning the residual
+        and the derivatives the Newton step needs.
+    """
     _require_numpy_bspline_factory()
 
     if len(degrees) != 2:
@@ -219,6 +291,20 @@ def project_points_orthogonality_newton_numpy(
     *,
     params: OrthogonalityNewtonParams = OrthogonalityNewtonParams(),
 ) -> SurfaceProjectionResult:
+    """Project points onto a patch interior by Newton on the orthogonality residual.
+
+    Parameters
+    ----------
+    params
+        Solve tolerances; see :class:`OrthogonalityNewtonParams`.
+
+    Returns
+    -------
+    SurfaceProjectionResult
+        Converged coordinates and per-point convergence evidence. Non-converged
+        points are returned rather than raising, so the caller decides what to do
+        with them.
+    """
     points = np.asarray(points, dtype=float)
     u0s = np.asarray(u0s, dtype=float)
 
@@ -312,6 +398,18 @@ def project_points_on_surface_edge_newton_numpy(
     fixed_value: float,
     params: OrthogonalityNewtonParams = OrthogonalityNewtonParams(),
 ) -> SurfaceProjectionResult:
+    """Project points onto one parametric boundary edge of a patch.
+
+    One parametric coordinate is held fixed at 0 or 1 and Newton runs on the
+    remaining coordinate. This supplies the edge warm-start candidates used when a
+    point's closest location may lie on or across a patch boundary.
+
+    Returns
+    -------
+    SurfaceProjectionResult
+        ``boundary_clamped`` is ``None`` here, because these candidates are on a
+        boundary by construction.
+    """
     points = np.asarray(points, dtype=float)
     t0s = np.asarray(t0s, dtype=float).reshape(-1)
 

@@ -68,6 +68,25 @@ jobs:
             bsm3/core/boundary_surface_movement/geometry.py \
             bsm3/core/boundary_surface_movement/intersections.py
 
+      - name: Numpydoc checks for projection and preprocessing
+        run: |
+          python -m ruff check --select D \
+            bsm3/core/projections/function_set_closest_distance_custom_op.py \
+            bsm3/core/projections/function_set_evaluation_custom_op.py \
+            bsm3/core/projections/function_set_projection_custom_op.py \
+            bsm3/core/projections/orthogonality_projection_numpy.py \
+            bsm3/core/projections/warm_start_candidate_projection_numpy.py \
+            bsm3/core/projections/warm_start_projections.py \
+            bsm3/preprocessing/__init__.py \
+            bsm3/preprocessing/components.py \
+            bsm3/preprocessing/gmsh.py \
+            bsm3/preprocessing/intersections.py \
+            bsm3/preprocessing/mesh_io.py \
+            bsm3/preprocessing/movement.py \
+            bsm3/preprocessing/quad_conversion.py \
+            bsm3/preprocessing/stl.py \
+            bsm3/preprocessing/symmetry.py
+
       - name: Fast derivative gate
         run: python -m pytest -q tests/test_derivative_gate.py
 

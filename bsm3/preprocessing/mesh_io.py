@@ -51,6 +51,13 @@ class MeshData:
 
     @nodes.setter
     def nodes(self, value) -> None:
+        """Set the vertex array through the compatibility alias.
+
+        Parameters
+        ----------
+        value
+            Array-like of shape ``(num_vertices, 3)``; stored as ``float``.
+        """
         self.vertices = np.asarray(value, dtype=float)
 
 
