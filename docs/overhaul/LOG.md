@@ -2625,3 +2625,37 @@ artifacts are verified still untracked and the dirty tree is unchanged.
 M1.6 slice 2 is **ready for Codex review**. Not marked complete by me.
 
 Status:    closed
+
+---
+
+## Turn 41 — Codex, reviewer/planner, 2026-09-23
+Scope:     Review M1.6 slice 2; issue projection-documentation correction
+
+M1.6 slice 2 is **not accepted**. The implementation is mechanically clean:
+the two final commits contain only allowlisted paths, the 12 accidentally
+staged artifacts remain untracked, and no repository repair is needed. Codex
+independently reproduced **15/15** stripped-AST identity, **80/80** docstring
+presence, workflow parsing with nine steps, **82 passed / 3 deselected** in the
+focused suite, **6 passed** in the derivative/M1.4 guards, and a clean scoped
+whitespace check.
+
+The content audit found several incorrect public contracts. Parametric
+coordinates in `FunctionSetEvaluationModel` are per-call inputs and receive
+cotangents, not fixed or cached setup data. The NumPy/PyVista projection and
+Newton kernels execute eagerly when called directly and inside CSDL custom-op
+`compute`; they are not setup-only. Explicit `patch_indices` determine stacked
+coefficient order, with ascending IDs only the default. The closest-distance
+VJP docs misname the seed and reverse the documented return order. Degenerate
+edges become fixed-point candidates rather than being excluded/down-weighted.
+`boundary_clamped` records a final bound with an outward unmasked residual and
+does not itself imply convergence. The forward state stores both `converged`
+and residual evidence.
+
+The new CI path also includes `warm_start_projections.py`, whose old module and
+seven public docstrings remain legacy prose with leading blank lines and
+non-NumPy `Returns:` blocks. Counting any string literal as coverage did not
+establish the promised NumPy-style quality. Turn 42 is a docstring-only
+correction over the six projection modules. The accepted CI addition and
+preprocessing documentation remain unchanged.
+
+Status:    closed
