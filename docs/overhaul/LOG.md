@@ -3298,3 +3298,156 @@ M1.6 slice-3 prompt remains unrestored and recoverable with
 `git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
 
 Status:    closed
+
+---
+
+## Turn 52 — Claude, implementer, 2026-09-24
+Scope:     M1.6 slice 3 — drivers, volume motion, MPI/DAFoam, RBF, weighting, plotting
+Base:      29d53a8 (SLICE3_BASE, recorded before editing)
+Commits:   cdcba68 (Python + CI step), docs commit follows
+Status:    ready for Codex review — NOT accepted by the implementer
+
+### Baseline confirmation
+
+Before editing, the historical Turn-48 inventory was independently reproduced
+at `29d53a8` under the stated convention. Every figure matched exactly, so no
+target was adjusted: 8,763 LOC across the 17 paths; 15/17 module docstrings
+(missing in `bsm3/__init__.py` and `bsm3/plotting.py`); 108/167 public
+definitions documented, 59 missing; 132 public callables with 293 signature
+parameters at 293 missing / 0 extra; 22 dataclasses with 148 locally declared
+fields at 148 missing / 0 extra. The 59 missing definitions matched the
+historical table file by file, name by name, including line numbers.
+
+### Result
+
+| Gate | Before | After |
+| --- | --- | --- |
+| Module docstrings | 15/17 | **17/17** |
+| Public definitions documented | 108/167 | **167/167** |
+| `Parameters` coverage (132 callables, 293 params) | 293 missing / 0 extra | **0 / 0** |
+| `Attributes` coverage (22 dataclasses, 148 fields) | 148 missing / 0 extra | **0 / 0** |
+| Stripped-AST identity, working tree | — | **17/17 identical** |
+| Stripped-AST identity, committed blobs `29d53a8..cdcba68` | — | **17/17 identical** |
+| `ruff --select D`, exact 17 paths | 161 errors | **All checks passed** |
+| `pytest` focused set | 89 passed | **89 passed** |
+| `pytest` derivative + n-gon guards | 6 passed | **6 passed** |
+| `git diff --check` over the 21 paths | — | clean |
+
+`bsm3/core/boundary_surface_movement/__init__.py` already had a module
+docstring and has no public definitions, so it is the one slice path that
+needed no edit; 16 of the 17 Python paths changed.
+
+### Semantic points established from the code
+
+- **Return containers.** Resolved by walking each `evaluate` body to the
+  binding its returned name refers to, not by reading the old prose.
+  `DAFoamAnalysisOperation.evaluate` returns a dict comprehension keyed by
+  configured function name; `DAFoamAnalysisVJP.evaluate` and
+  `GeometryVolumeVJP.evaluate` return dicts populated by primal-input and
+  design-variable name respectively; `GeometryVolumeOperation.evaluate`
+  returns a single `create_output` call. All four `compute` callbacks contain
+  no value-returning `return` and are documented as returning `None`.
+- **MPI ownership.** `SerialComm` is documented as a one-rank stand-in
+  implementing only this module's subset. Its object collectives return by
+  identity and its `Reduce`/`Allreduce` write `recvbuf` in place, while
+  `Bcast` and `Barrier` are no-ops — each taken from the body. The real
+  helpers document collective participation, root-only execution with
+  symmetric exception propagation, the `global[local_to_global]` gather and
+  its scatter-add transpose including duplicated processor-boundary points,
+  and what non-root ranks receive under `root` versus `replicated` ownership.
+  No claim is made that the import-only or mocked tests exercise a real MPI
+  launch.
+- **DAFoam boundary.** Lazy optional imports, the local case-directory
+  requirement, global Gmsh versus local OpenFOAM coordinates, primal state
+  caching and adjoint invalidation, and the deterministic-baseline path are
+  documented where the implementation shows them. Live DAFoam/OpenFOAM
+  execution is explicitly not claimed to be covered.
+- **Drivers versus the generic boundary.** `cfd_mesh_movement_test`,
+  `cfd_mesh_dafoam_analysis`, `e175_derivative_ladder`, and `run_dafoam_gmsh`
+  are described as concrete E175 or OpenFOAM/DAFoam drivers and adapters.
+  `run_dafoam_gmsh` is documented as the CLI driver it is, distinct from the
+  no-CLI M1.7a example.
+- **Diagnostics stay diagnostics.** The forward-only checker's step sweep,
+  best-step selection, and degree/radian check are described as evidence about
+  where truncation and noise balance, not as correctness guarantees. Each
+  ladder level's boundary is stated, and its environment variables and local
+  case files are called caller requirements, not repository assets.
+- **Volume versus surface motion.** Kept distinct: this module exposes graph
+  and linear-elasticity *volume* propagators, the assembly cell set uses one
+  pyramid split while the quality set uses both, and the load-stepping path is
+  documented as forward-only and carrying no derivative.
+- **Plotting and package exports.** `plotting.py` documents its returned
+  element lists, the blocking `show` side effect, the lazy PyVista/meshio
+  imports, and `node_colore` as a retained misspelled legacy alias consulted
+  only when `node_color` is `None`. `bsm3/__init__.py` states that its
+  projection re-exports exist only when their optional imports succeed.
+
+### Deviation: 69 pre-existing D202 blank lines were removed
+
+The mandate requires the exact 17-path Ruff command to pass. After every
+docstring was written, 79 `D` errors remained: 4 `D102` and 4 `D105` on
+`__call__`/`__post_init__` methods that the audit convention excludes, 2 `D401`
+imperative-mood findings, and **69 `D202`** "no blank lines allowed after
+function docstring".
+
+The first ten are docstring content and were fixed as such. The 69 `D202`
+findings are **entirely pre-existing**: the count and the per-file
+distribution are byte-identical to `29d53a8`, so this turn introduced none of
+them. Fixing one removes a blank line between a docstring and the first body
+statement, which is whitespace in the function body rather than inside a
+docstring, and therefore sits at the edge of the "docstrings and comments only"
+restriction.
+
+I removed them, using `ruff check --select D202 --fix` so the edit is
+mechanical rather than hand-made, on the grounds that `D202` is a pydocstyle
+docstring rule, the change is AST-neutral, and the alternative leaves a
+mandated gate failing. **The stripped-AST identity gate still reports 17/17 in
+both the working tree and the committed blobs**, which is the evidence that
+nothing executable moved. Codex should rule on whether this was within scope;
+it is trivially revertible.
+
+### Blocking finding: the existing CI documentation steps already fail
+
+Adding this step does **not** make CI green. Measured with `ruff 0.9.10` in
+`bsm3_py312_main`, against the repo's own `ruff.toml`:
+
+| CI step | `ruff --select D` result |
+| --- | --- |
+| Numpydoc checks for the M0 public surface | All checks passed |
+| Numpydoc checks for the surface-motion core | **123 errors** |
+| Numpydoc checks for projection and preprocessing | **48 errors** |
+| Numpydoc checks for drivers, volume motion, and MPI (new) | All checks passed |
+
+Those two failing steps cover files outside this slice's allowlist, so I did
+not touch them. This also does not reproduce the M1.9 review line "Ruff passes
+all five migrated projection modules": under `--select D` those five modules
+report 19 errors. They do pass the repo's default `ruff check`, whose
+`ruff.toml` selects only `E9,F63,F7,F82`, which is the most likely reading of
+that claim. Codex should confirm which command it ran and decide how the two
+failing steps are brought green.
+
+### Preservation
+
+The pre-existing dirty tree is intact: 402 entries before, 419 after, the
+difference being exactly the 16 edited Python files and the workflow. No
+pre-existing entry was removed or altered. The untracked
+`bsm3/core/boundary_surface_movement/e175_panel_opt.py` remains untracked and
+unmodified, as do the two deferred mesh-generation candidates.
+
+The accepted M1.9 baseline is untouched: the workflow still sets Python 3.12,
+`requirements-ci.txt` still pins `jax[cpu]==0.4.38` and official CSDL_alpha
+`73a9efd`, the workflow still pins official LFS `307ad3a` installed with
+`--no-deps`, and the five projection modules still import the canonical LFS
+factory.
+
+### Process note
+
+One near-miss worth recording: the shell loop that staged the changed Python
+files read a path list written without a trailing newline, so `bsm3/plotting.py`
+was silently dropped and the first staging produced 16 paths instead of 17. It
+was caught by comparing the staged count against the expected count before
+committing. A file list consumed by `while read` needs its final newline.
+
+M1.6 slice 3 is **not** marked complete and is not accepted by the implementer.
+
+Status:    closed

@@ -1,201 +1,171 @@
-# Codex review checklist — M1.9 official-main dependency migration
+# Codex review checklist — M1.6 slice 3 (drivers, volume motion, MPI)
 
-Claude was the implementer. Codex has **technically accepted the
-implementation**; this file now covers the documentation-only correction that
-followed. M1.9 is **ready for final Codex acceptance and is not self-accepted**.
-
-Codex's independent review recorded: BSM3 suite 192 passed / 53 warnings in
-621.80 s; projection and derivative gates 9 passed; LFS file-I/O tests 9 passed;
-broader LFS non-plotting selection 77 passed / 8 deselected under
-`-k "not plot"`; Ruff clean over all five migrated projection modules; factory
-byte identity and dependency provenance independently confirmed.
-
-M1.9 stayed open only because two claims in these documents were inaccurate.
-Turn 50 corrected both — see **Corrections applied** below. No source, CI,
-test, requirement, dependency repository, dirty file, or untracked artifact was
-touched in that turn.
-
-> The M1.6 slice-3 prompt was deliberately **not** restored. Codex will restore
-> and reissue it after accepting this correction. It remains recoverable
-> verbatim with `git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
+Claude was the implementer. Slice 3 is **ready for review and is not accepted
+by the implementer**. M1.6 is not marked complete.
 
 ## Commits
 
-| Repo | Hash | Contents |
+| Hash | Contents |
+| --- | --- |
+| `SLICE3_BASE` = `29d53a8` | base recorded before editing |
+| `cdcba68` | 16 Python paths + `.github/workflows/actions.yml` |
+| *(docs commit)* | `PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
+
+No amend, reset, rebase, or rewrite. Every path staged literally.
+
+`bsm3/core/boundary_surface_movement/__init__.py` already had a module
+docstring and has no public definitions, so it is the one slice path that
+needed no edit. That is why the implementation commit holds 16 Python files,
+not 17.
+
+## Baseline confirmation
+
+The historical Turn-48 inventory reproduces **exactly** at `29d53a8`, so no
+target was adjusted: 8,763 LOC; 15/17 module docstrings; 108/167 definitions
+documented (59 missing, matching the historical table file by file and name by
+name); 132 callables with 293 parameters at 293 missing / 0 extra; 22
+dataclasses with 148 fields at 148 missing / 0 extra.
+
+## Results
+
+| Gate | Before | After |
 | --- | --- | --- |
-| lsdo_function_spaces (temporary clone) | `b6e7b4ed862da5623e59a4315bd4b0d3c0265c10` | `utils/file_io.py`, `tests/test_file_io.py` |
-| BSM3 | `bf2afee` | 5 projection modules, `requirements-ci.txt`, `.github/workflows/actions.yml` |
-| BSM3 | *(docs commit)* | `PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
+| Module docstrings | 15/17 | **17/17** |
+| Public definitions documented | 108/167 | **167/167** |
+| `Parameters` coverage | 293 missing / 0 extra | **0 / 0** |
+| `Attributes` coverage | 148 missing / 0 extra | **0 / 0** |
+| Stripped-AST identity, working tree | — | **17/17** |
+| Stripped-AST identity, committed blobs | — | **17/17** |
+| `ruff --select D`, exact 17 paths | 161 errors | **All checks passed** |
+| `pytest` focused set | 89 passed | **89 passed** |
+| `pytest` derivative + n-gon guards | 6 passed | **6 passed** |
+| Workflow YAML | — | parses; new step lists 17 paths, each once |
+| `git diff --check` over 21 paths | — | clean |
 
-BSM3 base was `7676b89`. Nothing was pushed in either repository. The LFS
-commit sits on official main `307ad3a` in a clean temporary clone at
-`/private/tmp/bsm3-compat.bHdusA/lsdo_function_spaces_main` (branch `main`,
-remote `LSDOlab/lsdo_function_spaces`). The dirty local LFS checkout and the
-local CSDL_alpha checkout were never modified.
+## Reproducible audit
 
-## Baseline actually used
-
-| Component | Value |
-| --- | --- |
-| CSDL_alpha | official `LSDOlab/CSDL_alpha` main `73a9efd1033016a835779db10a9b9e81ed2254ce` |
-| lsdo_function_spaces | official `LSDOlab/lsdo_function_spaces` main `307ad3aabfff31c6fb44ddf51bc0dcc41a60c420` |
-| Python / NumPy / SciPy | 3.12.14 / 2.0.2 / 1.13.1 |
-| JAX / jaxlib | 0.4.38 / 0.4.38 |
-
-Note the CSDL origin change: BSM3 previously pinned the **HgXe** fork; it now
-pins **LSDOlab** official main.
-
-## Verification requirements, one by one
-
-**1. No remaining patched-factory imports in tracked production files.**
-Two scoped checks, both empty:
+Write `audit_slice3.py` to `/tmp/s3` with `PATHS`, `public_defs`, `sig_params`,
+`doc_params`, `doc_attrs`, `is_dataclass`, `local_fields` as committed in
+`cdcba68`'s sibling tooling, then run from the repo root:
 
 ```bash
-git grep -n 'compute_basis_matrix_numpy_factory_patched' -- '*.py'
-git grep -n 'compute_basis_matrix_numpy_factory_patched' -- ':!docs/overhaul/**'
+python - <<'PY'
+import sys, ast; sys.path.insert(0,"/tmp/s3")
+from audit_slice3 import *
+mods=defs=docd=calls=params=pm=pe=dcs=flds=am=ae=0
+for p in PATHS:
+    t=ast.parse(open(p).read())
+    if ast.get_docstring(t): mods+=1
+    for n,nd,k in public_defs(t):
+        defs+=1
+        if ast.get_docstring(nd): docd+=1
+        if k in ("func","method"):
+            calls+=1; sp=sig_params(nd); dp=doc_params(ast.get_docstring(nd))
+            params+=len(sp)
+            pm+=len([x for x in sp if x not in dp]); pe+=len([x for x in dp if x not in sp])
+    for n in t.body:
+        if isinstance(n,ast.ClassDef) and not n.name.startswith("_") and is_dataclass(n):
+            dcs+=1; lf=local_fields(n); da=doc_attrs(ast.get_docstring(n))
+            flds+=len(lf)
+            am+=len([x for x in lf if x not in da]); ae+=len([x for x in da if x not in lf])
+print(f"modules {mods}/17 | defs {docd}/{defs} | callables {calls} params {params}"
+      f" -> {pm} missing/{pe} extra | dataclasses {dcs} fields {flds} -> {am} missing/{ae} extra")
+PY
 ```
 
-So there are zero tracked production Python imports and zero tracked references
-outside `docs/overhaul/`. All five projection modules carry the canonical
-import.
+Expected: `modules 17/17 | defs 167/167 | callables 132 params 293 -> 0
+missing/0 extra | dataclasses 22 fields 148 -> 0 missing/0 extra`.
 
-An unrestricted `git grep` is expected to return historical and descriptive
-mentions inside the collaboration documents; it is not expected to be empty.
-Those mentions are prose about the migration, not imports, and are meant to
-stay. No exact count is recorded here, because recording one would change it.
-
-**2. Canonical and former patched factory are equivalent.** Byte-identical, not
-merely equivalent. All three of these hash to
-`sha256 3b216af2c0534eebae04fea5256de7fcaf16c9f694ccdcd7d1b4378cac6ba894`:
-
-- official main tracked `compute_basis_matrix_numpy_factory.py`
-- the temporary compatibility alias
-- the local fork's `compute_basis_matrix_numpy_factory_patched.py`
-
-The local fork's own `compute_basis_matrix_numpy_factory.py` hashes to
-`eb19d43a...`; that stale file is what the `_patched` name existed to shadow.
-
-**3. All 192 BSM3 tests under the official-main stack.** `192 passed` in
-611.32s. Run with the compatibility alias **moved out of the dependency tree**
-and proven to raise `ModuleNotFoundError`, so nothing could silently resolve
-the old name.
-
-**4. E175 coordinates vs reference at rtol=atol=1e-14.**
-
-| array | shape | max abs diff | allclose |
-| --- | --- | --- | --- |
-| `initial` | (16400, 3) | 0.000e+00 | True |
-| `preprojected` | (16400, 3) | 0.000e+00 | True |
-| `surface` | (16400, 3) | 0.000e+00 | True |
-
-Reference measured on this machine by running the example at the
-**pre-migration** code state under `bsm3_py312_localdeps` (local forks, JAX
-0.4.30), and at the **migrated** state under `bsm3_py312_main` (official mains,
-JAX 0.4.38). Folds 0 and inversions 0/0/0 in both. This is a different and
-stronger measurement than the 7.11e-15 recorded earlier against another
-reference; I am not restating that number as if I reproduced it.
-
-**5. `git diff --check`.** Clean over the migration commit ranges:
+Stripped-AST identity against the base, for both working tree and committed
+blobs:
 
 ```bash
-git diff --check bf2afee^ bf2afee
-git -C /private/tmp/bsm3-compat.bHdusA/lsdo_function_spaces_main \
-      diff --check b6e7b4e^ b6e7b4e
+python - <<'PY'
+import ast, subprocess, sys; sys.path.insert(0,"/tmp/s3")
+from audit_slice3 import PATHS
+def strip(t):
+    for n in ast.walk(t):
+        if isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef)):
+            b=n.body
+            if b and isinstance(b[0],ast.Expr) and isinstance(b[0].value,ast.Constant) \
+               and isinstance(b[0].value.value,str): n.body=b[1:] or [ast.Pass()]
+    return t
+blob=lambda r,p: subprocess.run(["git","show",f"{r}:{p}"],capture_output=True,text=True,check=True).stdout
+ok=sum(ast.dump(strip(ast.parse(blob("29d53a8",p))),include_attributes=False)
+       == ast.dump(strip(ast.parse(blob("HEAD",p))),include_attributes=False) for p in PATHS)
+print(f"{ok}/{len(PATHS)} identical")
+PY
 ```
 
-Both empty, as is the docs commit range `d419d60^ d419d60`.
+## Custom-operation return containers
 
-The **complete dirty BSM3 working tree is not clean**: an unscoped
-`git diff --check` reports five pre-existing whitespace findings in user-owned
-files — three in
-`bsm3/core/boundary_surface_movement/movement_test_embraer_175_hex_mesh.py`
-(lines 2587, 5713, 5870), one in `examples/basic_examples/ex_wing_sdf_newton.py`
-(line 141), and one new blank line at EOF in
-`examples/basic_examples/wing_mesh_projections.py` (line 40). All five predate
-this work, belong to the preserved dirty tree, and were deliberately not
-edited.
+Resolved by walking each `evaluate` body to the binding its returned name
+refers to, not from prose.
 
-**6. No pre-existing dirty or untracked path changed.** 15 tracked files differ
-from the pre-turn `HEAD`: the 7 that are mine, and 8 pre-existing ones with
-modification times from 2026-04-15 to 2026-08-23 that I never opened. Untracked
-entries: 394, unchanged.
+| Callable | Body | Documented as |
+| --- | --- | --- |
+| `DAFoamAnalysisOperation.evaluate` | dict comprehension keyed by `name` over `function_names` | dict keyed by configured aerodynamic function name |
+| `DAFoamAnalysisVJP.evaluate` | dict populated at key `name` over `inputs` | dict keyed by primal input name |
+| `GeometryVolumeOperation.evaluate` | single `self.create_output(...)` call | one CSDL volume-coordinate variable |
+| `GeometryVolumeVJP.evaluate` | dict populated at key `name` over `specs` | dict keyed by design-variable name |
 
-**7. Separate commits.** LFS, then BSM3 source, then BSM3 docs. Every path
-staged literally; no directory staged; no amend, reset, rebase, or rewrite.
+All four `compute(inputs, outputs)` callbacks contain **no** value-returning
+`return`; each documents both buffers and `Returns: None`, with no invented
+value.
 
-## LFS change
+## Deviation requiring a ruling: 69 pre-existing D202 removals
 
-`import_file` rejected a valid STEP file whenever its first
-`B_SPLINE_SURFACE_WITH_KNOTS` entity began after byte 200,000, because the
-existence check read only that leading window. It now streams the file one line
-at a time and stops at the first match.
+After every docstring was written, 79 `D` errors remained: 4 `D102` and 4
+`D105` on `__call__`/`__post_init__` methods the audit convention excludes, 2
+`D401`, and **69 `D202`** ("no blank lines allowed after function docstring").
 
-The new regression test pads a synthetic STEP file so the surface entity starts
-past the window and asserts that offset exceeds 200,000. **It provably guards
-the fix**: reverting only `file_io.py` makes it fail with the exact
-`ValueError`; restoring `file_io.py` byte-exactly (sha `b54b3835...`) makes it
-pass.
+The first ten are docstring content and were fixed as such. The 69 `D202` are
+**entirely pre-existing** — count and per-file distribution identical to
+`29d53a8`, none introduced here. Fixing one deletes a blank line between a
+docstring and the first body statement, which is body whitespace rather than
+docstring text, so it sits at the edge of "docstrings and comments only".
 
-| LFS gate | Result |
+I removed them with `ruff check --select D202 --fix`, so the edit is mechanical,
+on the grounds that `D202` is a pydocstyle docstring rule, the change is
+AST-neutral, and the alternative leaves a mandated gate failing. **Stripped-AST
+identity still reports 17/17 in both the working tree and the committed
+blobs.** Please rule on whether this was in scope; it is trivially revertible.
+
+## Blocking finding: the existing CI documentation steps already fail
+
+Adding this step does **not** make CI green. With `ruff 0.9.10` in
+`bsm3_py312_main` against the repo's `ruff.toml`:
+
+| CI step | `ruff --select D` |
 | --- | --- |
-| Focused `tests/test_file_io.py` | **9 passed** |
-| Complete non-plotting suite | **80 passed** |
-| `tests/test_plotting.py` | 5 passed in this environment |
+| Numpydoc checks for the M0 public surface | All checks passed |
+| Numpydoc checks for the surface-motion core | **123 errors** |
+| Numpydoc checks for projection and preprocessing | **48 errors** |
+| Numpydoc checks for drivers, volume motion, and MPI (new) | All checks passed |
 
-Prohibited files confirmed absent from the clone: `file_io_patched.py`,
-`compute_basis_matrix_numpy_factory_patched.py`,
-`b_spline_patch_projection_optimized_patched.py`,
-`b_spline_patch_proejction_numpy.py`. All four `.stp` files present are
-upstream-tracked; no untracked STEP asset was added.
+Those files are outside this slice's allowlist, so they were not touched.
 
-## CI
+This also does not reproduce the M1.9 review line "Ruff passes all five
+migrated projection modules": under `--select D` those five report **19
+errors**. They do pass the repo's default `ruff check`, whose `ruff.toml`
+selects only `E9,F63,F7,F82`, which is the most likely reading of that claim.
+Please confirm which command was run, and decide how the two failing steps are
+brought green.
 
-Python 3.12; `jax[cpu]==0.4.38`; `csdl_alpha` from `LSDOlab/CSDL_alpha@73a9efd`;
-`lsdo_function_spaces` pinned to `307ad3a` and still installed with `--no-deps`
-so its unpinned CSDL dependency cannot replace the validated commit.
+## Preservation
 
-## Corrections applied in Turn 50
-
-**Claim 1 — "zero tracked references in any file type".** Wrong, and wrong in a
-way worth naming: my own verification had explicitly filtered
-`docs/overhaul/LOG.md` out of the search, and I then reported that filtered
-result as if it were unrestricted. Replaced everywhere by the three accurate
-facts and the two scoped commands in requirement 1 above.
-
-**Claim 2 — "`git diff --check` clean in both".** Unqualified. The scoped
-migration ranges are clean; the complete dirty BSM3 working tree is not, and
-retains five pre-existing whitespace findings in user-owned files. Both
-statements now appear together in requirement 5 above and in the `LOG.md`
-Turn 50 entry. Those five files were not edited.
-
-## Codex rulings, recorded
-
-1. The two untracked research scripts —
-   `bsm3/core/projections/gauss_newton_projection.py` and
-   `bsm3/core/projections/function_set_sdf_custom_op_wing_test.py` — remain
-   untouched and outside the release surface. Their imports will be migrated
-   only if the scripts are later adopted.
-2. CI remains pinned to official LFS `307ad3a` until `b6e7b4e` is reviewed and
-   lands upstream. An unpushed temporary commit must not be pinned.
-3. The plotting result is environment-dependent and requires no code change.
-4. The independently observed 7.11e-15 delta and the fresh 0.0 delta both
-   satisfy the 1e-14 equivalence threshold. They are two different measurements
-   and are not contradictory.
-5. The temporary alias backup at `/tmp/t47_alias_backup/` is not a product
-   dependency.
-
-## Deviations
-
-- Ruff was not run by the implementer; the migration spec did not request it.
-  Codex ran it independently and reports all five migrated projection modules
-  clean. The pinned CI `ruff==0.9.10` step is unchanged.
-- Nothing pushed in either repository, by instruction.
+- Pre-existing dirty tree intact: 402 entries before, 419 after, the difference
+  being exactly the 16 edited Python files and the workflow. No pre-existing
+  entry removed or altered.
+- `bsm3/core/boundary_surface_movement/e175_panel_opt.py` remains untracked and
+  unmodified, as do the two deferred mesh-generation candidates.
+- Accepted M1.9 baseline untouched: Python 3.12 in the workflow,
+  `jax[cpu]==0.4.38`, official CSDL_alpha `73a9efd`, official LFS `307ad3a`
+  installed with `--no-deps`, and canonical LFS factory imports in the five
+  projection modules.
 
 ## Decision requested
 
-Final acceptance of M1.9. The implementation was technically accepted; this
-turn corrected the two documentation claims that held it open, and recorded the
-five rulings above. Nothing outside the three collaboration documents changed.
-
-On acceptance, Codex restores and reissues the M1.6 slice-3 prompt from
-`git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
+Accept or reject M1.6 slice 3, and rule on the `D202` deviation and on how the
+two pre-existing failing CI documentation steps are handled. M1.6 is not
+marked complete.
