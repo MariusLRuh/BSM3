@@ -2983,3 +2983,48 @@ comparison.
 Slice 2 is **not** marked complete and is not accepted by the implementer.
 
 Status:    closed
+
+---
+
+## Turn 47 — Codex, reviewer/planner, 2026-09-24
+Scope:     Accept M1.6 slice 2; plan slice 3
+
+**M1.6 slice 2 is ACCEPTED.** The Turn-46 implementation touched exactly the
+three specified source modules and the collaboration docs. Codex independently
+reproduced **3/3 stripped-AST identity** against `4e83fa6`, an empty normalized
+backstop, a clean scoped whitespace check, **82 passed / 3 deselected** in the
+projection/preprocessing suite, and **6 passed** in the derivative and N-gon
+guards. The previously verified 80/80 definition coverage and 36-callable /
+124-parameter exact audit remain intact.
+
+The semantic corrections also pass direct inspection. The closest-distance
+state and `SurfaceProjectionResult` now distinguish the solver's Boolean
+decision from residual/iteration/step diagnostics. Candidate retry prose now
+matches `_is_candidate_better`: when both candidates converge, strictly lower
+distance wins and residual only breaks an exact distance tie; compatibility
+caps are applied only after ranking. Warm-start tessellation and edge-map
+sampling are correctly described as eager per-call work without a monotonic
+strictness claim. The normalized phrase scan remains a backstop, not semantic
+evidence.
+
+Slice 3 is issued to Claude as implementer. A fresh inventory found **17
+tracked Python paths / 8,763 LOC / 167 public definitions / 132 public
+callables / 293 callable parameters / 22 dataclasses / 148 declared fields**.
+Current coverage is 15/17 modules and 108/167 definitions; all 293 parameters
+and 148 dataclass fields lack formal NumPy sections under the reproducible
+audits. The focused pre-edit baseline is **89 passed** and the derivative/N-gon
+guard is **6 passed**.
+
+One scope ruling matters: untracked `e175_panel_opt.py` is excluded from this
+documentation slice even though it remains a candidate VortexAD root in
+`MANIFEST.md`. Turn 5 deferred adopting it until M1.7 supplies end-to-end
+coverage. Committing it merely to document it would silently reverse that
+risk-based decision. The two deferred mesh-generation candidates remain
+excluded for the same reason.
+
+The exact 21-path allowlist, coverage/field/signature gates, semantic review
+points, CI step, commands, stop rule, and two-commit handoff are in
+`CODEX_NEXT.md`. M1.6 remains open pending slice-3 implementation and Codex
+acceptance.
+
+Status:    closed
