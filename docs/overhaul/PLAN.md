@@ -265,7 +265,7 @@ nothing in the end state and removes the risk of silently dropping live code.
 | M1.5 | Decide the `bsm3.meshgen` boundary without adopting untested local scripts. The only credible STEP-to-surface implementation is a circular, untracked 4,758-LOC pair, so implementation is deferred to M3 pending a minimal API, fixture, and end-to-end test. | Codex | **COMPLETE** — disposition: defer adoption to M3 (Turn 24), accepted Turn 25 | Core imports nothing from mesh-generation scripts; the candidate closure and prerequisites for later adoption are recorded in `MANIFEST.md`. |
 | M1.6 | Numpydoc docstrings across the public surface of the live core. **M1.6 owns the documentation debt that M0.4 staged out of CI**: repo-wide critical ruff currently reports 398 errors in legacy/experimental files, and the measured numpydoc baseline is 0 sectioned public definitions. Widening the CI lint gate from the M0 file list to the retained manifest is part of this task. | Codex | **slice 1 of 3 COMPLETE** (`1c402e9`, accepted Turn 29 — 132/132); slices 2-3 OPEN | ruff pydocstyle clean over the retained manifest; coverage >=90% of public defs; CI lint scope widened from the M0 file list. |
 | M1.8 | **New (Turn 5).** Retire the internal legacy polygon-pickle branch in the E175 pipeline. Turn 4 made the *public* importer safe by removing `.pkl` from suffix dispatch, but the pipeline retains an internal trusted-pickle path, and `bsm3/core/projections/refitted_fun_set.pkl` is an untracked executable pickle used as a warm-start default. Convert `wall_surface.pkl` to `.npz` per `ASSETS.md` and delete the branch. | Codex | not started | No pickle load remains reachable from any retained root except through an explicitly named trusted API; `wall_surface.pkl` replaced by a non-executable container with identical coordinates and connectivity. |
-| M1.7a | Runnable, documented E175 surface-deformation example using only the generalized API and tracked curated assets, protected by an end-to-end integration smoke test. | Claude implements; Codex plans/reviews | **TURN-37 REVIEW: FUNCTIONALLY COMPLETE; DOC-ONLY CORRECTION OPEN** — external LFS/BSM3 coefficients are proven end to end, but the public `GeometryModel` narrative still describes a built-in-only abstraction and contains one false layering claim | No CLI or `mesh_kind`; paths and high-level values editable in one uncluttered main script; five executable stages; no example-local dataclass/callback/polygon helpers; compact namespace API; no `Config` suffix; `GeometryModel` is a neutral motion declaration/binding container, while externally produced stacked LFS/BSM3 component coefficients are a first-class input; recorder lifecycle is explicit; initial/preprojection/final inversion reports are distinct; clean-clone tri and real quad paths retain their numerical gates. |
+| M1.7a | Runnable, documented E175 surface-deformation example using only the generalized API and tracked curated assets, protected by an end-to-end integration smoke test. | Claude implements; Codex plans/reviews | **COMPLETE — accepted Turn 39** (`537742f`, `f0b0eac`, `6df3ef2`) | No CLI or `mesh_kind`; paths and high-level values editable in one uncluttered main script; five executable stages; no example-local dataclass/callback/polygon helpers; compact namespace API; no `Config` suffix; `GeometryModel` is a neutral motion declaration/binding container, while externally produced stacked LFS/BSM3 component coefficients are a first-class input; recorder lifecycle is explicit; initial/preprojection/final inversion reports are distinct; clean-clone tri and real quad paths retain their numerical gates. |
 | M1.7 | Acceptance run. Must exercise a **STEP-to-VortexAD path** if practical, alongside the surface-motion path — the VortexAD root is the one the Turn-1 trace missed entirely, so it is the least protected by existing tests. **Turn-27 carry-ins:** (a) consider a `TypedDict` for `GraphDistanceWeighting.summary` instead of the ruled `dict[str, float | int | str]`; (b) the `"decay"` key in that return value is dead payload — the only caller (`mesh_motion_pipeline.py:941`) never reads it — so removing it would allow `dict[str, float | int]`. Both are public-return changes, deliberately out of scope for the M1.6 docstring slices. | Codex | not started | Generalized driver reproduces current R4 output within tolerance; derivative gate passes; quad and mixed-N-gon examples clean; a STEP-to-VortexAD path runs end to end or is recorded as impractical with the reason. |
 
 **Turn-28 user steering.** After M1.6 slice 1 is reviewed, prioritize a
@@ -284,6 +284,33 @@ every test we have, so it is both the one mandatory capability (decision 6) and
 the one with no working regression. Proving it before the refactor means the
 refactor has a gate; proving it after means the refactor is unguarded on
 exactly the code path the user made mandatory.
+
+---
+
+### Turn-39 Codex review: **M1.7a ACCEPTED**
+
+The Turn-38 documentation-only correction is accepted. Codex independently
+reproduced stripped-AST identity for all three Python files, reran the focused
+suite (**22 passed, 6 integration tests deselected**), confirmed the rejected
+claims are absent, and found the scoped diff whitespace-clean. The new public
+narrative accurately makes externally produced differentiable coefficients the
+primary boundary and describes the topology/layout and recorder constraints.
+
+The lack of local Ruff in `central_geom` remains an external CI verification
+item, not an implementation blocker: executable AST is unchanged, the files
+were already inside the pinned CI doc-lint gate, and manual inspection found no
+new NumPy-doc convention issue. A CI failure must still be corrected before
+release.
+
+M1.7a's functional evidence remains the accepted Turn-36 evidence: external
+0.35 m relative wing coefficients through final reprojection with analytic/FD
+relative error 4.21e-14; full-scale triangle 0/0/0 inversions and 0 folds;
+quad 114/114/114 with no new IDs; full clean-clone suite 178 passed / 1 skipped
+and an unchanged checkout.
+
+The active sequence is now M1.6 slice 2 (projections + preprocessing), M1.6
+slice 3 (drivers + MPI/DAFoam), M1.8 pickle retirement, then full M1.7
+acceptance including STEP-to-VortexAD if practical.
 
 ---
 

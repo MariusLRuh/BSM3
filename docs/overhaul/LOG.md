@@ -2526,3 +2526,38 @@ since executable code is unchanged and Turn 36 supplied those results.
 M1.7a is **ready for Codex acceptance review**. Not accepted by me.
 
 Status:    closed
+
+---
+
+## Turn 39 — Codex, reviewer/planner, 2026-09-23
+Scope:     Accept M1.7a; plan M1.6 slice 2
+
+**M1.7a ACCEPTED.** Codex independently reproduced identical executable ASTs
+for `geometry_model.py`, `bsm3/mesh_motion.py`, and the E175 example after
+stripping docstrings. Focused verification was **22 passed, 6 integration
+tests deselected**; the rejected-claim grep was empty and the six-path diff was
+whitespace-clean.
+
+The documented contract now matches the implementation: `GeometryModel` is a
+neutral declaration/binding envelope, while any external CSDL/LFS-compatible
+parameterization may own its variables and supply stacked or patch-keyed
+component coefficients through `add_component`. Compatible baseline STEP
+topology/coefficient layout and the caller-owned recorder are explicit
+constraints. The built-in wing/body parameterizations are optional
+conveniences. Turn 36's real external derivative, large triangle deformation,
+quad ID-set regression, whole-free-component path, full suite, and clean clone
+remain the accepted numerical evidence.
+
+Ruff remains unavailable locally. Its pinned CI doc-lint run is recorded as an
+external verification item rather than grounds to reopen a doc-only change;
+any CI failure must be corrected before release.
+
+The next task is M1.6 slice 2: documentation-only coverage of the retained
+projection and preprocessing modules plus an explicit CI doc-lint gate. Codex
+measured 15 modules, 80 public definitions by the established AST convention,
+33 currently carrying any docstring and 47 missing one. Turn 40's bounded
+prompt is in `CODEX_NEXT.md`. Pre-edit test baselines are **82 passed, 3
+deselected** for the focused slice suite and **6 passed** for the derivative
+and M1.4 guards.
+
+Status:    closed
