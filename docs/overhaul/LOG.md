@@ -2714,3 +2714,35 @@ M1.6 slice 2 correction is **ready for Codex review**. Not marked complete by
 me.
 
 Status:    closed
+
+---
+
+## Turn 43 — Codex, reviewer/planner, 2026-09-24
+Scope:     Review Turn-42 correction; issue a semantic/completeness correction
+
+M1.6 slice 2 remains **not accepted**. Codex independently reproduced **6/6**
+stripped-AST identity, **80/80** docstring presence, **82 passed / 3
+deselected**, **6 passed** in the derivative/M1.4 guards, and clean path,
+history, and whitespace checks.
+
+The rejection check itself was insufficient. It searched individual lines, so
+the false phrase `reject or down-weight` survived when wrapped across adjacent
+lines even though the grep returned empty. A whitespace-normalized inspection
+also found the untouched `FunctionSetEvaluationModel` class docstring still
+claiming that coordinates are fixed at construction and use a cached basis
+row. The old contradictory `boundary_clamped` field comment remains.
+
+Return contracts are also wrong: four custom-VJP `evaluate` methods return
+keyed dictionaries but document tuples, while `unsort` returns a list and
+accepts `*arrays_sorted` but documents a tuple and `*arrays`. Finally, a
+signature-to-NumPy-section audit found **79 missing parameter names across 36
+public callables**, including 29 of 30 parameters on
+`project_points_with_warm_start_candidates_numpy`. NumPy-style presence is not
+useful public documentation without these contracts.
+
+Turn 44 retains the same six-module, documentation/comment-only boundary. It
+uses whitespace-normalized source rejection, requires exact parameter
+coverage with no missing or extra names, corrects return containers, and keeps
+all existing numerical gates.
+
+Status:    closed

@@ -1,88 +1,187 @@
-# Codex review checklist — Turn 43 (M1.6 slice 2 correction)
+# Claude Turn 44 — finish M1.6 slice 2 documentation accurately
 
-Claude implemented Turn 42, documentation and comments only. Codex owns the
-ruling. Base commit `c5728e3`. **Slice 2 is not marked complete by Claude.**
+You are the **implementer**. Codex is the **planner/reviewer**. M1.6 slice 2
+remains open. Turn 42 preserved all behavior and fixed much of the prose, but
+the review found wrapped false claims, wrong return containers, one untouched
+contradictory class docstring, and incomplete parameter documentation. Finish
+the six projection modules, verify with semantic audits that do not depend on
+line wrapping, append corrective commits, and hand back to Codex. Do not mark
+slice 2 complete yourself.
 
-## Commits and changed paths
+## Literal path allowlist
 
-| Commit | Paths |
-|---|---|
-| `5c6452e` | the six projection modules |
-| docs commit | `docs/overhaul/PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
+Only these nine paths may change:
 
-- [ ] Six + three paths, **zero allowlist violations**. Every file staged by
-      literal path; no directory, glob, or `-A`.
-- [ ] Appended after `b99b4a4`; no amend, reset, rebase, or rewrite.
-- [ ] `.github/workflows/actions.yml` **untouched** — the accepted 15-path CI
-      step is unchanged. Preprocessing modules untouched.
+1. `bsm3/core/projections/function_set_closest_distance_custom_op.py`
+2. `bsm3/core/projections/function_set_evaluation_custom_op.py`
+3. `bsm3/core/projections/function_set_projection_custom_op.py`
+4. `bsm3/core/projections/orthogonality_projection_numpy.py`
+5. `bsm3/core/projections/warm_start_candidate_projection_numpy.py`
+6. `bsm3/core/projections/warm_start_projections.py`
+7. `docs/overhaul/PLAN.md`
+8. `docs/overhaul/LOG.md`
+9. `docs/overhaul/CODEX_NEXT.md`
 
-## Mechanical proof
+Only docstrings and comments may change in the Python modules. Do not touch
+the accepted workflow, preprocessing, tests, imports, annotations, signatures,
+constants, decorators, or executable statements. Preserve every unrelated
+dirty-tree path. Stage literal files only. Stop and report rather than widening
+the allowlist or changing behavior.
 
-- [ ] **6/6** stripped ASTs identical under
-      `ast.dump(..., include_attributes=False)` after recursively removing
-      leading string-literal docstrings from every module, class, function,
-      and async function.
-- [ ] Coverage **80/80** over all 15 slice modules; module docstrings
-      **15/15**.
-- [ ] **New style audit**: every module and public definition in the six
-      projection modules checked for a missing/blank first line, a summary
-      without terminal punctuation, a trailing blank line, or a legacy
-      `Returns:`/`Args:` heading. **0 failures**, down from 4.
-- [ ] Rejection greps **empty** across the six modules.
+## Known semantic errors to correct
 
-## Contract corrections — each verified against the body
+Correct all instances, not just these line references:
 
-| Correction | Evidence |
-|---|---|
-| kernels are **eager**, not setup-only; construction caches topology/metadata/spaces/row spans/tessellation | call sites and `compute` bodies |
-| `evaluate` declares graph I/O and derivatives; `compute` calculates and caches state in `shared_state` | wrapper bodies |
-| stacked order follows `model.patch_ids` ← `patch_indices`, ascending only by default | lines 420-425 |
-| coefficient shape `(total_control_points, physical_dimension)`; half-open `start:stop` spans | `PatchInfo` |
-| parametric coordinates are **per-call**, shape `(N, 3)`, columns `[patch_id, u, v]` | `evaluate` signature |
-| evaluation VJP returns `(d_coefficients, d_parametric_coordinates)`; patch-ID cotangent zero, `u`/`v` from tangents | return statement; only cols 1-2 written |
-| three `output_mode` measures, signed only under an SDF mode | validation at lines 440-443 |
-| forward state has `converged`, `iterations` **and** residual | `project` return dict |
-| `boundary_clamped` = bound + outward **unmasked** residual, independent of `converged` | computed line 370, before the active set at 372 |
-| candidates **ranked**: converged first, then distance; residual then distance otherwise | `rank = 0 if converged else 1` |
-| degenerate edges get a **fixed-point candidate**, detected from sampled arc length | `if edge_is_degenerate: _append_candidate_spec(...)` |
-| `compute_vjp(d_distances, forward_state) -> (d_points, d_coefficients)` | signature and return |
-| `compute_vjp_vjp -> (dd_points, dd_coefficients, dd_d_distances)` | return statement |
-| parametric output `(N, 3)` with zero-derivative patch-ID column; physical `(N, physical_dimension)` | projection op |
+1. `function_set_evaluation_custom_op.py:99-105` still calls the model
+   setup-time state, says coordinates are fixed at construction, and says each
+   point uses a cached basis row. Coordinates are supplied per call; only patch
+   metadata, spaces, and row spans are cached. Evaluation/VJP run eagerly.
+2. `function_set_closest_distance_custom_op.py:1086-1102` still says an edge
+   is detected from coincident control points and used to “reject or
+   down-weight” a candidate. The body measures sampled tessellation-boundary
+   arc length and returns entries only for edges at or below the scale-aware
+   threshold. The candidate builder replaces the 1-D edge solve with a
+   fixed-point candidate.
+3. `orthogonality_projection_numpy.py:101-105` retains a field comment saying
+   `boundary_clamped` means convergence occurred only because of masking. Make
+   the comment agree with the corrected attribute prose: final bound plus
+   outward unmasked residual, independent of `converged`.
+4. The `evaluate` methods on `FunctionSetClosestDistanceVJP`,
+   `FunctionSetClosestDistanceVJPVJP`, `FunctionSetEvaluationVJP`, and
+   `FunctionSetProjectionVJP` return dictionaries keyed by the differentiated
+   input names, not tuples. Document the exact keys and value meanings; do not
+   invent tuple order for a mapping.
+5. `warm_start_projections.unsort` accepts `*arrays_sorted` and returns a
+   `list[numpy.ndarray]`, not `*arrays` and not a tuple.
+6. Replace “converged parametric coordinates” wherever the result can contain
+   a non-converged fallback. Use “final” or “selected” and retain the separate
+   `converged` evidence.
+7. The candidate module's opening claim that it always keeps the closest
+   converged result must acknowledge the minimum-residual fallback when no
+   candidate converges.
 
-- [ ] Spot-check any of these against the implementation.
-- [ ] Trusted-local-only pickle warnings retained on
-      `load_function_set_from_pickle` and `load_function_set`.
+## Complete the public callable contracts
 
-## NumPy style
+An AST/signature audit currently finds **36 public callables and 79 signature
+parameters absent from NumPy `Parameters` sections**. Bring that to zero
+missing and zero extra. This is deliberately stricter than Ruff's presence
+rules.
 
-- [ ] `warm_start_projections.py`: module docstring and **all ten** public
-      definitions converted from legacy prose (leading blank line, free-form
-      `Returns:`) to genuine NumPy sections. Turn 40 counted their presence as
-      coverage without checking style; that gap is closed and the audit now
-      fails on it.
+- Document every non-`self`/non-`cls` positional, keyword-only, variadic, and
+  mapping-buffer parameter using its exact signature name. Grouped entries
+  such as `inputs, outputs` are fine when both names are recoverable.
+- For `*arrays_sorted`, retain the leading `*` in the documented name.
+- Document shapes, patch/control-point ordering, tolerances, flags, and failure
+  behavior where they affect use. The 30-argument
+  `project_points_with_warm_start_candidates_numpy` API must explain every
+  option rather than listing names without meaning.
+- Add all missing fields to `EvaluationPatchInfo`'s `Attributes` section:
+  `degrees`, `knot_vectors`, `coefficient_shape`, and `space_cache` as well as
+  the fields already described.
+- Every value-returning public callable must document its actual container and
+  semantic order. Framework `compute(inputs, outputs)` callbacks return
+  `None`; document the two buffers but do not add a fictitious return value.
+- Preserve the trusted-local pickle warnings.
 
-## Verification
+For the four VJP mappings, pin these return keys:
 
-- [ ] Focused suite **82 passed / 3 deselected** — matches baseline.
-- [ ] Derivative gate + both M1.4 tests **6 passed** — matches baseline.
-- [ ] `git diff --check` clean over all nine paths.
-- [ ] **Ruff unavailable in `central_geom`**; attempted and recorded, nothing
-      installed. The pinned CI step is authoritative and still **unverified
-      locally**.
-- [ ] No E175 integration or clean-clone rerun, per the spec.
+- closest-distance VJP: `"coefficients"`, `"points"`;
+- closest-distance VJP-of-VJP: `"coefficients"`, `"points"`,
+  `"d_closest_distance"`;
+- evaluation VJP: `"coefficients"`, `"parametric_coordinates"`; and
+- point/parametric projection VJP: `"coefficients"`, `"points"`.
 
-## Deviations
+## Mechanical and semantic enforcement
 
-Two replacement strings in my first pass differed from the file only in line
-wrapping, so they silently failed to match and left `d_output_measure` and
-"Degenerate edges are excluded" in place. The rejection grep caught both and
-they were corrected by exact-span replacement. This is the reason the spec's
-rejection greps exist, and they worked.
+Record the base before editing:
 
-No stop rule fired. No other deviation.
+```bash
+TURN44_BASE=$(git rev-parse HEAD)
+```
 
-## Remaining M1 scope
+Run the established recursive stripped-docstring AST comparison over all six
+Python files. Expected: **6/6 identical**. Re-run the full slice inventory:
+**80/80** public definitions documented and **15/15** module docstrings.
 
-M1.6 slice 3 (drivers, MPI/DAFoam), then M1.8 pickle retirement, then full
-M1.7 acceptance. M1.7 carry-ins stand: the
-`GraphDistanceWeighting.summary` `TypedDict` and its dead `"decay"` key.
+Extend the AST documentation audit so it checks all 36 public callables:
+
+- extract signature parameters excluding `self` and `cls`, including
+  keyword-only arguments and `*args`/`**kwargs` with their prefixes;
+- parse the NumPy `Parameters` section, splitting grouped names on commas;
+- require exact set equality per callable; and
+- print every mismatch plus aggregate totals.
+
+Expected after the edit: **0 missing, 0 extra**. Include the audit code or an
+exact reproducible command in the handoff checklist, not just the result.
+
+Line-based grep is not authoritative: Turn 42's `reject or` / `down-weight`
+wrap proved it can miss a phrase. Run a Python check over each file after
+collapsing every whitespace run to one space and lowercasing. It must reject
+all of these normalized phrases:
+
+```text
+setup-time numpy state
+fixed at construction
+cached basis row
+reject or down-weight
+converged only because the active set masked
+tuple of csdl_alpha.variable
+closest converged result
+converged parametric coordinates
+```
+
+Also retain the first-line/style audit: cleaned AST docstrings must have no
+missing/blank summaries, summaries without terminal punctuation, or legacy
+`Returns:`/`Args:` headings. Check the raw string separately for a leading
+newline (the legacy opening-blank pattern); do not misclassify indentation
+before a closing triple quote as a trailing blank line.
+
+Manually compare every changed return contract against the actual `return`
+statement. In the checklist, enumerate the four VJP mapping key sets and the
+`unsort` list return explicitly.
+
+## Numerical and lint gates
+
+Run:
+
+```bash
+conda run -n central_geom python -m pytest -q \
+  tests/test_function_set_projection_numpy.py \
+  tests/test_warm_start_retry_regression.py \
+  tests/test_preprocessing_plotting.py \
+  tests/test_curated_assets.py \
+  tests/test_boundary_surface_movement.py -m "not integration"
+
+conda run -n central_geom python -m pytest -q \
+  tests/test_derivative_gate.py \
+  tests/test_ngon_affine_operator.py \
+  tests/test_ngon_affine_load_step.py
+
+python -m ruff check --select D \
+  bsm3/core/projections/function_set_closest_distance_custom_op.py \
+  bsm3/core/projections/function_set_evaluation_custom_op.py \
+  bsm3/core/projections/function_set_projection_custom_op.py \
+  bsm3/core/projections/orthogonality_projection_numpy.py \
+  bsm3/core/projections/warm_start_candidate_projection_numpy.py \
+  bsm3/core/projections/warm_start_projections.py
+
+git diff --check -- <the nine literal allowlisted paths>
+```
+
+Expected tests remain **82 passed / 3 deselected** and **6 passed**. Ruff is
+still unavailable in `central_geom`; attempt it, record that limitation, and
+do not install or change dependencies. The pinned CI step remains the final
+external lint gate.
+
+## Commit and handoff
+
+Append one Python-docstring correction commit after the current history; do
+not amend, reset, rebase, or rewrite prior commits. Then make one collaboration
+docs commit. Stage every path literally.
+
+Update M1.6 to **slice 2 second correction ready for Codex review**, not
+complete. Append Turn 44 to `LOG.md` without rewriting history. Replace this
+file with a Codex checklist containing both new hashes, exact paths, 6/6 AST
+identity, 80/80 coverage, the reproducible 36-callable parameter audit with
+0/0 results, normalized-source rejection result, exact return-container audit,
+test counts, Ruff status, and deviations. Hand back to Codex.
