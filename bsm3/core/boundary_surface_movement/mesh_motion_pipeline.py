@@ -580,8 +580,8 @@ def _setup_geometry_and_mesh(
 
     started_at = time.perf_counter()
     paths = _resolve_model_paths(input_files, config)
-    component_specs = tuple(geometry.component_records)
-    intersection_specs = tuple(geometry.intersection_records)
+    component_specs = tuple(geometry._component_records)
+    intersection_specs = tuple(geometry._intersection_records)
     # ``lsdo_function_spaces`` writes its STEP-import cache relative to the
     # process working directory. Contain that third-party side effect next to
     # the configured cache directory so a run never dirties the checkout.
@@ -846,7 +846,7 @@ def _parameterize_geometry(
     steps: list[dict[int, Any]] = []
     for load_fraction in load_fractions:
         step: dict[int, Any] = {}
-        for spec in geometry.component_records:
+        for spec in geometry._component_records:
             component = setup.components[spec.name]
             step[id(component)] = spec.coefficient_builder(
                 component,
@@ -897,7 +897,7 @@ def _build_intersections_and_graph(
     )
     free_regions = [
         spec.free_region_factory(setup.components[spec.name])
-        for spec in geometry.component_records
+        for spec in geometry._component_records
     ]
     free_ids = bsm3.core.boundary_surface_movement.select_free_vertices(
         free_regions=free_regions,
@@ -910,7 +910,7 @@ def _build_intersections_and_graph(
     )
     projection_ids: dict[str, np.ndarray] = {}
     claimed = np.empty(0, dtype=np.int64)
-    for spec in geometry.component_records:
+    for spec in geometry._component_records:
         component_free_ids = np.intersect1d(
             free_ids, setup.component_ids[spec.name]
         )
@@ -923,7 +923,7 @@ def _build_intersections_and_graph(
         projection_ids[spec.name] = np.setdiff1d(candidate, claimed)
         claimed = np.union1d(claimed, projection_ids[spec.name])
     deformation_vertex_ids = np.concatenate(
-        [projection_ids[spec.name] for spec in geometry.component_records]
+        [projection_ids[spec.name] for spec in geometry._component_records]
     ).astype(np.int64)
 
     distance = config.surface.distance_weighting
@@ -1079,7 +1079,7 @@ def _reproject_and_reevaluate(
     """Solve load steps, reproject selected nodes, and reevaluate the rest."""
 
     projection_metadata = []
-    for spec in geometry.component_records:
+    for spec in geometry._component_records:
         component = setup.components[spec.name]
         vertex_ids = system.projection_ids[spec.name]
         if spec.projection_mode == "lifting_surface":
@@ -1115,9 +1115,9 @@ def _reproject_and_reevaluate(
         parametric_coords=setup.initial_parametric_coordinates,
         components=[
             setup.components[spec.name]
-            for spec in geometry.component_records
+            for spec in geometry._component_records
         ],
-        names=[spec.projection_name for spec in geometry.component_records],
+        names=[spec.projection_name for spec in geometry._component_records],
     )
     surface = config.surface
     distortion = surface.distortion_penalty

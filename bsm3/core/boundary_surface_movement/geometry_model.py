@@ -274,13 +274,13 @@ class GeometryModel:
         return dict(self._design_variables)
 
     @property
-    def component_records(self) -> list[_ComponentRecord]:
-        """Compiled private component records consumed by the pipeline."""
+    def _component_records(self) -> list[_ComponentRecord]:
+        """Private compiled component records; pipeline boundary only."""
         return list(self._components)
 
     @property
-    def intersection_records(self) -> list[_IntersectionRecord]:
-        """Compiled private intersection records consumed by the pipeline."""
+    def _intersection_records(self) -> list[_IntersectionRecord]:
+        """Private compiled intersection records; pipeline boundary only."""
         return list(self._intersections)
 
     def design_variable(
@@ -331,10 +331,11 @@ class GeometryModel:
                 "state."
             ) from error
         variable = csdl.Variable(name=name, value=float(value))
-        if lower is not None or upper is not None or scaler is not None:
-            variable.set_as_design_variable(
-                lower=lower, upper=upper, scaler=scaler
-            )
+        # Always register: the method is named design_variable, so an
+        # unbounded control must still reach the optimizer.
+        variable.set_as_design_variable(
+            lower=lower, upper=upper, scaler=scaler
+        )
         self._design_variables[name] = variable
         return variable
 

@@ -302,7 +302,12 @@ def identify_reevaluated_vertices(
     kept_patch_ids = np.rint(coordinates[kept_ids, 0]).astype(np.int64)
     for component, name in zip(component_list, names):
         patch_ids = set(int(key) for key in component.functions)
-        local_mask = np.asarray([patch_id in patch_ids for patch_id in kept_patch_ids])
+        # Explicit dtype: np.asarray([]) is float64, which makes the
+        # bitwise-and below raise when no vertex is reevaluated.
+        local_mask = np.asarray(
+            [patch_id in patch_ids for patch_id in kept_patch_ids],
+            dtype=bool,
+        )
         local_mask &= ~assigned
         local_ids = kept_ids[local_mask]
         if local_ids.size:
