@@ -88,6 +88,15 @@ def build_sampled_patches_mesh(
     function_set
         Object whose ``evaluate(parametric_coordinates=(patch_id, uv))`` accepts
         ``uv`` of shape ``(M, 2)`` and returns points of shape ``(M, 3)``.
+    patch_indices
+        Patches to sample, in the order given. Patches are triangulated
+        independently and then merged.
+    Nu, Nv
+        Number of grid samples along the u and v directions of every patch.
+        Each patch contributes ``Nu * Nv`` vertices.
+    u_range, v_range
+        Inclusive parametric sampling bounds as ``(start, stop)``, defaulting to
+        the full unit interval in each direction.
 
     Returns
     -------
@@ -387,6 +396,20 @@ def generate_edge_neighbor_seeds(
     A seed close to a patch boundary may belong on the adjoining patch, so an
     extra candidate set is emitted for each such crossing.
 
+    Parameters
+    ----------
+    patch_id
+        Seed patch per point, shape ``(N,)``.
+    uv0
+        Seed parametric coordinates, shape ``(N, 2)``, aligned with ``patch_id``.
+    edge_map
+        Patch adjacency keyed by ``(patch_id, edge_name)``. Edges absent from
+        the map produce no crossing candidate.
+    eps_edge
+        Parametric half-width of the band that counts as near an edge: a seed
+        within ``eps_edge`` of a bound is treated as a candidate for crossing
+        that edge.
+
     Returns
     -------
     list of tuple
@@ -437,6 +460,12 @@ def pick_best_newton_result(
 
     Parameters
     ----------
+    points
+        Query points, shape ``(N, 3)``.
+    candidates
+        Candidate seed sets as ``(patch_id, uv0)`` pairs, each entry the same
+        length as ``points``; typically the output of
+        :func:`generate_edge_neighbor_seeds`.
     newton_project_fn
         Batched callable returning ``(xproj, uv, dist2)`` for a given
         ``(points, patch_id, uv0)``.
@@ -608,13 +637,15 @@ def unsort(inv_order: np.ndarray, *arrays_sorted):
     ----------
     inv_order
         Inverse permutation produced by :func:`sort_by_patch`.
-    *arrays
-        Arrays to restore.
+    *arrays_sorted
+        Arrays in sorted order to restore, each indexed along its leading axis
+        by ``inv_order``.
 
     Returns
     -------
-    tuple
-        The arrays in their pre-sort order.
+    list of numpy.ndarray
+        The arrays in their pre-sort order, one entry per array passed in and in
+        the same order. Always a list, even for a single array.
     """
     return [np.asarray(a)[inv_order] for a in arrays_sorted]
 

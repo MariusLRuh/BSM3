@@ -285,10 +285,23 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
     def evaluate(self, inputs, d_outputs):
         """Declare the reverse seed and the cotangent outputs.
 
+        Parameters
+        ----------
+        inputs
+            Mapping of the forward operation's inputs, holding
+            ``"coefficients"`` and ``"points"``.
+        d_outputs
+            Mapping of reverse seeds, holding the forward operation's output
+            name: ``"parametric_coordinates"`` when the operation returns
+            parametric output, otherwise ``"projected_points"``.
+
         Returns
         -------
-        tuple of csdl_alpha.Variable
-            Coefficient and point cotangents.
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by the differentiated input name:
+            ``"coefficients"`` with the stacked coefficient shape, and
+            ``"points"`` with shape ``(N, physical_dimension)``. The mapping is
+            keyed, not ordered.
         """
         coefficients = inputs["coefficients"]
         points = inputs["points"].reshape(-1, self.model.physical_dimension)
@@ -308,7 +321,26 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
         }
 
     def compute(self, inputs, outputs):
-        """Compute the cotangents eagerly and populate ``outputs``."""
+        """Compute the cotangents eagerly and populate ``outputs``.
+
+        Reuses the forward state cached by the forward operation when it
+        matches the current coefficients and points, and otherwise re-solves
+        the projection for them.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"``, ``"points"``, and the seed
+            ``"d_output"``.
+        outputs
+            Output buffer written in place with ``"d_points"`` and
+            ``"d_coefficients"``.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_output = np.asarray(inputs["d_output"], dtype=float)
@@ -386,6 +418,19 @@ class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBe
         """Compute the projection eagerly and populate ``outputs``.
 
         The forward state is cached in ``shared_state`` for the reverse pass.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"`` and ``"points"``.
+        outputs
+            Output buffer written in place under this operation's output name,
+            ``"parametric_coordinates"`` or ``"projected_points"``.
+
+        Returns
+        -------
+        None
+            The result is written into ``outputs``.
         """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)

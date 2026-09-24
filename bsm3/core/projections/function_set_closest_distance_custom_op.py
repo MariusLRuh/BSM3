@@ -1084,22 +1084,34 @@ class FunctionSetProjectionModel:
         return normals
 
     def build_degenerate_edge_map(self, mesh: pv.PolyData) -> Dict[Tuple[int, str], float]:
-        """Measure how collapsed each parametric boundary edge is.
+        """Identify the parametric boundary edges that have collapsed.
 
-        A patch edge whose control points nearly coincide cannot supply a reliable
-        warm-start candidate, so its measured extent is recorded and used to reject or
-        down-weight that candidate during projection.
+        For each patch edge, the sampled tessellation boundary is walked and its
+        arc length summed. An edge is reported as collapsed when that arc length
+        is at or below a scale-aware threshold, ``max(degenerate_edge_length_atol,
+        degenerate_edge_length_rtol * bounding_box_diagonal)``, where the diagonal
+        is taken from ``mesh``. Edges above the threshold are omitted entirely, so
+        the returned mapping is a membership test for collapsed edges rather than
+        a length table for every edge.
+
+        The candidate builder uses that membership: for a listed edge it replaces
+        the one-dimensional solve along the edge with a single fixed-point
+        candidate, since a collapsed edge cannot support a solve along its length.
+        Nothing here rejects or reweights a candidate.
 
         Parameters
         ----------
         mesh
-            Tessellated surface built from the current coefficients.
+            Tessellated surface built from the current coefficients. Supplies
+            both the sampled edge polylines and the bounding-box diagonal that
+            makes the threshold scale-aware.
 
         Returns
         -------
         dict
-            Maps ``(patch_id, edge_name)`` to that edge's extent. Smaller values mean
-            a more degenerate edge.
+            Maps ``(patch_id, edge_name)`` to the measured arc length, containing
+            an entry only for edges at or below the threshold. Empty when no edge
+            has collapsed.
         """
         mesh_points = np.asarray(mesh.points, dtype=float)
         diag = float(np.linalg.norm(mesh_points.max(axis=0) - mesh_points.min(axis=0)))
@@ -1165,10 +1177,12 @@ class FunctionSetProjectionModel:
         output_measure : numpy.ndarray
             One scalar per query point.
         state : dict
-            Forward state reused by the reverse passes: converged parametric
-            coordinates, projected points, raw and squared distances, the sign and
-            inside mask, reference normals, the Newton residual, and the degenerate
-            edge map for this coefficient state.
+            Forward state reused by the reverse passes: the final parametric
+            coordinates selected for each point, projected points, raw and squared
+            distances, the sign and inside mask, reference normals, the Newton
+            residual, and the degenerate edge map for this coefficient state. The
+            coordinates are the selected candidate, which for a point that did not
+            converge is the minimum-residual fallback rather than a solution.
 
         Notes
         -----
@@ -1717,9 +1731,11 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
 
         Returns
         -------
-        tuple of csdl_alpha.Variable
-            Point and coefficient cotangents, matching the model's
-            ``(d_points, d_coefficients)`` order.
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by the differentiated input name:
+            ``"coefficients"`` with the stacked coefficient shape, and
+            ``"points"`` with shape ``(N, physical_dimension)``. The mapping is
+            keyed, not ordered.
         """
         coefficients = inputs["coefficients"]
         points = inputs["points"].reshape(-1, self.model.physical_dimension)
@@ -1744,7 +1760,22 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
         }
 
     def compute(self, inputs, outputs):
-        """Compute the first-order cotangents eagerly and populate ``outputs``."""
+        """Compute the first-order cotangents eagerly and populate ``outputs``.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"``, ``"points"``, and the seed
+            ``"d_closest_distance"``.
+        outputs
+            Output buffer written in place with ``"d_points"`` and
+            ``"d_coefficients"``.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
@@ -1775,12 +1806,23 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
     def evaluate(self, inputs, d_outputs):
         """Declare the second-order reverse inputs and outputs.
 
+        Parameters
+        ----------
+        inputs
+            Mapping of the first-order VJP's inputs, holding
+            ``"coefficients"``, ``"points"``, and ``"d_closest_distance"``.
+        d_outputs
+            Mapping of second-order seeds on the first-order cotangents,
+            holding ``"d_coefficients"`` and ``"d_points"``.
+
         Returns
         -------
-        tuple of csdl_alpha.Variable
-            Cotangents for the points, the coefficients, and the first-order
-            seed, matching the model's
-            ``(dd_points, dd_coefficients, dd_d_distances)`` order.
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by the differentiated input name:
+            ``"coefficients"`` with the stacked coefficient shape, ``"points"``
+            with shape ``(N, physical_dimension)``, and
+            ``"d_closest_distance"`` with shape ``(N,)`` for the first-order
+            seed. The mapping is keyed, not ordered.
         """
         coefficients = inputs["coefficients"]
         points = inputs["points"].reshape(-1, self.model.physical_dimension)
@@ -1805,7 +1847,23 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
         }
 
     def compute(self, inputs, outputs):
-        """Compute the second-order cotangents eagerly and populate ``outputs``."""
+        """Compute the second-order cotangents eagerly and populate ``outputs``.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"``, ``"points"``,
+            ``"d_closest_distance"``, and the second-order seeds
+            ``"d_d_coefficients"`` and ``"d_d_points"``.
+        outputs
+            Output buffer written in place with ``"dd_points"``,
+            ``"dd_coefficients"``, and ``"dd_d_closest_distance"``.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
@@ -1877,8 +1935,16 @@ class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperat
 
         Parameters
         ----------
-        inputs, outputs
-            CSDL operation buffers. ``outputs`` receives the output measure.
+        inputs
+            Mapping holding ``"coefficients"`` and ``"points"``.
+        outputs
+            Output buffer written in place with ``"closest_distance"``, one
+            value per query point in the configured ``output_mode``.
+
+        Returns
+        -------
+        None
+            The result is written into ``outputs``.
         """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)

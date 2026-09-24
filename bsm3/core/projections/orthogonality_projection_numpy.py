@@ -69,7 +69,9 @@ class SurfaceProjectionResult:
     Attributes
     ----------
     uv
-        Converged parametric coordinates, shape ``(num_points, 2)``.
+        Final parametric coordinates, shape ``(num_points, 2)``. These are the
+        last iterate, which for a point whose ``converged`` entry is ``False``
+        is not a solution; ``converged`` is the only convergence evidence.
     projected_points
         Surface points at ``uv``.
     residual
@@ -98,10 +100,12 @@ class SurfaceProjectionResult:
     dist2: np.ndarray
     converged: np.ndarray
     iterations: np.ndarray
-    # True for points that "converged" only because the active set masked an
-    # outward-pointing residual at a patch boundary (u or v pinned at 0/1). Such
-    # points sit on a patch edge but may want to slide across it onto a
-    # neighbouring patch; the warm-start driver routes them into the retry path.
+    # True where the final parameter sits on a bound (u or v at 0/1) while the
+    # unmasked residual still points outward past it. Computed before the active
+    # set is applied, so it is independent of `converged` and does not by itself
+    # imply the point converged. Such points sit on a patch edge but may want to
+    # slide across it onto a neighbouring patch; the warm-start driver routes them
+    # into the retry path.
     # None for edge/point candidates that are on a boundary by construction.
     boundary_clamped: Optional[np.ndarray] = None
 
@@ -202,6 +206,14 @@ def make_surface_orthogonality_evaluator_numpy(
     query point, so it vanishes exactly when that offset is orthogonal to the
     surface.
 
+    Parameters
+    ----------
+    degrees
+        Per-direction B-spline degrees, ordered ``(u, v)``. Exactly two
+        directions are supported; anything else raises ``ValueError``.
+    knot_vectors
+        Per-direction knot vectors, ordered to match ``degrees``.
+
     Returns
     -------
     callable
@@ -299,15 +311,28 @@ def project_points_orthogonality_newton_numpy(
 
     Parameters
     ----------
+    points
+        Query points, shape ``(M, physical_dimension)``.
+    u0s
+        Initial parametric guesses, shape ``(M, 2)``, one per query point. They
+        are clipped into the unit square and snapped to its bounds before the
+        first iteration.
+    coeffs
+        Control points for the single patch being solved on, with the trailing
+        axis holding the physical dimension.
+    degrees
+        Per-direction B-spline degrees, ordered ``(u, v)``.
+    knot_vectors
+        Per-direction knot vectors, ordered to match ``degrees``.
     params
         Solve tolerances; see :class:`OrthogonalityNewtonParams`.
 
     Returns
     -------
     SurfaceProjectionResult
-        Converged coordinates and per-point convergence evidence. Non-converged
-        points are returned rather than raising, so the caller decides what to do
-        with them.
+        Final coordinates and per-point convergence evidence, including
+        ``boundary_clamped``. Points that did not converge are returned rather
+        than raising, so the caller decides what to do with them.
     """
     points = np.asarray(points, dtype=float)
     u0s = np.asarray(u0s, dtype=float)
@@ -408,9 +433,34 @@ def project_points_on_surface_edge_newton_numpy(
     remaining coordinate. This supplies the edge warm-start candidates used when a
     point's closest location may lie on or across a patch boundary.
 
+    Parameters
+    ----------
+    points
+        Query points, shape ``(M, physical_dimension)``.
+    t0s
+        Initial guesses for the free coordinate, flattened to shape ``(M,)``,
+        one per query point.
+    coeffs
+        Control points for the single patch being solved on, with the trailing
+        axis holding the physical dimension.
+    degrees
+        Per-direction B-spline degrees, ordered ``(u, v)``.
+    knot_vectors
+        Per-direction knot vectors, ordered to match ``degrees``.
+    fixed_axis
+        Which parametric axis is held fixed: ``0`` for u, ``1`` for v. Any other
+        value raises ``ValueError``.
+    fixed_value
+        The value that axis is held at, ``0.0`` or ``1.0``, selecting which of
+        the patch's four edges is solved on.
+    params
+        Solve tolerances; see :class:`OrthogonalityNewtonParams`.
+
     Returns
     -------
     SurfaceProjectionResult
+        Final coordinates and per-point convergence evidence, with the fixed
+        axis written back into ``uv`` alongside the solved free coordinate.
         ``boundary_clamped`` is ``None`` here, because these candidates are on a
         boundary by construction.
     """

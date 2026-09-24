@@ -84,8 +84,18 @@ class EvaluationPatchInfo:
     ----------
     patch_id
         Identifier of the patch inside the owning function set.
+    degrees
+        Per-parametric-direction B-spline degrees, ordered ``(u, v)``.
+    knot_vectors
+        Per-direction knot vectors, ordered to match ``degrees``.
+    coefficient_shape
+        Shape of this patch's coefficient array before stacking, with the
+        trailing axis holding the physical dimension.
     start, stop
         Half-open row range this patch occupies in the stacked coefficient array.
+    space_cache
+        Opaque B-spline space cache reused across calls to build basis
+        stencils for this patch. Built once per patch at construction.
     """
     patch_id: int
     degrees: tuple[int, ...]
@@ -97,12 +107,17 @@ class EvaluationPatchInfo:
 
 
 class FunctionSetEvaluationModel:
-    """Setup-time NumPy state for evaluating a function set at fixed points.
+    """NumPy evaluator for a function set at caller-supplied parametric points.
 
-    The parametric coordinates are fixed at construction, so evaluation is linear
-    in the coefficients: each output point is a cached basis row times that
-    patch's control points. This class is pure NumPy; the CSDL wrappers below hold
-    a reference to it.
+    Construction caches only per-patch metadata: degrees, knot vectors,
+    coefficient shapes, stacked row spans, and B-spline space caches. The
+    parametric coordinates are not bound when the model is built; they are
+    supplied per call to :meth:`evaluate` and :meth:`compute_vjp`, which build
+    the basis stencils for those coordinates on each call. Evaluation is linear in the
+    coefficients for a fixed set of coordinates, but it is nonlinear in the
+    coordinates themselves, which is why the VJP returns cotangents for both.
+    Both methods run eagerly in NumPy; the CSDL wrappers below hold a reference
+    to this object.
     """
     def __init__(
         self,
@@ -310,10 +325,22 @@ class FunctionSetEvaluationVJP(csdl.experimental.CustomExplicitOperationBeta):
     def evaluate(self, inputs, d_outputs):
         """Declare the reverse seed and both cotangent outputs.
 
+        Parameters
+        ----------
+        inputs
+            Mapping of the forward operation's inputs, holding
+            ``"coefficients"`` and ``"parametric_coordinates"``.
+        d_outputs
+            Mapping of reverse seeds, holding ``"evaluated_points"`` with the
+            shape of the forward output.
+
         Returns
         -------
-        tuple of csdl_alpha.Variable
-            Coefficient and parametric-coordinate cotangents, in that order.
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by the differentiated input name:
+            ``"coefficients"`` with the stacked coefficient shape, and
+            ``"parametric_coordinates"`` with shape ``(N, 3)``. The mapping is
+            keyed, not ordered.
         """
         coefficients = inputs["coefficients"]
         parametric_coordinates = inputs["parametric_coordinates"].reshape(-1, 3)
@@ -332,7 +359,22 @@ class FunctionSetEvaluationVJP(csdl.experimental.CustomExplicitOperationBeta):
         }
 
     def compute(self, inputs, outputs):
-        """Compute both cotangents eagerly and populate ``outputs``."""
+        """Compute both cotangents eagerly and populate ``outputs``.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"``, ``"parametric_coordinates"``,
+            and the seed ``"d_evaluated_points"``.
+        outputs
+            Output buffer written in place with ``"d_coefficients"`` and
+            ``"d_parametric_coordinates"``.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         parametric_coordinates = np.asarray(inputs["parametric_coordinates"], dtype=float).reshape(-1, 3)
         d_evaluated_points = np.asarray(inputs["d_evaluated_points"], dtype=float).reshape(-1, self.model.physical_dimension)
@@ -390,7 +432,20 @@ class FunctionSetEvaluationOperation(csdl.experimental.CustomExplicitOperationBe
         return evaluated_points
 
     def compute(self, inputs, outputs):
-        """Compute the evaluated points eagerly and populate ``outputs``."""
+        """Compute the evaluated points eagerly and populate ``outputs``.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"`` and ``"parametric_coordinates"``.
+        outputs
+            Output buffer written in place with ``"evaluated_points"``.
+
+        Returns
+        -------
+        None
+            The result is written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         parametric_coordinates = np.asarray(inputs["parametric_coordinates"], dtype=float).reshape(-1, 3)
         outputs["evaluated_points"] = self.model.evaluate(coefficients, parametric_coordinates)

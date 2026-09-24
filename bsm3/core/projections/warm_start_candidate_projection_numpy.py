@@ -3,7 +3,11 @@
 A single Newton solve seeded from one patch is not reliable near patch
 boundaries: the closest location may lie on an edge, or on a neighbouring
 patch entirely. This module builds several candidate seeds per query point,
-solves each, and keeps the closest converged result.
+solves each, and ranks them: a converged candidate always outranks a
+non-converged one, and the closest converged candidate wins. When no candidate
+converges, the point is not dropped — the minimum-residual candidate is kept as
+a fallback, and its ``converged`` flag stays ``False`` so the caller can tell
+the two cases apart.
 
 It also handles the two awkward cases that motivated it. A boundary edge whose
 sampled arc length has collapsed to nearly a point cannot support a
@@ -81,7 +85,9 @@ class WarmStartCandidateProjectionResult:
     patch_id
         Patch that won for each point.
     uv
-        Converged parametric coordinates on that patch.
+        Final parametric coordinates on that patch. For a point whose
+        ``converged`` entry is ``False`` these come from the minimum-residual
+        fallback and are not a solution.
     projected_points
         Surface points at ``uv``.
     dist2
@@ -422,6 +428,22 @@ def build_edge_neighbor_map(
     Matching is geometric: edges whose sampled points coincide within tolerance
     are treated as adjoining, and the sample ordering decides whether the shared
     edge runs forward or reversed.
+
+    Parameters
+    ----------
+    function_set
+        Function set whose patches are examined. Patch coefficients are read at
+        call time, so the map describes the geometry as it stands now.
+    patch_indices
+        Patches to consider, in the order given. ``None`` uses every patch in
+        ``function_set``.
+    num_samples
+        Number of points sampled along each of the four edges of every patch.
+        Higher values make matching stricter and more expensive.
+    atol
+        Absolute tolerance for deciding that two sampled edge points coincide.
+    rtol
+        Relative tolerance for the same test, scaled by the sampled geometry.
 
     Returns
     -------
@@ -1103,16 +1125,99 @@ def project_points_with_warm_start_candidates_numpy(
 
     Parameters
     ----------
+    function_set
+        Function set to project onto. Patch coefficients are read at call time.
+    points
+        Query points, shape ``(M, physical_dimension)``. Any other rank raises
+        ``ValueError``.
+    patch_indices
+        Patches to project onto, in the order given. ``None`` uses every patch
+        in ``function_set``, sorted ascending.
+    mesh
+        Pre-built tessellation used for the warm start. ``None`` builds one with
+        :func:`~bsm3.core.projections.warm_start_projections.build_sampled_patches_mesh`
+        at ``warm_start_nu`` by ``warm_start_nv`` samples per patch. Passing a
+        mesh avoids rebuilding it on every call.
+    warm_start_nu, warm_start_nv
+        Per-patch sampling resolution used only when ``mesh`` is ``None``.
+        Denser sampling gives better seeds at higher setup cost.
+    edge_map
+        Patch adjacency from :func:`build_edge_neighbor_map`. ``None`` builds one
+        with the ``edge_map_*`` arguments below.
     degenerate_edge_map
         Maps ``(patch_id, edge_name)`` to measured arc length for edges that
         have collapsed. ``None`` disables fixed-point substitution.
+    edge_map_num_samples, edge_map_atol, edge_map_rtol
+        Sample count and coincidence tolerances forwarded to
+        :func:`build_edge_neighbor_map`, used only when ``edge_map`` is ``None``.
+    eps_edge
+        Parametric half-width of the band that counts as "on an edge". A seed
+        within ``eps_edge`` of a bound contributes that edge's candidates. It
+        also sets the length scale of the local retry step and of the
+        geometric near-edge floor.
+    use_geometric_near_edges
+        Use the physical, grid-independent near-edge test instead of the
+        parametric ``eps_edge`` band when building the *first-pass* candidates.
+        Off by default.
+    use_geometric_retry_edges
+        Use that same physical test when building the *retry* edge candidates.
+        On by default.
+    near_edge_gap_atol
+        Absolute floor added to the projection-gap band in the geometric
+        near-edge test, keeping the band non-empty when a point lies essentially
+        on the surface.
+    near_edge_cell_factor
+        Multiplier on the one-sampling-cell floor (``2 * eps_edge`` times the
+        local tangent magnitude) in that same test. Larger values admit more
+        neighbouring patches.
+    retry_dist_outlier_ratio, retry_dist_outlier_atol
+        Wrong-basin detector. A point is retried when its Newton distance
+        exceeds ``ratio * warm_start_distance + atol``, which catches candidates
+        that converged to a spurious interior minimum without being
+        boundary-clamped. A ratio of zero or less disables the detector.
+    local_search_all_points
+        Run the multi-scale local retry on every point rather than only on
+        points needing retry. Off by default: it costs a full extra Newton sweep
+        and the outlier detector already finds the suspect nodes.
+    include_current_patch_boundary
+        Include candidates on the seed patch's own boundary edges.
+    include_neighbor_patch
+        Include a candidate in the neighbouring patch's interior, mapped across
+        the shared edge.
+    include_neighbor_boundary
+        Include a candidate on the neighbouring patch's matching boundary edge.
+    retry_on_failure
+        Enable the retry pass for points that did not converge, are
+        boundary-clamped, or are distance outliers. When ``False`` the
+        first-pass selection is final.
+    retry_num_closest_edges
+        How many of the nearest edges to add candidates for during retry.
+    retry_local_search
+        Enable the on-patch multi-scale local search within the retry pass.
+    retry_local_step_factor
+        Multiplier on ``eps_edge`` setting the local search's parametric step.
+    retry_accept_distance_factor, retry_accept_distance_atol
+        Acceptance guard: a retry candidate is only allowed to replace the
+        selected one when its distance is within
+        ``max(factor, 1.0) * selected_distance + max(atol, 0.0)``. This lets a
+        genuinely converged candidate win over a clamped one that is slightly
+        closer, without accepting a far-away result.
+    retry_normal_dot_min
+        Minimum dot product between the selected and retry surface normals when
+        the retry lands on a *different* patch, rejecting replacements that flip
+        to the opposite side of a thin body. Values at or below ``-1.0`` disable
+        the check; it never applies within one patch.
+    params
+        Newton tolerances forwarded to the per-candidate solves; see
+        :class:`~bsm3.core.projections.orthogonality_projection_numpy.OrthogonalityNewtonParams`.
 
     Returns
     -------
     WarmStartCandidateProjectionResult
         The accepted candidate per point together with its convergence
-        evidence and the seed it started from. Points that never converged are
-        returned rather than raising.
+        evidence and the seed it started from. A point for which no candidate
+        converged is returned with its minimum-residual fallback and
+        ``converged`` set to ``False`` rather than raising.
     """
     points = np.asarray(points, dtype=float)
     if points.ndim != 2:
