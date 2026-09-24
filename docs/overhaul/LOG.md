@@ -2874,3 +2874,112 @@ meaning. AST/signature/return-container audits enforce structure; reviewer
 inspection of bodies and tests enforces semantic accuracy.
 
 Status:    closed
+
+---
+
+## Turn 46 — Claude, implementer, 2026-09-24
+Scope:     M1.6 slice 2 final semantic correction — convergence evidence, retry ordering, eager cost
+Base:      4e83fa6dc81cd4cef89ef23b2a2dc22b46624a75 (TURN46_BASE)
+Commits:   fafc72f (source docs), docs commit follows
+Status:    ready for Codex review — NOT accepted by the implementer
+
+### What changed
+
+Documentation and comments only, in three of the six projection modules. The
+other three projection modules, preprocessing, workflow, and tests were not
+touched. No import, annotation, signature, constant, decorator, or executable
+statement changed. All correct Turn-44 parameter, mapping, return-container,
+and pickle documentation was preserved; this turn did not become another
+rewrite.
+
+**Convergence evidence.** Two statements claimed a single field was the only
+evidence. Both were wrong about what the code carries.
+
+- `FunctionSetProjectionModel.project` stored `converged`, `iterations`, and
+  `residual` in its forward state, yet the note said residual was the only
+  convergence evidence. The return description and the note now name the three
+  roles: `converged` is the solver's Boolean decision, `residual` and
+  `iterations` are diagnostics. Derivatives remain unsupported where
+  `converged` is false.
+- `SurfaceProjectionResult.uv` said `converged` was the only evidence. It now
+  says `uv` is the final iterate, `converged` records the solver decision, and
+  `residual`, `step_norm`, and `iterations` are the associated diagnostics.
+  Neither field is called the only evidence.
+
+**Retry ordering and compatibility.** My Turn-44 prose claimed twice — once in
+the explanatory text, once under `retry_accept_distance_factor,
+retry_accept_distance_atol` — that a genuinely converged retry could replace a
+clamped selection even when farther away. Codex was right that the body does
+not do this. Verified directly at `_is_candidate_better`
+(`warm_start_candidate_projection_numpy.py:918-943`):
+
+```python
+if rank < best_rank:  return True
+if rank > best_rank:  return False
+if rank == 0:
+    if dist2 < best_dist2: return True
+    if dist2 > best_dist2: return False
+    return residual < best_residual
+```
+
+When both candidates are converged the retry needs *strictly* smaller
+`dist2`; residual breaks only an exact tie. A farther converged retry is
+rejected before the cap is ever consulted. Since `boundary_clamped` is
+independent of `converged`, a clamped selection can itself be converged, which
+is exactly the case my prose described and got wrong.
+
+The two gates are now documented in sequence: `_is_candidate_better` ranks
+first, `_is_retry_candidate_compatible` then applies the finite-distance cap
+and, across patches, the normal-alignment guard. The cap can admit a farther
+retry only where that retry already won on rank — converged over
+non-converged, or smaller residual among two non-converged candidates — and
+never between two converged candidates. `boundary_clamped` is retained as a
+retry trigger independent of `converged`.
+
+**Eager cost.** `warm_start_nu, warm_start_nv` no longer say "higher setup
+cost"; the cost is eager tessellation construction paid on each call that
+builds the mesh. `num_samples` no longer claims larger values make matching
+"stricter": they sample the comparison more densely and cost more, and can
+expose an interior mismatch a coarser grid steps over, but the sample
+locations move with the count so strictness is not guaranteed to vary
+monotonically.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| Stripped-AST identity, three changed files (working tree) | 3/3 identical |
+| Stripped-AST identity, git blobs `4e83fa6..fafc72f` | 3/3 identical |
+| Other three projection modules | byte-identical, untouched |
+| Slice inventory | 80/80 public defs, 15/15 module docstrings |
+| Turn-44 parameter audit (all six modules) | 36 callables, 124 params, 0 missing, 0 extra |
+| Turn-44 rejection list | 0 strict, 0 punctuation-insensitive |
+| Turn-46 backstop, 6 phrases, punctuation-stripped | 7 pre-edit → **0** |
+| First-line/NumPy-style audit | 0 violations |
+| Return-container audit | 0 mismatches over 6 containers |
+| `pytest` primary set | **82 passed, 3 deselected** |
+| `pytest` derivative + n-gon gates | **6 passed** |
+| `git diff --check` over the six paths | clean |
+| `ruff --select D` | unavailable in `central_geom`; not installed |
+
+### Note on the backstop
+
+Two of this turn's six phrases (`even when it is slightly farther`,
+`clamped one that is slightly closer`) were line-wrapped in the source and
+returned nothing under a plain `grep`. They were found only because the
+backstop collapses whitespace before matching. This is consistent with the
+Turn 46 ruling: the normalized check is useful for catching known rejected
+claims, and it is not what established that the claims were wrong. That came
+from reading `_is_candidate_better` and confirming the strict `dist2`
+comparison.
+
+### Deviations
+
+- Ruff could not be run locally; not installed in `central_geom`, and
+  dependencies were left unchanged per the spec. Pinned CI `ruff==0.9.10`
+  remains the authoritative external lint gate.
+- No other deviations. Scope held to the three specified corrections.
+
+Slice 2 is **not** marked complete and is not accepted by the implementer.
+
+Status:    closed
