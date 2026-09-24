@@ -69,9 +69,11 @@ class SurfaceProjectionResult:
     Attributes
     ----------
     uv
-        Final parametric coordinates, shape ``(num_points, 2)``. These are the
-        last iterate, which for a point whose ``converged`` entry is ``False``
-        is not a solution; ``converged`` is the only convergence evidence.
+        Final parametric coordinates, shape ``(num_points, 2)``: the last
+        iterate, which for a point whose ``converged`` entry is ``False`` is not
+        a solution. ``converged`` records the solver's decision for each point,
+        and ``residual``, ``step_norm``, and ``iterations`` are the associated
+        diagnostics.
     projected_points
         Surface points at ``uv``.
     residual

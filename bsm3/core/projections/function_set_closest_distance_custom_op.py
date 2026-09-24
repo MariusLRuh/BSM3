@@ -1179,16 +1179,20 @@ class FunctionSetProjectionModel:
         state : dict
             Forward state reused by the reverse passes: the final parametric
             coordinates selected for each point, projected points, raw and squared
-            distances, the sign and inside mask, reference normals, the Newton
-            residual, and the degenerate edge map for this coefficient state. The
-            coordinates are the selected candidate, which for a point that did not
-            converge is the minimum-residual fallback rather than a solution.
+            distances, the sign and inside mask, reference normals, and the
+            degenerate edge map for this coefficient state. Convergence is carried
+            by three separate entries: ``converged`` is the solver's Boolean
+            decision per point, while ``residual`` and ``iterations`` are the
+            associated diagnostics. The coordinates are the selected candidate,
+            which for a point whose ``converged`` entry is ``False`` is the
+            minimum-residual fallback rather than a solution.
 
         Notes
         -----
-        Points whose Newton solve did not converge are still returned; the residual in
-        ``state`` is the only convergence evidence, and derivative quality at those
-        points is not guaranteed.
+        Points whose Newton solve did not converge are still returned rather than
+        raising. Use ``state["converged"]`` to decide whether a point solved;
+        ``state["residual"]`` and ``state["iterations"]`` describe how the solve
+        behaved. Derivatives are not supported where ``converged`` is ``False``.
         """
         stacked_coefficients = np.asarray(stacked_coefficients, dtype=float)
         points = np.asarray(points, dtype=float).reshape(-1, self.physical_dimension)

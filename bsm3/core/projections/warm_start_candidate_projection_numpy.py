@@ -439,7 +439,10 @@ def build_edge_neighbor_map(
         ``function_set``.
     num_samples
         Number of points sampled along each of the four edges of every patch.
-        Higher values make matching stricter and more expensive.
+        Higher values sample the comparison more densely and cost more, and can
+        expose an interior mismatch that a coarser grid steps over. Because the
+        sample locations themselves move with the count, matching is not
+        guaranteed to grow monotonically stricter as this rises.
     atol
         Absolute tolerance for deciding that two sampled edge points coincide.
     rtol
@@ -1119,9 +1122,24 @@ def project_points_with_warm_start_candidates_numpy(
 
     A point flagged ``boundary_clamped``, or one that fails outright, is routed
     into the retry path controlled by the ``retry_*`` arguments: additional
-    nearby edges, a local multi-scale search, and acceptance thresholds that
-    let a genuinely converged candidate replace a clamped one even when it is
-    slightly farther away.
+    nearby edges, a local multi-scale search, and acceptance thresholds.
+    ``boundary_clamped`` triggers a retry independently of ``converged``.
+
+    A retry replaces the selection only if it passes two sequential gates. It
+    must first outrank the selection under the same ordering used in the first
+    pass: a converged candidate outranks a non-converged one; if both are
+    converged the retry must have the strictly smaller ``dist2``, with residual
+    breaking only an exact distance tie; if both are non-converged the smaller
+    residual wins, with distance as the tie-break. It must then pass the
+    compatibility check, which requires a finite distance within the
+    factor/absolute cap and, when the retry lands on a different patch, the
+    normal-alignment guard.
+
+    The cap therefore only ever permits a farther retry that already won on
+    rank — one that converged where the selection did not, or, among two
+    non-converged candidates, one with a smaller residual. It does **not**
+    authorize a farther retry when both candidates are converged: in that case
+    the ranking gate has already rejected it.
 
     Parameters
     ----------
@@ -1140,7 +1158,9 @@ def project_points_with_warm_start_candidates_numpy(
         mesh avoids rebuilding it on every call.
     warm_start_nu, warm_start_nv
         Per-patch sampling resolution used only when ``mesh`` is ``None``.
-        Denser sampling gives better seeds at higher setup cost.
+        Denser sampling gives better seeds at a higher eager
+        tessellation-construction cost, paid on each call that builds the mesh,
+        since this function runs when called.
     edge_map
         Patch adjacency from :func:`build_edge_neighbor_map`. ``None`` builds one
         with the ``edge_map_*`` arguments below.
@@ -1197,11 +1217,15 @@ def project_points_with_warm_start_candidates_numpy(
     retry_local_step_factor
         Multiplier on ``eps_edge`` setting the local search's parametric step.
     retry_accept_distance_factor, retry_accept_distance_atol
-        Acceptance guard: a retry candidate is only allowed to replace the
-        selected one when its distance is within
-        ``max(factor, 1.0) * selected_distance + max(atol, 0.0)``. This lets a
-        genuinely converged candidate win over a clamped one that is slightly
-        closer, without accepting a far-away result.
+        Distance cap applied *after* the retry has already outranked the
+        selection: the retry is rejected unless its distance is within
+        ``max(factor, 1.0) * selected_distance + max(atol, 0.0)``. Because the
+        ranking gate runs first, this cap can only admit a farther retry that
+        improved the convergence rank, or that has a smaller residual among two
+        non-converged candidates. When both candidates are converged the
+        ranking gate already requires the retry to be strictly closer, so the
+        cap never lets a farther one through. Its role is to bound how far an
+        otherwise-better retry may be.
     retry_normal_dot_min
         Minimum dot product between the selected and retry surface normals when
         the retry lands on a *different* patch, rejecting replacements that flip
