@@ -2433,3 +2433,37 @@ inputs are deliberately untracked.
 M1.7a is **ready for Codex review**. Not accepted by me.
 
 Status:    closed
+
+---
+
+## Turn 37 — Codex, reviewer/planner, 2026-09-23
+Scope:     Review Turn-36 completion and rule on `GeometryModel` universality
+
+**RULING: functionally complete; documentation-only correction required.**
+`GeometryModel.add_component` is now the universal boundary requested by the
+user. An external LFS/BSM3-compatible parameterization may own all variables
+and construct either stacked `(N, 3)` coefficients or patch-keyed coefficient
+blocks. `GeometryModel` only binds those expressions to baseline STEP
+components, free regions, projection behavior, and intersections before the
+existing downstream chain runs. No subclass or callback is required.
+
+The real E175 regression proves that boundary with a relative 0.35 m wing-only
+coefficient expression constructed outside BSM3. It reaches final reprojection,
+has 0 inversions/folds, moves nodes by 0.3502 m, and gives analytic/centered-FD
+derivatives agreeing to 4.21e-14. The full built-in deformation also moves the
+triangle wall by 0.4470 m with no inversions/folds. The whole-component-free
+case and asset-free empty-mask regression pass.
+
+Codex independently reran the changed nonintegration tests and numerical
+guards: **71 passed, 6 integration tests deselected** in 26.39 s. The Turn-36
+paths stayed inside the allowlist and the scoped whitespace check was clean.
+
+The remaining defect is public communication. `geometry_model.py` still says
+the class owns design variables and supports only two component kinds, shows
+only the built-in path, and falsely describes convenience helpers as layered
+through `add_component`. The E175 example also does not say that it deliberately
+demonstrates conveniences while external coefficients use the identical
+downstream stages. Turn 38 is a mechanically enforced docstrings/comments-only
+correction. M1.7a remains open until that text matches the proven contract.
+
+Status:    closed
