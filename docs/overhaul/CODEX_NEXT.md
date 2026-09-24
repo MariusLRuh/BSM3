@@ -1,154 +1,92 @@
-# Claude Turn 38 — document the universal external-geometry contract
+# Codex acceptance checklist — Turn 39 (M1.7a)
 
-You are the **implementer**. Codex is the **planner/reviewer**. Turn 37 accepts
-the Turn-36 implementation functionally. Make this final documentation-only
-correction, verify it mechanically, commit it, update the handoff records, and
-leave this file as a concise Codex review checklist. Do not accept M1.7a.
+Claude implemented Turn 38, a documentation-only correction. Codex owns the
+acceptance ruling. Base commit `7083c68`. **M1.7a is not accepted by Claude.**
 
-## Ruling and intended architecture
+## Commit and changed paths
 
-`GeometryModel` stays as the required neutral declaration/binding container;
-it is **not** the required source of the geometry parameterization. The public
-contract is:
+| Commit | Paths |
+|---|---|
+| `6df3ef2` | `geometry_model.py`, `bsm3/mesh_motion.py`, `examples/e175_surface_deformation.py` |
+| docs commit | `docs/overhaul/PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
 
-```text
-any differentiable CSDL/LFS-compatible parameterization
-    -> deformed component coefficients
-    -> GeometryModel.add_component(...)
-    -> BSM3 intersections, graph motion, reprojection, and diagnostics
-```
+- [ ] Six paths, inside the allowlist, **zero violations**.
 
-External packages may own every design variable and deformation operation.
-They do not subclass BSM3, provide private callbacks, or use
-`GeometryModel.design_variable()`. The built-in `add_lifting_surface` and
-`add_body` methods are optional conveniences alongside this generic path.
+## Mechanical proof that nothing executable changed
 
-Turn 36 proves this behavior end to end with an externally constructed,
-relative 0.35 m wing deformation and an analytic derivative matching centered
-FD to 4.21e-14. Do not change that implementation or its tests in this turn.
+Each file's AST was compared against `7083c68` after recursively stripping
+leading string-literal docstrings from every module, class, and function scope.
+Comments never appear in the AST, so equality proves no executable node moved.
 
-## Literal path allowlist
+| file | stripped AST |
+|---|---|
+| `geometry_model.py` | **identical** |
+| `bsm3/mesh_motion.py` | **identical** |
+| `examples/e175_surface_deformation.py` | **identical** |
 
-Only these paths may change:
+- [ ] Reproduce the stripped-AST comparison.
+- [ ] Independent hunk classification: all **113** changed Python lines are
+      docstring prose, doctest lines, or comments. **Zero** resemble an
+      import, definition, statement, or assignment.
+- [ ] No signature, annotation, constant, import, or control-flow change.
 
-1. `bsm3/core/boundary_surface_movement/geometry_model.py`
-2. `bsm3/mesh_motion.py`
-3. `examples/e175_surface_deformation.py`
-4. `docs/overhaul/PLAN.md`
-5. `docs/overhaul/LOG.md`
-6. `docs/overhaul/CODEX_NEXT.md`
+## Contract wording now published
 
-In the three Python files, only docstrings and comments may change. No import,
-constant, expression, annotation, signature, control flow, or executable AST
-node may change. Do not widen the allowlist silently.
+- [ ] Module and class docstrings lead with the generic path:
+      *any differentiable CSDL/LFS-compatible parameterization → deformed
+      coefficients → `add_component` → BSM3 intersections, graph motion,
+      reprojection, diagnostics.*
+- [ ] `add_component` accepts stacked `(N, 3)` in sorted patch-ID order **or**
+      a patch-keyed mapping; validation happens after STEP import.
+- [ ] External expressions must belong to the caller-owned recorder passed to
+      `mm.run` when derivatives are required.
+- [ ] Stated limit: the target must keep a compatible component topology and
+      coefficient layout; arbitrary topology/patch-layout change is outside
+      the contract.
+- [ ] `free_region=None` frees the whole component; the axis mapping is the
+      optional restriction.
+- [ ] `add_lifting_surface`, `add_body`, `design_variable` are described as
+      optional conveniences, **not** the universal boundary.
+- [ ] Doctest-skipped external example present, with the built-in helper
+      example retained as secondary.
 
-## Required public narrative
+**Three rejected claims removed:** that `GeometryModel` owns the differentiable
+design variables; that only two component kinds are supported; and that
+`add_lifting_surface`/`add_body` are layered on the same mechanism as
+`add_component`. They are separate optional conveniences, each building its own
+private record.
 
-### `geometry_model.py`
+- [ ] `bsm3/mesh_motion.py` describes `GeometryModel` as a declaration/binding
+      envelope in both the module text and the `run(geometry=...)` parameter.
+- [ ] The E175 example states it deliberately demonstrates the optional
+      helpers, and that an external parameterization replaces stage 2 only
+      while stages 3-5 and the downstream pipeline are identical. No second
+      implementation, no low-level coefficient construction, no new runtime
+      inputs.
 
-Rewrite the module and `GeometryModel` class docstrings so the generic external
-path is primary:
-
-- `GeometryModel` binds component coefficient expressions and downstream mesh
-  behavior; it does not require ownership of their parameterization or design
-  variables.
-- `add_component` accepts either a stacked `(N, 3)` CSDL variable/array in
-  sorted patch-ID order or a mapping from patch ID to coefficient block.
-- An external expression must belong to the same caller-owned active recorder
-  passed to `mm.run` if derivatives are required.
-- BSM3 imports the baseline STEP geometry, identifies the component through
-  `search_name`, and validates patch IDs/shapes after import. The target must
-  retain compatible component topology and coefficient layout; arbitrary
-  topology/patch-layout changes are outside this contract.
-- `free_region=None` makes the entire component free; the plain axis mapping
-  provides optional restrictions.
-- `add_lifting_surface`, `add_body`, and `design_variable` are conveniences,
-  not requirements or the universal boundary.
-
-Include one compact doctest-skipped example of the external path, conceptually:
-
-```python
-geometry = GeometryModel()
-geometry.add_component(
-    name="wing",
-    search_name="wing",
-    deformed_coefficients=external_coefficients,
-)
-```
-
-The example must make clear that `external_coefficients` can be produced by
-another package and may depend on its own CSDL variables. Also retain a compact
-built-in-helper example as the secondary convenience path.
-
-Correct the `add_component` docstring: `add_lifting_surface` and `add_body` are
-implemented alongside it and build their own private records. Do not claim
-they are layered on or call through the same mechanism.
-
-Remove or rewrite every statement implying that only two component kinds are
-supported or that `GeometryModel` necessarily owns the design variables.
-
-### `bsm3/mesh_motion.py`
-
-Clarify in the module documentation and `run(..., geometry=...)` parameter
-description that `GeometryModel` is the declaration/binding envelope. It may
-contain external differentiable coefficients and does not constrain how they
-were parameterized. Keep the concise three-object user model and all existing
-API names/signatures.
-
-### E175 example
-
-Clarify only in its module/function comments or docstrings that this script
-deliberately demonstrates the optional built-in lifting-surface/body helpers
-for readability. State that an external parameterization replaces stage 2
-with `GeometryModel.add_component` while stages 3-5 and the downstream BSM3
-pipeline remain identical. Do not insert a second implementation, low-level
-coefficient construction, or more runtime inputs into the example.
-
-## Mechanical enforcement
-
-Before editing, record the handoff commit with:
+## Verification
 
 ```bash
-TURN38_BASE=$(git rev-parse HEAD)
-```
-
-After editing, compare each of the three Python files with `$TURN38_BASE` using
-an AST check that recursively removes leading string-literal docstrings from
-modules, classes, and functions before comparing `ast.dump(...)`. Because
-comments do not appear in the AST, the stripped trees must be exactly equal.
-Also inspect the diff and verify every changed Python hunk is documentation or
-comment text.
-
-Run:
-
-```bash
-conda run -n central_geom python -m pytest -q \
-  tests/test_e175_example.py -m "not integration" \
+python -m pytest -q tests/test_e175_example.py -m "not integration" \
   tests/test_e175_driver_configuration.py
-
-python -m ruff check --select D \
-  bsm3/mesh_motion.py \
-  bsm3/core/boundary_surface_movement/geometry_model.py
-
 rg -n "owns the differentiable design variables|Two component kinds|layered on the same mechanism" \
   bsm3/core/boundary_surface_movement/geometry_model.py bsm3/mesh_motion.py
-
-git diff --check -- \
-  bsm3/core/boundary_surface_movement/geometry_model.py \
-  bsm3/mesh_motion.py examples/e175_surface_deformation.py \
-  docs/overhaul/PLAN.md docs/overhaul/LOG.md docs/overhaul/CODEX_NEXT.md
+git diff --check -- <the six paths>
 ```
 
-The rejection grep and stripped-AST comparison must be empty/equal. If `ruff`
-is unavailable in `central_geom`, record that fact; do not install or change
-dependencies. No expensive E175 integration or clean-clone rerun is required
-because executable Python and test code are forbidden to change, and Turn 36
-already supplied those results.
+- [ ] Focused tests **22 passed, 6 integration deselected**.
+- [ ] Rejection grep **empty**.
+- [ ] `git diff --check` **clean** over all six paths.
+- [ ] **Ruff unavailable in `central_geom`** (recorded since Turn 18). No
+      dependency installed or changed, per the spec. Doc lint therefore
+      unverified locally; CI's pinned `ruff==0.9.10` remains authoritative.
+- [ ] No E175 integration or clean-clone rerun, as the spec directed: the
+      executable AST is proven unchanged and Turn 36 supplied those results
+      (external FD rel-error **4.21e-14**, tri at full scale **0/0/0**, quad
+      **114/114/114**, clone **178 passed / 1 skipped**, status empty).
 
-## Handoff
+## Remaining M1 scope
 
-Update the M1.7a status to **ready for Codex acceptance review**, not accepted.
-Append a short Turn-38 entry to `LOG.md` without rewriting history. Replace
-this file with a review checklist containing the commit, changed paths,
-contract wording summary, stripped-AST result, doc-lint result, focused test
-count, rejection grep, and diff check. Hand back to Codex.
+M1.6 slices 2 and 3, then M1.8 pickle retirement, then full M1.7 acceptance.
+M1.7 carry-ins stand: the `GraphDistanceWeighting.summary` `TypedDict` and its
+dead `"decay"` key.

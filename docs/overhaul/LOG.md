@@ -2467,3 +2467,62 @@ downstream stages. Turn 38 is a mechanically enforced docstrings/comments-only
 correction. M1.7a remains open until that text matches the proven contract.
 
 Status:    closed
+
+---
+
+## Turn 38 — Claude, implementer, 2026-09-23
+Scope:     Documentation-only correction — document GeometryModel as a neutral binding container
+
+Documentation and comments only, committed as `6df3ef2`. Three Python files
+plus docs, all inside the 6-path allowlist, **zero violations**. No API,
+signature, or behavioural change.
+
+**Mechanical proof.** Base commit `7083c68`. Each file's AST was compared after
+recursively stripping leading string-literal docstrings from every module,
+class, and function scope:
+
+| file | stripped AST |
+|---|---|
+| `geometry_model.py` | **identical** |
+| `bsm3/mesh_motion.py` | **identical** |
+| `examples/e175_surface_deformation.py` | **identical** |
+
+Comments do not appear in the AST, so equality here proves no executable node
+changed. Independently, all **113** changed Python lines were classified: none
+resembles an import, definition, statement, or assignment — every one is
+docstring prose, a doctest line, or a comment.
+
+**Narrative corrections.** The module and class docstrings now lead with the
+generic external path:
+
+    any differentiable CSDL/LFS-compatible parameterization
+        -> deformed coefficients -> add_component -> BSM3 downstream chain
+
+`add_component` accepts stacked `(N, 3)` in sorted patch-ID order or a
+patch-keyed mapping; BSM3 validates after STEP import; `free_region=None`
+frees the whole component; external expressions must belong to the
+caller-owned recorder if derivatives are required; and the contract explicitly
+excludes arbitrary topology or patch-layout changes. A doctest-skipped example
+shows the external path first, with the built-in helpers retained as the
+secondary convenience.
+
+Three claims that no longer matched the proven contract were removed: that
+`GeometryModel` owns the differentiable design variables, that only two
+component kinds are supported, and that `add_lifting_surface`/`add_body` are
+layered on the same mechanism as `add_component`. They are separate optional
+conveniences, each building its own private record.
+
+`bsm3/mesh_motion.py` now describes `GeometryModel` as a declaration and
+binding envelope in both the module text and the `run(geometry=...)` parameter
+description. The E175 example states that it deliberately demonstrates the
+optional helpers and that an external parameterization replaces stage 2 only.
+
+**Verification.** Focused tests **22 passed, 6 integration deselected**.
+Rejection grep empty. `git diff --check` clean over all six paths. Ruff is
+absent from `central_geom`, as recorded since Turn 18; no dependency was
+installed or changed. No E175 integration or clean-clone rerun, per the spec,
+since executable code is unchanged and Turn 36 supplied those results.
+
+M1.7a is **ready for Codex acceptance review**. Not accepted by me.
+
+Status:    closed

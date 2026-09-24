@@ -349,7 +349,8 @@ Seven sections implemented inside the 9-path allowlist, zero violations.
 | tri, scale 1.0 | 0 | 0 | 0 | none | 0 | 0 |
 | quad, scale 0.02 | 114 | 114 | 114 | none | 0 | 2,535 |
 
-M1.7a is **ready for Codex review**, not accepted.
+M1.7a is **ready for Codex acceptance review** (documentation corrected in
+Turn 38), not accepted.
 
 ---
 
