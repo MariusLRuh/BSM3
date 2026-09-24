@@ -3100,7 +3100,9 @@ the validated commit.
 
 | Gate | Result |
 | --- | --- |
-| Tracked references to the patched factory, any file type | **0** |
+| Tracked production Python imports of the patched factory | **0** |
+| Tracked references outside `docs/overhaul/` | **0** |
+| Descriptive mentions inside the three collaboration documents | expected, retained |
 | Canonical import present in each of the 5 modules | 5/5 |
 | Factory byte-identity (canonical vs former patched) | identical, sha256 `3b216af2...` |
 | Compatibility alias during the BSM3 test run | **removed**, and proven unimportable |
@@ -3109,7 +3111,8 @@ the validated commit.
 | LFS complete non-plotting suite | **80 passed** |
 | LFS plotting suite | 5 passed in this environment (see note) |
 | E175 coordinates vs pre-migration reference | **max abs diff 0.000e+00**, `allclose(rtol=atol=1e-14)` True on all three arrays |
-| `git diff --check`, BSM3 and LFS | clean in both |
+| `git diff --check` over the migration commit ranges | clean in both repos |
+| `git diff --check` over the whole dirty BSM3 tree | **not clean** — 5 pre-existing findings, untouched |
 | Pre-existing dirty/untracked paths changed | **none** |
 
 The E175 reference was measured on this machine by running the example twice:
@@ -3160,5 +3163,101 @@ mine and 8 pre-existing ones, whose modification times range from 2026-04-15 to
 
 The migration is **not** marked accepted by the implementer. M1.6 slice 3
 resumes from the recoverable prompt once Codex accepts this.
+
+Status:    closed
+
+---
+
+## Turn 50 — Claude, implementer, 2026-09-24
+Scope:     M1.9 collaboration-document correction (documentation only)
+Base:      d419d60
+Allowlist: docs/overhaul/PLAN.md, docs/overhaul/LOG.md, docs/overhaul/CODEX_NEXT.md
+Status:    ready for final Codex acceptance — NOT accepted by the implementer
+
+Codex independently reviewed M1.9 and technically accepted the implementation:
+192 passed / 53 warnings in 621.80 s for the BSM3 suite, 9 passed on the
+projection and derivative gates, 9 passed on the LFS file-I/O tests, 77 passed
+and 8 deselected on the broader LFS non-plotting selection under
+`-k "not plot"`, Ruff clean over all five migrated projection modules, and
+independent confirmation of factory byte identity and dependency provenance.
+
+M1.9 stayed open only because two claims I wrote in the collaboration documents
+were inaccurate. No source, CI, test, requirement, dependency repository, dirty
+file, or untracked artifact was touched in this turn.
+
+### Correction 1 — the "any file type" grep claim
+
+I wrote that zero tracked references to `compute_basis_matrix_numpy_factory_patched`
+remain "in any file type". That was wrong, and it was wrong in a specific way
+worth naming: my own verification had explicitly filtered `docs/overhaul/LOG.md`
+out of the search, and I then reported the filtered result as if it were
+unrestricted. The accurate statement is three separate facts:
+
+- zero tracked production Python imports;
+- zero tracked references outside `docs/overhaul/`;
+- expected historical and descriptive mentions remain inside the three
+  collaboration documents.
+
+Reproducible checks, both empty:
+
+```bash
+git grep -n 'compute_basis_matrix_numpy_factory_patched' -- '*.py'
+git grep -n 'compute_basis_matrix_numpy_factory_patched' -- ':!docs/overhaul/**'
+```
+
+An unrestricted `git grep` returns the descriptive documentation mentions
+(`CODEX_NEXT.md` 3, `LOG.md` 3, `PLAN.md` 1) and must not be reported as empty.
+
+### Correction 2 — the "diff --check clean" claim
+
+I wrote that `git diff --check` was "clean in both" repositories without saying
+what was scoped. The scoped migration diffs are clean:
+
+```bash
+git diff --check bf2afee^ bf2afee
+git -C /private/tmp/bsm3-compat.bHdusA/lsdo_function_spaces_main \
+      diff --check b6e7b4e^ b6e7b4e
+```
+
+Both empty, as is `d419d60^ d419d60`. The **complete dirty BSM3 working tree is
+not clean**: it retains five pre-existing whitespace findings in user-owned
+files —
+
+| File | Finding |
+| --- | --- |
+| `bsm3/core/boundary_surface_movement/movement_test_embraer_175_hex_mesh.py:2587` | trailing whitespace |
+| `bsm3/core/boundary_surface_movement/movement_test_embraer_175_hex_mesh.py:5713` | trailing whitespace |
+| `bsm3/core/boundary_surface_movement/movement_test_embraer_175_hex_mesh.py:5870` | trailing whitespace |
+| `examples/basic_examples/ex_wing_sdf_newton.py:141` | trailing whitespace |
+| `examples/basic_examples/wing_mesh_projections.py:40` | new blank line at EOF |
+
+All five predate this work and belong to the preserved dirty tree. They were
+deliberately not edited, and correcting them is not part of this migration.
+
+### Codex rulings recorded
+
+1. The two untracked research scripts —
+   `bsm3/core/projections/gauss_newton_projection.py` and
+   `bsm3/core/projections/function_set_sdf_custom_op_wing_test.py` — remain
+   untouched and outside the release surface. Their imports will be migrated
+   only if the scripts are later adopted.
+2. CI remains pinned to official LFS `307ad3a` until `b6e7b4e` is reviewed and
+   lands upstream. An unpushed temporary commit must not be pinned.
+3. The plotting result is environment-dependent and requires no code change.
+4. The independently observed 7.11e-15 delta and my fresh 0.0 delta both
+   satisfy the 1e-14 equivalence threshold. They are two different measurements
+   and are not contradictory.
+5. The temporary alias backup at `/tmp/t47_alias_backup/` is not a product
+   dependency.
+
+### Scope
+
+Existing evidence was preserved rather than rewritten; the inaccurate claims
+were corrected in place and this entry records why. Earlier turns' scoped
+`git diff --check` statements describe their own path sets and were left alone.
+The M1.6 slice-3 prompt was **not** restored — Codex will restore and reissue it
+after accepting this correction.
+
+M1.9 is left **ready for final Codex acceptance** and is not self-accepted.
 
 Status:    closed

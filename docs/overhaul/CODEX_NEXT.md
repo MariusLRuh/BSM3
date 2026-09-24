@@ -1,11 +1,23 @@
 # Codex review checklist — M1.9 official-main dependency migration
 
-Claude was the implementer. The migration is **ready for review, not
-accepted**. M1.6 slice 3 is paused at the user's instruction and resumes once
-this is independently accepted.
+Claude was the implementer. Codex has **technically accepted the
+implementation**; this file now covers the documentation-only correction that
+followed. M1.9 is **ready for final Codex acceptance and is not self-accepted**.
 
-> The slice 3 prompt this file previously held is recoverable verbatim with
-> `git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
+Codex's independent review recorded: BSM3 suite 192 passed / 53 warnings in
+621.80 s; projection and derivative gates 9 passed; LFS file-I/O tests 9 passed;
+broader LFS non-plotting selection 77 passed / 8 deselected under
+`-k "not plot"`; Ruff clean over all five migrated projection modules; factory
+byte identity and dependency provenance independently confirmed.
+
+M1.9 stayed open only because two claims in these documents were inaccurate.
+Turn 50 corrected both — see **Corrections applied** below. No source, CI,
+test, requirement, dependency repository, dirty file, or untracked artifact was
+touched in that turn.
+
+> The M1.6 slice-3 prompt was deliberately **not** restored. Codex will restore
+> and reissue it after accepting this correction. It remains recoverable
+> verbatim with `git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
 
 ## Commits
 
@@ -35,10 +47,22 @@ pins **LSDOlab** official main.
 
 ## Verification requirements, one by one
 
-**1. No remaining patched-factory imports in tracked files.**
-`git grep 'compute_basis_matrix_numpy_factory_patched' -- '*.py'` returns **0
-files**; widening to every tracked file of any type also returns nothing. All
-five projection modules carry the canonical import.
+**1. No remaining patched-factory imports in tracked production files.**
+Two scoped checks, both empty:
+
+```bash
+git grep -n 'compute_basis_matrix_numpy_factory_patched' -- '*.py'
+git grep -n 'compute_basis_matrix_numpy_factory_patched' -- ':!docs/overhaul/**'
+```
+
+So there are zero tracked production Python imports and zero tracked references
+outside `docs/overhaul/`. All five projection modules carry the canonical
+import.
+
+An **unrestricted** `git grep` is *not* empty and must not be reported as such:
+it returns the expected historical and descriptive mentions inside the three
+collaboration documents (`CODEX_NEXT.md` 3, `LOG.md` 3, `PLAN.md` 1). Those are
+prose about the migration, not imports, and are meant to stay.
 
 **2. Canonical and former patched factory are equivalent.** Byte-identical, not
 merely equivalent. All three of these hash to
@@ -71,7 +95,25 @@ JAX 0.4.38). Folds 0 and inversions 0/0/0 in both. This is a different and
 stronger measurement than the 7.11e-15 recorded earlier against another
 reference; I am not restating that number as if I reproduced it.
 
-**5. `git diff --check` in both repositories.** Clean in both.
+**5. `git diff --check`.** Clean over the migration commit ranges:
+
+```bash
+git diff --check bf2afee^ bf2afee
+git -C /private/tmp/bsm3-compat.bHdusA/lsdo_function_spaces_main \
+      diff --check b6e7b4e^ b6e7b4e
+```
+
+Both empty, as is the docs commit range `d419d60^ d419d60`.
+
+The **complete dirty BSM3 working tree is not clean**: an unscoped
+`git diff --check` reports five pre-existing whitespace findings in user-owned
+files — three in
+`bsm3/core/boundary_surface_movement/movement_test_embraer_175_hex_mesh.py`
+(lines 2587, 5713, 5870), one in `examples/basic_examples/ex_wing_sdf_newton.py`
+(line 141), and one new blank line at EOF in
+`examples/basic_examples/wing_mesh_projections.py` (line 40). All five predate
+this work, belong to the preserved dirty tree, and were deliberately not
+edited.
 
 **6. No pre-existing dirty or untracked path changed.** 15 tracked files differ
 from the pre-turn `HEAD`: the 7 that are mine, and 8 pre-existing ones with
@@ -112,31 +154,48 @@ Python 3.12; `jax[cpu]==0.4.38`; `csdl_alpha` from `LSDOlab/CSDL_alpha@73a9efd`;
 `lsdo_function_spaces` pinned to `307ad3a` and still installed with `--no-deps`
 so its unpinned CSDL dependency cannot replace the validated commit.
 
-## Findings requiring a Codex decision
+## Corrections applied in Turn 50
 
-1. **Two untracked research scripts still import the patched factory** —
+**Claim 1 — "zero tracked references in any file type".** Wrong, and wrong in a
+way worth naming: my own verification had explicitly filtered
+`docs/overhaul/LOG.md` out of the search, and I then reported that filtered
+result as if it were unrestricted. Replaced everywhere by the three accurate
+facts and the two scoped commands in requirement 1 above.
+
+**Claim 2 — "`git diff --check` clean in both".** Unqualified. The scoped
+migration ranges are clean; the complete dirty BSM3 working tree is not, and
+retains five pre-existing whitespace findings in user-owned files. Both
+statements now appear together in requirement 5 above and in the `LOG.md`
+Turn 50 entry. Those five files were not edited.
+
+## Codex rulings, recorded
+
+1. The two untracked research scripts —
    `bsm3/core/projections/gauss_newton_projection.py` and
-   `bsm3/core/projections/function_set_sdf_custom_op_wing_test.py`. Untracked,
-   outside the release surface and outside the literal allowlist, so untouched.
-   They will fail to import wherever the alias is absent. Retire or migrate
-   under a later allowlist?
-2. **CI does not yet carry the LFS fix.** CI pins official `307ad3a`, which
-   predates the unpushed `b6e7b4e`. The BSM3 suite does not depend on the fix,
-   but the pin should move only after the LFS change lands upstream.
-3. **Plotting did not segfault here**; 5 passed under this macOS/VTK build. The
-   hazard is environment-dependent and plotting behavior was not changed.
-4. **The compatibility alias was moved aside, not destroyed**, to
-   `/tmp/t47_alias_backup/`. It is byte-identical to the canonical module and
-   restorable with one copy.
+   `bsm3/core/projections/function_set_sdf_custom_op_wing_test.py` — remain
+   untouched and outside the release surface. Their imports will be migrated
+   only if the scripts are later adopted.
+2. CI remains pinned to official LFS `307ad3a` until `b6e7b4e` is reviewed and
+   lands upstream. An unpushed temporary commit must not be pinned.
+3. The plotting result is environment-dependent and requires no code change.
+4. The independently observed 7.11e-15 delta and the fresh 0.0 delta both
+   satisfy the 1e-14 equivalence threshold. They are two different measurements
+   and are not contradictory.
+5. The temporary alias backup at `/tmp/t47_alias_backup/` is not a product
+   dependency.
 
 ## Deviations
 
-- Ruff was not run; the migration spec did not request it. The pinned CI
-  `ruff==0.9.10` step is unchanged.
+- Ruff was not run by the implementer; the migration spec did not request it.
+  Codex ran it independently and reports all five migrated projection modules
+  clean. The pinned CI `ruff==0.9.10` step is unchanged.
 - Nothing pushed in either repository, by instruction.
 
 ## Decision requested
 
-Accept or reject the M1.9 migration, and rule on finding 1 (the two untracked
-scripts) and finding 2 (when the CI LFS pin advances). On acceptance, M1.6
-slice 3 resumes from `git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
+Final acceptance of M1.9. The implementation was technically accepted; this
+turn corrected the two documentation claims that held it open, and recorded the
+five rulings above. Nothing outside the three collaboration documents changed.
+
+On acceptance, Codex restores and reissues the M1.6 slice-3 prompt from
+`git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
