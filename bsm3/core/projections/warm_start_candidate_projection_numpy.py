@@ -48,7 +48,7 @@ except Exception:  # pragma: no cover
     lfs = None
 
 try:
-    from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory_patched import (
+    from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory import (
         make_bspline_evaluator_numpy,
     )
 except Exception:  # pragma: no cover
@@ -171,7 +171,7 @@ def _require_numpy_bspline_factory() -> None:
     if make_bspline_evaluator_numpy is None:
         raise ImportError(
             "make_bspline_evaluator_numpy not found; ensure "
-            "compute_basis_matrix_numpy_factory_patched.py is on path."
+            "compute_basis_matrix_numpy_factory.py is on path."
         )
 
 

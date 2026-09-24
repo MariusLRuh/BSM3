@@ -69,7 +69,7 @@ except Exception:
 import csdl_alpha as csdl
 import numpy as np
 
-from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory_patched import (
+from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory import (
     apply_basis_stencil_numpy,
     compute_basis_stencil_numpy,
     make_bspline_space_cache,
