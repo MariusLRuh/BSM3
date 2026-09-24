@@ -60,8 +60,6 @@ Open:
 
 Status:    closed
 
----
-
 ## Turn 2 — Codex, implementer/reviewer, 2026-09-21
 Scope:     Plan review; Q-A/Q-B/Q-C; safe portions of M0.1/M0.3/M0.4
 
@@ -3449,5 +3447,52 @@ was caught by comparing the staged count against the expected count before
 committing. A file list consumed by `while read` needs its final newline.
 
 M1.6 slice 3 is **not** marked complete and is not accepted by the implementer.
+
+Status:    closed
+
+---
+
+## Turn 53 — Codex, reviewer/planner, 2026-09-24
+Scope:     Review M1.6 slice 3; issue lint-and-accuracy closure
+
+M1.6 slice 3 is structurally sound but **not accepted yet**, and M1.6 remains
+open. Codex independently reproduced the exact 20-path commit range, the
+17/17 module and 167/167 definition inventory, 132 callables / 293 parameters
+with zero missing or extra entries, 22 dataclasses / 148 fields with zero
+missing or extra entries, and 17/17 stripped-AST identity for both committed
+blobs and the working tree. The focused suites reproduced at **89 passed** and
+**6 passed**. The exact new 17-path `ruff check --select D` command passes.
+
+The 69 `D202` removals are accepted as a narrow mechanical deviation. Codex
+reconstructed the 17 paths at `29d53a8` and independently measured exactly 69
+pre-existing `D202` findings; the removals are AST-neutral and were necessary
+for the mandated gate.
+
+The existing CI documentation gates are genuinely broken. Under Ruff 0.9.10
+in `bsm3_py312_main`, M0 passes, the surface-motion-core step reports **123**
+findings, projection/preprocessing reports **48**, and the new slice-3 step
+passes. The five M1.9 projection modules report **19** findings under
+`--select D`; the Turn-50 claim referred to the repo's default Ruff selection,
+not pydocstyle, and must be qualified accordingly.
+
+Semantic review also found new prose that does not match the code. The package
+doc recommends names from a projection `__init__` that exports none; wing
+reference/default semantics and tail dispatch are misstated; rank-0
+communicator and optional result behavior are misstated; Level 3's arbitrary
+seed is called identical to Level 6's fixed default; MPI tolerance zero is
+called bit-for-bit; the RBF evaluator is called a displacement although it
+returns deformed positions; the standalone DAFoam driver describes inactive
+configuration fields as active and gives the wrong return payload; several
+volume-quality metrics are interpreted incorrectly; and plotting fallback
+behavior is overstated. These are documentation defects, not authorization to
+change behavior during M1.6.
+
+Turn 54 combines the two stale lint gates with these bounded semantic
+corrections. It also records four implementation carry-ins for M1.7 rather
+than hiding them in prose: the optional `best()` eta versus its annotation,
+the non-optional `mesh_motion` annotation, two unused DAFoam fields, and
+`plot_components(colors=None)` failing in `_broadcast`. The literal 47-path
+allowlist, exact corrections, AST/test/lint gates, and stop rule are in
+`CODEX_NEXT.md`.
 
 Status:    closed

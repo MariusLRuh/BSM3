@@ -1,171 +1,219 @@
-# Codex review checklist — M1.6 slice 3 (drivers, volume motion, MPI)
+# Turn 54 — Claude implementation prompt: close M1.6 lint and semantic accuracy
 
-Claude was the implementer. Slice 3 is **ready for review and is not accepted
-by the implementer**. M1.6 is not marked complete.
+Codex reviewed M1.6 slice 3 at `81736be`. The implementation is mechanically
+sound, but M1.6 is **not accepted**: two older CI doc-lint steps fail, and the
+semantic review found inaccurate new public prose. This turn closes both debts
+without changing executable behavior.
 
-## Commits
+## Rulings
 
-| Hash | Contents |
-| --- | --- |
-| `SLICE3_BASE` = `29d53a8` | base recorded before editing |
-| `cdcba68` | 16 Python paths + `.github/workflows/actions.yml` |
-| *(docs commit)* | `PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
+1. The 69 pre-existing `D202` removals in `cdcba68` are accepted. They were
+   independently reproduced at `29d53a8`, were mechanically fixed, and preserve
+   stripped ASTs 17/17.
+2. Slice 3's structural evidence is accepted: exact path scope, coverage audit,
+   17/17 stripped-AST identity, 89 focused tests, 6 derivative/N-gon guards,
+   and the new 17-path Ruff gate all reproduced.
+3. M1.6 remains open until **all four** documentation steps in `actions.yml`
+   pass under `ruff 0.9.10` and the inaccuracies below are corrected.
+4. The M1.9 statement meant the repo's default `ruff check`, not
+   `ruff check --select D`. Correct that historical wording explicitly.
 
-No amend, reset, rebase, or rewrite. Every path staged literally.
+Base all comparisons on `81736be`. Do not amend, reset, rebase, rewrite, push,
+or clean the dirty tree.
 
-`bsm3/core/boundary_surface_movement/__init__.py` already had a module
-docstring and has no public definitions, so it is the one slice path that
-needed no edit. That is why the implementation commit holds 16 Python files,
-not 17.
+## Literal allowlist (47 paths)
 
-## Baseline confirmation
+Only these paths may change:
 
-The historical Turn-48 inventory reproduces **exactly** at `29d53a8`, so no
-target was adjusted: 8,763 LOC; 15/17 module docstrings; 108/167 definitions
-documented (59 missing, matching the historical table file by file and name by
-name); 132 callables with 293 parameters at 293 missing / 0 extra; 22
-dataclasses with 148 fields at 148 missing / 0 extra.
-
-## Results
-
-| Gate | Before | After |
-| --- | --- | --- |
-| Module docstrings | 15/17 | **17/17** |
-| Public definitions documented | 108/167 | **167/167** |
-| `Parameters` coverage | 293 missing / 0 extra | **0 / 0** |
-| `Attributes` coverage | 148 missing / 0 extra | **0 / 0** |
-| Stripped-AST identity, working tree | — | **17/17** |
-| Stripped-AST identity, committed blobs | — | **17/17** |
-| `ruff --select D`, exact 17 paths | 161 errors | **All checks passed** |
-| `pytest` focused set | 89 passed | **89 passed** |
-| `pytest` derivative + n-gon guards | 6 passed | **6 passed** |
-| Workflow YAML | — | parses; new step lists 17 paths, each once |
-| `git diff --check` over 21 paths | — | clean |
-
-## Reproducible audit
-
-Write `audit_slice3.py` to `/tmp/s3` with `PATHS`, `public_defs`, `sig_params`,
-`doc_params`, `doc_attrs`, `is_dataclass`, `local_fields` as committed in
-`cdcba68`'s sibling tooling, then run from the repo root:
-
-```bash
-python - <<'PY'
-import sys, ast; sys.path.insert(0,"/tmp/s3")
-from audit_slice3 import *
-mods=defs=docd=calls=params=pm=pe=dcs=flds=am=ae=0
-for p in PATHS:
-    t=ast.parse(open(p).read())
-    if ast.get_docstring(t): mods+=1
-    for n,nd,k in public_defs(t):
-        defs+=1
-        if ast.get_docstring(nd): docd+=1
-        if k in ("func","method"):
-            calls+=1; sp=sig_params(nd); dp=doc_params(ast.get_docstring(nd))
-            params+=len(sp)
-            pm+=len([x for x in sp if x not in dp]); pe+=len([x for x in dp if x not in sp])
-    for n in t.body:
-        if isinstance(n,ast.ClassDef) and not n.name.startswith("_") and is_dataclass(n):
-            dcs+=1; lf=local_fields(n); da=doc_attrs(ast.get_docstring(n))
-            flds+=len(lf)
-            am+=len([x for x in lf if x not in da]); ae+=len([x for x in da if x not in lf])
-print(f"modules {mods}/17 | defs {docd}/{defs} | callables {calls} params {params}"
-      f" -> {pm} missing/{pe} extra | dataclasses {dcs} fields {flds} -> {am} missing/{ae} extra")
-PY
+```text
+bsm3/mesh_motion.py
+bsm3/core/boundary_surface_movement/geometry_model.py
+bsm3/core/boundary_surface_movement/mesh_motion_config.py
+bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py
+bsm3/core/boundary_surface_movement/motion.py
+bsm3/core/boundary_surface_movement/elasticity.py
+bsm3/core/boundary_surface_movement/load_stepping.py
+bsm3/core/boundary_surface_movement/current_graph_solve.py
+bsm3/core/boundary_surface_movement/ngon_affine.py
+bsm3/core/boundary_surface_movement/quadratic_distortion.py
+bsm3/core/boundary_surface_movement/projection.py
+bsm3/core/boundary_surface_movement/quality.py
+bsm3/core/boundary_surface_movement/graph_distance.py
+bsm3/core/boundary_surface_movement/free_region.py
+bsm3/core/boundary_surface_movement/constraints.py
+bsm3/core/boundary_surface_movement/spd_solve_custom_op.py
+bsm3/core/boundary_surface_movement/geometry.py
+bsm3/core/boundary_surface_movement/intersections.py
+bsm3/core/projections/function_set_closest_distance_custom_op.py
+bsm3/core/projections/function_set_evaluation_custom_op.py
+bsm3/core/projections/function_set_projection_custom_op.py
+bsm3/core/projections/orthogonality_projection_numpy.py
+bsm3/core/projections/warm_start_candidate_projection_numpy.py
+bsm3/core/projections/warm_start_projections.py
+bsm3/preprocessing/__init__.py
+bsm3/preprocessing/components.py
+bsm3/preprocessing/gmsh.py
+bsm3/preprocessing/intersections.py
+bsm3/preprocessing/mesh_io.py
+bsm3/preprocessing/movement.py
+bsm3/preprocessing/quad_conversion.py
+bsm3/preprocessing/stl.py
+bsm3/preprocessing/symmetry.py
+bsm3/__init__.py
+bsm3/component_parameters.py
+bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py
+bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py
+bsm3/core/boundary_surface_movement/e175_derivative_ladder.py
+bsm3/core/boundary_surface_movement/geometry_volume_mpi.py
+bsm3/core/boundary_surface_movement/rbf.py
+bsm3/core/boundary_surface_movement/run_dafoam_gmsh.py
+bsm3/core/boundary_surface_movement/volume_mesh_motion.py
+bsm3/core/weighting_functions.py
+bsm3/plotting.py
+docs/overhaul/PLAN.md
+docs/overhaul/LOG.md
+docs/overhaul/CODEX_NEXT.md
 ```
 
-Expected: `modules 17/17 | defs 167/167 | callables 132 params 293 -> 0
-missing/0 extra | dataclasses 22 fields 148 -> 0 missing/0 extra`.
+Do not edit `.github/workflows/actions.yml`; its four documentation commands
+already name the intended scopes. Do not touch untracked artifacts. If a
+required correction needs executable code or a path outside this allowlist,
+stop and report it instead of widening scope.
 
-Stripped-AST identity against the base, for both working tree and committed
-blobs:
+## Part A — make the two existing documentation gates genuinely green
+
+Codex independently measured in `bsm3_py312_main`:
+
+- M0 public surface: pass.
+- surface-motion core: **123** findings (`97 D202`, `15 D105`, `5 D205`,
+  `4 D209`, `2 D401`).
+- projection/preprocessing: **48** findings (`23 D202`, `16 D204`, `5 D205`,
+  `2 D103`, `2 D401`).
+- drivers/volume/MPI: pass.
+
+Correct the exact two failing path sets from `actions.yml`. Mechanical
+whitespace fixes are allowed only for the reported doc rules; do not run an
+unscoped formatter or blanket fixer. Add/correct the missing docstrings and
+summaries manually after reading the body. Preserve every executable AST.
+
+## Part B — correct the slice-3 semantic inaccuracies
+
+Correct the public text, not the implementation:
+
+- `bsm3/__init__.py`: `bsm3.core.projections.__init__` exports none of the
+  named helpers. Do not recommend importing those names directly from that
+  package; name the guarded top-level behavior and concrete defining modules
+  accurately.
+- `component_parameters.py`: when only one of `area` or `aspect_ratio` is
+  supplied, the other retains its resolved reference value; when both are
+  `None`, planform scaling is skipped. `reference_area` and
+  `reference_aspect_ratio` are inferred from control-point extents when absent.
+  `spanwise_scaling_root` is measured about the spanwise pivot, not
+  unconditionally from the symmetry plane. `TailParameters` expresses intent
+  but is currently transformed by the generic `ComponentParameters` path; it
+  has no distinct dispatch.
+- `cfd_mesh_movement_test.py`: configured mesh writes and visualization are
+  conditional side effects of calling `run_deformation_test`; do not say they
+  are not side effects of the function.
+- `cfd_mesh_dafoam_analysis.py`: `resolve_comm(None)` selects
+  `MPI.COMM_WORLD` when `mpi4py` is available and `SerialComm` otherwise.
+  `E175DAFoamResult.mesh_motion` may be `None` on non-root ranks in the rank-0
+  path; document that fact without changing the annotation this turn.
+- `e175_derivative_ladder.py`: Level 3 and Level 6 use identical directions
+  only when Level 3 uses its default `seed_index=0`; Level 6 exposes no seed
+  argument.
+- `geometry_volume_mpi.py`: tolerance zero means zero numeric difference for
+  finite values, not bit-for-bit identity. The current max-absolute-difference
+  check does not reject NaNs; do not claim that it does.
+- `rbf.py`: document every validation performed by
+  `DisplacementInterpolationParameters.__post_init__`, including nonnegative
+  counts/weights, positive optional support width, sequence lengths, and the
+  all-or-none distance rule. `exact_interpolation` is softened when
+  `regularization` is nonzero. `DisplacementSurrogate.evaluate` returns
+  **deformed positions**, not displacements.
+- `run_dafoam_gmsh.py`: `run_command` contains no rank check; callers decide
+  where it runs. `nu_tilda_m2_per_s` and `use_wall_functions` are presently
+  carried by configuration/CLI but not consumed by `build_da_options`, which
+  hardcodes `useWallFunction=False`. The parser's wall-function default is not
+  the default-constructed `FlowConfig` value. `run_dafoam` returns the mapping
+  from `evalFunctions`, not a metadata payload. Also make the documented
+  `Raises` sections match the visible validation in
+  `set_control_dict_max_iterations`, `set_openfoam_patch_types`, and
+  `convert_and_check_mesh`.
+- `volume_mesh_motion.py`: percentiles characterize lower-tail metric values;
+  they do not report how many cells are near the worst value. Inversion is a
+  non-positive **relative Jacobian** (orientation reversal relative to the
+  baseline), not simply a non-positive raw signed volume. Mean ratio is an
+  absolute current-cell shape metric with a regular tetrahedron at one, not a
+  similarity-to-baseline metric.
+- `weighting_functions.py`: the truncated Gaussian has a mathematical jump at
+  `d == 1` for every finite `sharpness`; large sharpness can make the jump
+  numerically small but does not remove it.
+- `plotting.py`: `plot_components(colors=None)` currently fails in
+  `_broadcast`; only the empty string means preserve component colors. For
+  `highlight_mesh_nodes`, only `node_color is None` consults `node_colore`; an
+  empty explicit `node_color` falls through to red rather than to the alias.
+
+Record, but do not fix in this doc-only turn, these public/API carry-ins for
+M1.7: `DerivativeComparison.best` can return `None` despite its return
+annotation, `E175DAFoamResult.mesh_motion` is annotated non-optional, the two
+unused DAFoam configuration fields, and `plot_components(colors=None)`.
+
+Correct the Turn-50 M1.9 log wording to say the five migrated projection files
+passed the repo's **default** Ruff selection (`E9,F63,F7,F82`). Do not rewrite
+the historical result as if `--select D` had been run then.
+
+## Required gates
+
+Use `bsm3_py312_main` and reproduce all of these:
+
+1. The four literal `ruff check --select D` commands from `actions.yml` all
+   pass. Also run the workflow's literal default `Critical static checks` Ruff
+   command.
+2. Re-run the slice-3 coverage audit: 17/17 modules, 167/167 public
+   definitions, 132 callables / 293 parameters with 0 missing and 0 extra, and
+   22 dataclasses / 148 fields with 0 missing and 0 extra.
+3. For every changed Python file, compare `81736be` with both the working tree
+   and the final source commit after recursively stripping docstrings. Both
+   comparisons must be identical. Comments and doc-rule whitespace are the
+   only permitted non-docstring changes.
+4. Run:
 
 ```bash
-python - <<'PY'
-import ast, subprocess, sys; sys.path.insert(0,"/tmp/s3")
-from audit_slice3 import PATHS
-def strip(t):
-    for n in ast.walk(t):
-        if isinstance(n,(ast.Module,ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef)):
-            b=n.body
-            if b and isinstance(b[0],ast.Expr) and isinstance(b[0].value,ast.Constant) \
-               and isinstance(b[0].value.value,str): n.body=b[1:] or [ast.Pass()]
-    return t
-blob=lambda r,p: subprocess.run(["git","show",f"{r}:{p}"],capture_output=True,text=True,check=True).stdout
-ok=sum(ast.dump(strip(ast.parse(blob("29d53a8",p))),include_attributes=False)
-       == ast.dump(strip(ast.parse(blob("HEAD",p))),include_attributes=False) for p in PATHS)
-print(f"{ok}/{len(PATHS)} identical")
-PY
+conda run -n bsm3_py312_main python -m pytest -q \
+  tests/test_function_set_projection_numpy.py \
+  tests/test_warm_start_retry_regression.py \
+  tests/test_preprocessing_plotting.py \
+  tests/test_curated_assets.py \
+  tests/test_boundary_surface_movement.py -m "not integration"
+
+conda run -n bsm3_py312_main python -m pytest -q \
+  tests/test_dafoam_csdl.py \
+  tests/test_geometry_volume_mpi.py \
+  tests/test_volume_mesh_motion.py \
+  tests/test_preprocessing_plotting.py \
+  tests/test_e175_driver_configuration.py
+
+conda run -n bsm3_py312_main python -m pytest -q \
+  tests/test_derivative_gate.py \
+  tests/test_ngon_affine_operator.py \
+  tests/test_ngon_affine_load_step.py
 ```
 
-## Custom-operation return containers
+Expected: **82 passed / 3 deselected**, **89 passed**, and **6 passed**.
 
-Resolved by walking each `evaluate` body to the binding its returned name
-refers to, not from prose.
+5. `git diff --check 81736be HEAD` is empty. The final changed-path set is a
+   subset of the literal allowlist, with no disappearance or modification of
+   pre-existing dirty/untracked entries.
 
-| Callable | Body | Documented as |
-| --- | --- | --- |
-| `DAFoamAnalysisOperation.evaluate` | dict comprehension keyed by `name` over `function_names` | dict keyed by configured aerodynamic function name |
-| `DAFoamAnalysisVJP.evaluate` | dict populated at key `name` over `inputs` | dict keyed by primal input name |
-| `GeometryVolumeOperation.evaluate` | single `self.create_output(...)` call | one CSDL volume-coordinate variable |
-| `GeometryVolumeVJP.evaluate` | dict populated at key `name` over `specs` | dict keyed by design-variable name |
+## Commit and handoff
 
-All four `compute(inputs, outputs)` callbacks contain **no** value-returning
-`return`; each documents both buffers and `Returns: None`, with no invented
-value.
+Make two new commits without rewriting history:
 
-## Deviation requiring a ruling: 69 pre-existing D202 removals
+1. source docstrings/comments/doc-rule whitespace only;
+2. `PLAN.md`, `LOG.md`, and `CODEX_NEXT.md` only.
 
-After every docstring was written, 79 `D` errors remained: 4 `D102` and 4
-`D105` on `__call__`/`__post_init__` methods the audit convention excludes, 2
-`D401`, and **69 `D202`** ("no blank lines allowed after function docstring").
-
-The first ten are docstring content and were fixed as such. The 69 `D202` are
-**entirely pre-existing** — count and per-file distribution identical to
-`29d53a8`, none introduced here. Fixing one deletes a blank line between a
-docstring and the first body statement, which is body whitespace rather than
-docstring text, so it sits at the edge of "docstrings and comments only".
-
-I removed them with `ruff check --select D202 --fix`, so the edit is mechanical,
-on the grounds that `D202` is a pydocstyle docstring rule, the change is
-AST-neutral, and the alternative leaves a mandated gate failing. **Stripped-AST
-identity still reports 17/17 in both the working tree and the committed
-blobs.** Please rule on whether this was in scope; it is trivially revertible.
-
-## Blocking finding: the existing CI documentation steps already fail
-
-Adding this step does **not** make CI green. With `ruff 0.9.10` in
-`bsm3_py312_main` against the repo's `ruff.toml`:
-
-| CI step | `ruff --select D` |
-| --- | --- |
-| Numpydoc checks for the M0 public surface | All checks passed |
-| Numpydoc checks for the surface-motion core | **123 errors** |
-| Numpydoc checks for projection and preprocessing | **48 errors** |
-| Numpydoc checks for drivers, volume motion, and MPI (new) | All checks passed |
-
-Those files are outside this slice's allowlist, so they were not touched.
-
-This also does not reproduce the M1.9 review line "Ruff passes all five
-migrated projection modules": under `--select D` those five report **19
-errors**. They do pass the repo's default `ruff check`, whose `ruff.toml`
-selects only `E9,F63,F7,F82`, which is the most likely reading of that claim.
-Please confirm which command was run, and decide how the two failing steps are
-brought green.
-
-## Preservation
-
-- Pre-existing dirty tree intact: 402 entries before, 419 after, the difference
-  being exactly the 16 edited Python files and the workflow. No pre-existing
-  entry removed or altered.
-- `bsm3/core/boundary_surface_movement/e175_panel_opt.py` remains untracked and
-  unmodified, as do the two deferred mesh-generation candidates.
-- Accepted M1.9 baseline untouched: Python 3.12 in the workflow,
-  `jax[cpu]==0.4.38`, official CSDL_alpha `73a9efd`, official LFS `307ad3a`
-  installed with `--no-deps`, and canonical LFS factory imports in the five
-  projection modules.
-
-## Decision requested
-
-Accept or reject M1.6 slice 3, and rule on the `D202` deviation and on how the
-two pre-existing failing CI documentation steps are handled. M1.6 is not
-marked complete.
+Stage every path literally; do not stage directories or consume a newline-
+sensitive path loop. Update M1.6 as **ready for Codex acceptance**, not
+self-accepted. Report exact changed paths, Ruff results for all four steps,
+coverage, AST identity, test counts, deviations, and any carry-in discovered.
