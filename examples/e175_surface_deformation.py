@@ -15,6 +15,14 @@ The script walks the five stages the pipeline performs, in order:
 5. **Inspect the result.** Fold, inversion, and quality diagnostics come back
    on the result object.
 
+This script deliberately demonstrates the **optional** built-in
+lifting-surface and body helpers, because they keep stage 2 short and
+readable. They are not the required entry point. An external parameterization
+replaces stage 2 with :meth:`GeometryModel.add_component`, handing over its own
+deformed coefficients; stages 3-5 and the entire downstream BSM3 pipeline —
+intersections, graph motion, reprojection, and diagnostics — are identical
+either way.
+
 Run it directly::
 
     python examples/e175_surface_deformation.py
@@ -100,6 +108,9 @@ def main(
     )
 
     # 2. Define design variables and component motion
+    # Built-in helpers are used here for readability. An external
+    # parameterization would instead call geometry.add_component(...) with its
+    # own deformed coefficients; nothing below this stage changes.
     # The recorder is created, started, and stopped here: BSM3 never owns
     # global CSDL state. The try begins immediately so a failure in any stage
     # below still stops it.

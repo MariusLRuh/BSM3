@@ -1,26 +1,53 @@
-"""High-level, configuration-agnostic geometry input for mesh motion.
+"""Neutral binding container for externally parameterized geometry.
 
-:class:`GeometryModel` is the single public object a user builds to describe
-*what moves*. It owns the differentiable design variables and compiles the
-private component and intersection records the pipeline consumes, so callers
-never write coefficient builders, free-region factories, or pivot arithmetic.
+:class:`GeometryModel` declares *what moves* and binds it to BSM3's downstream
+mesh behaviour. It does **not** have to own the parameterization. The public
+contract is::
 
-Two component kinds are supported, and neither embeds any aircraft- or
-configuration-specific assumption:
+    any differentiable CSDL/LFS-compatible parameterization
+        -> deformed component coefficients
+        -> GeometryModel.add_component(...)
+        -> BSM3 intersections, graph motion, reprojection, diagnostics
 
-``add_lifting_surface``
-    Rigid translation and incidence plus optional planform (area and aspect
-    ratio) scaling. The pivot is taken from a named intersection curve at a
-    configurable chord fraction, and span scaling is anchored at the
-    intersection's median absolute span so the root stays attached.
+Another package may own every design variable and every deformation operation.
+It does not subclass BSM3, supply private callbacks, or call
+:meth:`GeometryModel.design_variable`. What it hands over is the deformed
+coefficients themselves.
 
-``add_body``
-    Cross-section diameter scaling about the component's control-point
-    bounding-box centre, with a free region defined along the longitudinal
-    axis.
+The generic path
+----------------
 
-Every motion target is interpolated over the load fraction, so a caller gets
-the same incremental behaviour for each load step without writing it out.
+:meth:`GeometryModel.add_component` accepts a component's deformed
+coefficients as either
+
+* one stacked ``(N, 3)`` CSDL variable or array in sorted patch-ID order, the
+  existing BSM3 stacking convention; or
+* a mapping from patch ID to coefficient block, matching the imported LFS
+  component's patch shapes.
+
+BSM3 imports the baseline STEP body, locates the component by ``search_name``,
+and validates patch IDs and block shapes *after* that import, when the
+canonical values are known. The external target must keep a compatible
+component topology and coefficient layout; changing the patch layout or
+topology itself is outside this contract.
+
+If derivatives are required, the external expression must belong to the same
+caller-owned active recorder that is later passed to
+:func:`bsm3.mesh_motion.run`. BSM3 never creates or owns recorder state.
+
+``free_region=None`` leaves the entire component free. The optional plain axis
+mapping restricts it.
+
+Optional conveniences
+---------------------
+
+:meth:`add_lifting_surface`, :meth:`add_body`, and :meth:`design_variable` are
+conveniences for callers that would rather describe a rigid/planform motion or
+a cross-section scaling than build coefficients themselves. They are neither
+required nor the universal boundary, and they embed no aircraft- or
+configuration-specific assumption. Motion targets they build are interpolated
+over the load fraction, so each load step is incremental without the caller
+writing that out.
 """
 
 from __future__ import annotations
@@ -243,16 +270,37 @@ def _resolve_external_coefficients(component, value, name: str):
 
 
 class GeometryModel:
-    """Declare design variables and the components they move.
+    """Bind component coefficients and mesh behaviour for one configuration.
 
-    Build one of these, register design variables, then add components and the
-    independent closed intersection curves that connect them. The compiled
-    records are private; callers only use the methods below.
+    This is a declaration and binding envelope, not a parameterization. Add
+    each component, say how its coefficients are produced, and name the
+    independent closed intersection curves between components. The compiled
+    records are private; callers use only the methods below.
 
     Examples
     --------
+    The generic path. ``external_coefficients`` is produced by another
+    package and may depend entirely on that package's own CSDL variables;
+    BSM3 supplies no transformation here.
+
+    >>> geometry = GeometryModel()  # doctest: +SKIP
+    >>> geometry.add_component(  # doctest: +SKIP
+    ...     name="wing",
+    ...     search_name="wing",
+    ...     deformed_coefficients=external_coefficients,
+    ... )
+
+    The optional convenience path, for callers who would rather describe a
+    motion than build coefficients:
+
     >>> geometry = GeometryModel()  # doctest: +SKIP
     >>> sweep = geometry.design_variable("sweep", 0.0, lower=-5.0, upper=5.0)
+    >>> geometry.add_lifting_surface(  # doctest: +SKIP
+    ...     name="wing",
+    ...     search_name="wing",
+    ...     pivot_intersection="wing_root",
+    ...     rotation_y_degrees=sweep,
+    ... )
     """
 
     def __init__(self) -> None:
@@ -351,10 +399,12 @@ class GeometryModel:
     ) -> None:
         """Add a component driven by externally produced coefficients.
 
-        This is the general entry point. The caller supplies the deformed
-        coefficients from any differentiable parameterization;
-        :meth:`add_lifting_surface` and :meth:`add_body` are conveniences
-        layered on the same mechanism.
+        This is the general entry point and the universal boundary. The caller
+        supplies the deformed coefficients from any differentiable
+        parameterization, owned entirely outside BSM3 if desired.
+        :meth:`add_lifting_surface` and :meth:`add_body` are separate optional
+        conveniences implemented alongside this method: each builds its own
+        private record rather than calling through here.
 
         Parameters
         ----------

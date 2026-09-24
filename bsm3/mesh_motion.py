@@ -9,6 +9,14 @@ describing what moves, and a :class:`MeshMotion` settings object describing how
 the mesh follows. :func:`run` evaluates the differentiable model and returns a
 :class:`MeshMotionResult`.
 
+:class:`GeometryModel` is a declaration and binding envelope, not a
+parameterization. Its :meth:`GeometryModel.add_component` accepts deformed
+component coefficients produced by any differentiable CSDL/LFS-compatible
+parameterization, including one owned entirely by another package, and places
+no constraint on how they were built. Its lifting-surface and body helpers are
+optional conveniences for callers who would rather describe a motion than
+supply coefficients.
+
 Only high-level names are re-exported here. Solver-assembly types, component
 records, projection callbacks, and polygon helpers stay internal, because a
 caller never needs them to deform a surface mesh.
@@ -69,7 +77,10 @@ def run(
     inputs
         Geometry, surface-mesh, and optional volume-mesh paths.
     geometry
-        Design variables and the components they move.
+        Declaration and binding envelope for the components that move. It may
+        carry externally produced differentiable coefficients and does not
+        constrain how they were parameterized; any design variables they
+        depend on must belong to ``recorder``.
     motion
         Surface, volume, quality, visualization, and derivative-check settings.
     recorder
