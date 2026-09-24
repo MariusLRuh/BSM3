@@ -313,6 +313,13 @@ documented 10 times smaller, and are too close to a null deformation for the
 organizing example. Turn 36 must correct the evidence and the documentation,
 then rerun clean tri/quad integration and clone gates.
 
+**User steering after Turn 35:** add maintained large-deformation coverage.
+Turn 36 therefore adds one full Turn-32-scale built-in deformation on the
+triangle wall and changes the external-coefficient derivative case from a tiny
+global rigid translation to a substantial relative wing deformation. The
+safe quad point remains a separate sliver-sensitive regression; arbitrarily
+extreme folded states are not normalized as supported behavior.
+
 ---
 
 ### Turn-34 implementation: bounded M1.7a correction (Claude, reviewed Turn 35)

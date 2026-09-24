@@ -134,6 +134,51 @@ not pin initial inverted corners. Evaluate initial quality on the result's
 initial coordinates and surface mesh, then assert all three input values.
 Continue comparing preprojection/final inverted **ID sets** against the input.
 
+## 7. Add deliberate large-deformation coverage
+
+The maintained suite does not currently test a substantial E175 geometry
+change. Its synthetic derivative fixtures use roughly `0.1`-`0.2` coordinate
+units, while the large aircraft envelopes occur only in legacy diagnostic
+scripts and do not gate regressions. Add two complementary cases without
+turning every derivative test into an expensive aircraft run.
+
+First, give the example one intuitive high-level `deformation_scale` argument
+(defaulting to the coherent safe scale selected in section 6). Compute all
+five targets from the Turn-32 deformation vector and their neutral references;
+do not expose five more `main()` arguments. Add a dedicated triangle-wall
+integration test at `deformation_scale=1.0`, corresponding to:
+
+```text
+wing_shift       = 0.35 m
+wing_incidence   = 0.75 deg
+wing_area        = 71.5 m^2
+tail_incidence   = 1.2 deg
+fuselage_width   = 1.02
+```
+
+This state previously ran with zero triangle inversions and folds, but measure
+it again after the correction. Require finite output, the expected shape, zero
+new inversions, zero folds, and a maximum nodal displacement above `0.1 m` so
+the test cannot silently collapse to a near-null case. Use at least two load
+steps. Do not impose this full state on the sliver-sensitive quad asset; its
+separate test continues to define the safe quad-supported point.
+
+Second, strengthen the existing external-coefficient FD integration case. It
+currently applies the same `0.004 m` x-translation to wing, tail, and fuselage,
+which is essentially a small global rigid translation and weakly exercises the
+intersection/motion chain. Apply a substantial **relative** external
+deformation instead: drive the wing coefficients chordwise while keeping the
+tail and fuselage coefficient targets at baseline. Start at a `0.35 m` wing
+shift; if that fails the triangle no-new-inversion/fold criteria, try `0.25 m`
+then `0.1 m` and use the largest passing value. Use at least two load steps,
+retain the centered-FD proof from section 2, and assert maximum final nodal
+displacement above `0.05 m`. Record the tested values and selected result.
+
+These are robustness tests inside a supported measured envelope, not an
+assertion that arbitrarily extreme geometry must remain valid. A future
+beyond-envelope test should require an explicit diagnostic failure rather than
+blessing folded output.
+
 ## Documentation corrections
 
 In the new Turn-36 log entry, record these errata without deleting history:
@@ -164,8 +209,8 @@ conda run -n central_geom python -m pytest -q \
 
 Then run every integration test in `tests/test_e175_example.py`, including the
 external-coefficient FD case, whole-component-free case, triangle example, and
-quad example. Each individual test/run retains the approximately ten-minute
-stop threshold. Report runtimes and:
+quad example, plus the large built-in triangle case. Each individual test/run
+retains the approximately ten-minute stop threshold. Report runtimes and:
 
 - tri initial/preprojection/final inversion counts and folds;
 - quad initial/preprojection/final counts, new-ID sets, initial corners,
@@ -173,6 +218,8 @@ stop threshold. Report runtimes and:
 - the analytic derivative, centered-FD value, selected step, and relative
   error;
 - whole-component-free output shape, finiteness, inversions, and folds.
+- both large-deformation target values, maximum nodal displacement, inversion
+  ID-set differences, folds, and load-step counts.
 
 Run the full suite and then verify from a fresh clone after all implementation
 commits:

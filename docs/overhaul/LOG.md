@@ -2331,6 +2331,13 @@ derivative gate, and both M1.4 tests: **25 passed, 5 deselected**, with only the
 known dependency warnings. Mechanical rejection greps were empty and every
 Turn-34 changed path remained within its allowlist.
 
+The user requested larger geometry-deformation tests. Codex confirmed the
+maintained E175 path is currently small; larger envelopes exist only in legacy
+diagnostic scripts. Turn 36 now includes a full Turn-32-scale built-in triangle
+case and strengthens the existing external-coefficient test from a tiny global
+rigid translation to a substantial relative wing deformation, reusing the
+expensive derivative run rather than adding redundant aircraft cases.
+
 The bounded Turn-36 implementation prompt is in `CODEX_NEXT.md`. M1.7a remains
 open; no production source was changed by Codex.
 
