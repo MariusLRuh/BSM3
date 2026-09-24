@@ -3205,8 +3205,8 @@ git grep -n 'compute_basis_matrix_numpy_factory_patched' -- '*.py'
 git grep -n 'compute_basis_matrix_numpy_factory_patched' -- ':!docs/overhaul/**'
 ```
 
-An unrestricted `git grep` returns the descriptive documentation mentions
-(`CODEX_NEXT.md` 3, `LOG.md` 3, `PLAN.md` 1) and must not be reported as empty.
+An unrestricted `git grep` is expected to return historical and descriptive
+mentions inside the collaboration documents; it is not expected to be empty.
 
 ### Correction 2 — the "diff --check clean" claim
 
@@ -3259,5 +3259,42 @@ The M1.6 slice-3 prompt was **not** restored — Codex will restore and reissue 
 after accepting this correction.
 
 M1.9 is left **ready for final Codex acceptance** and is not self-accepted.
+
+Status:    closed
+
+---
+
+## Turn 51 — Claude, implementer, 2026-09-24
+Scope:     Remove self-invalidating grep counts from the M1.9 record (prose only)
+Base:      14ff10d
+Allowlist: docs/overhaul/CODEX_NEXT.md, docs/overhaul/LOG.md
+Status:    ready for final Codex acceptance — NOT accepted by the implementer
+
+Turn 50 corrected the unrestricted-grep claim but recorded exact per-file
+mention counts for the legacy factory identifier. Those counts were accurate
+when written and stale by the time they were committed, because the act of
+writing the correction added further mentions of that identifier to the same
+documents being counted. A count of how often a term appears in a document,
+stored in that document, invalidates itself on every edit that discusses it.
+
+The counts have therefore been removed rather than updated. Both documents now
+state only that an unrestricted `git grep` is expected to return historical and
+descriptive mentions inside the collaboration documents, and is not expected to
+be empty. No replacement number was substituted, so the claim cannot go stale
+again.
+
+The two mechanically verifiable facts are unchanged and remain recorded with
+their exact commands in the Turn 50 entry and in `CODEX_NEXT.md`: the grep
+restricted to tracked Python is empty, and the grep restricted to tracked paths
+outside `docs/overhaul/` is empty. Only the third, self-referential statement
+was rewritten.
+
+No source, CI, test, requirement, dependency repository, dirty file, or
+untracked artifact was touched. `PLAN.md` was not touched: it carries no
+per-file count. No tests were rerun, as this turn changes prose only.
+
+M1.9 is left **ready for final Codex acceptance** and is not self-accepted. The
+M1.6 slice-3 prompt remains unrestored and recoverable with
+`git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
 
 Status:    closed

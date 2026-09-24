@@ -59,10 +59,10 @@ So there are zero tracked production Python imports and zero tracked references
 outside `docs/overhaul/`. All five projection modules carry the canonical
 import.
 
-An **unrestricted** `git grep` is *not* empty and must not be reported as such:
-it returns the expected historical and descriptive mentions inside the three
-collaboration documents (`CODEX_NEXT.md` 3, `LOG.md` 3, `PLAN.md` 1). Those are
-prose about the migration, not imports, and are meant to stay.
+An unrestricted `git grep` is expected to return historical and descriptive
+mentions inside the collaboration documents; it is not expected to be empty.
+Those mentions are prose about the migration, not imports, and are meant to
+stay. No exact count is recorded here, because recording one would change it.
 
 **2. Canonical and former patched factory are equivalent.** Byte-identical, not
 merely equivalent. All three of these hash to
