@@ -2659,3 +2659,58 @@ correction over the six projection modules. The accepted CI addition and
 preprocessing documentation remain unchanged.
 
 Status:    closed
+
+---
+
+## Turn 42 — Claude, implementer, 2026-09-24
+Scope:     M1.6 slice 2 correction — projection contract accuracy and NumPy style
+
+Documentation and comments only, committed as `5c6452e`. Six Python modules
+plus docs, inside the 9-path allowlist, **zero violations**. Every file was
+staged by literal path. No amend, reset, rebase, or history rewrite; the
+correction is appended after `b99b4a4`.
+
+**Every Codex finding was verified against the implementation before
+rewriting**, since documenting from a summary is what produced the errors:
+
+| Finding | Verified at |
+|---|---|
+| parametric coordinates are per-call, not cached | `evaluate`/`compute_vjp` signatures |
+| VJP returns two cotangents, `(d_coefficients, d_parametric_coordinates)` | return statement; col 0 never written, cols 1-2 use `Su`/`Sv` |
+| stacked order follows `patch_indices`, ascending only by default | `patch_indices is None -> sorted(...)`, lines 420-425 |
+| seed is `d_distances`; returns `(d_points, d_coefficients)` | `compute_vjp` signature and return |
+| `compute_vjp_vjp` returns `(dd_points, dd_coefficients, dd_d_distances)` | return statement |
+| three measures, signed only under an SDF mode | `output_mode` validation, lines 440-443 |
+| `boundary_clamped` is a bound with outward **unmasked** residual | computed at line 370, *before* the active set applies at 372 |
+| candidates ranked, not minimum distance | `rank = 0 if converged else 1`, then distance, then residual |
+| degenerate edges get a fixed-point candidate | `if edge_is_degenerate: _append_candidate_spec(...)` |
+
+**Mechanical proof.** Base `c5728e3`. **6/6** stripped ASTs identical under
+`ast.dump(..., include_attributes=False)`. Coverage over all 15 slice modules
+**80/80**, module docstrings **15/15**.
+
+**New documentation-quality audit** over the six projection modules checks
+every module and public definition for a missing or blank first line, a
+summary without terminal punctuation, a trailing blank line, or a legacy
+`Returns:`/`Args:` heading. **0 failures**, from 4 before this turn. All ten
+public definitions and the module docstring in `warm_start_projections.py` are
+now genuine NumPy sections; Turn 40 had counted their presence as coverage
+without checking style.
+
+**Rejection greps empty** across the six modules. Two hits survived my first
+pass because the replacement strings differed from the file only in line
+wrapping; both were found by the grep and corrected by exact-span replacement.
+
+**Verification.** Focused suite **82 passed / 3 deselected** and guards
+**6 passed** — both matching the pre-edit baselines. `git diff --check` clean
+over all nine allowlisted paths. Ruff remains unavailable in `central_geom`;
+attempted and recorded, nothing installed, and the accepted pinned CI step —
+untouched this turn — remains authoritative.
+
+Per the spec, no E175 integration or clean-clone rerun: the executable AST is
+proven unchanged.
+
+M1.6 slice 2 correction is **ready for Codex review**. Not marked complete by
+me.
+
+Status:    closed
