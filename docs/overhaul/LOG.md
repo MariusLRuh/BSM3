@@ -2561,3 +2561,67 @@ deselected** for the focused slice suite and **6 passed** for the derivative
 and M1.4 guards.
 
 Status:    closed
+
+---
+
+## Turn 40 — Claude, implementer, 2026-09-23
+Scope:     M1.6 slice 2 — projection and preprocessing documentation + CI doc-lint gate
+
+Documentation and comments only, committed as `b99b4a4`. Eight files changed
+inside the 19-path allowlist, **zero violations**. No stop rule fired.
+
+**Coverage 33/80 -> 80/80**, module docstrings on all 15 modules. Seven
+preprocessing modules were already complete and correctly received no edit, so
+the work is the six projection modules plus the `MeshData.nodes` setter.
+
+| Module | Before | After |
+|---|---:|---:|
+| `function_set_closest_distance_custom_op.py` | 0/17 | **17/17** |
+| `function_set_evaluation_custom_op.py` | 0/10 | **10/10** |
+| `function_set_projection_custom_op.py` | 0/6 | **6/6** |
+| `orthogonality_projection_numpy.py` | 0/5 | **5/5** |
+| `warm_start_candidate_projection_numpy.py` | 0/5 | **5/5** |
+| `warm_start_projections.py` | 7/10 | **10/10** |
+| `mesh_io.py` | 6/7 | **7/7** |
+| the other 8 modules | complete | unchanged |
+
+**Mechanical proof.** Base `cc560f6`. All **15/15** stripped ASTs are identical
+under `ast.dump(..., include_attributes=False)` after recursively removing
+leading string-literal docstrings from every module, class, function, and async
+function scope.
+
+**Contracts now documented.** Stacked coefficient convention and per-patch row
+spans; the split between setup-time NumPy and differentiable CSDL custom
+operations, and each operation's `evaluate`/`compute` boundary; warm-start
+candidate selection, degenerate-edge exclusion, and the boundary-clamped retry
+path; Newton convergence and tolerance semantics; first- and second-order VJP
+inputs and outputs. Derivative text states that reverse mode is built from the
+converged forward state via the implicit-function theorem and carries **no**
+guarantee where the solve did not converge, rather than claiming accuracy the
+implementation does not provide. Both `load_function_set_from_pickle` and
+`load_function_set` carry an explicit warning that Python pickle executes
+arbitrary code and only trusted local input is acceptable; M1.8 still owns
+retiring them.
+
+**CI.** One new step, *Numpydoc checks for projection and preprocessing*,
+lints exactly the 15 slice paths with the pinned `ruff==0.9.10`. The three
+existing lint steps are untouched; the workflow parses with 9 steps.
+
+**Verification.** Focused projection/preprocessing suite **82 passed, 3
+deselected** and derivative/M1.4 guards **6 passed** — both exactly matching
+the pre-edit baselines Codex recorded. `git diff --check` clean over all
+allowlisted paths. Ruff remains unavailable in `central_geom`; the local
+attempt was made and recorded, no dependency was installed, and the pinned CI
+step is the authoritative gate. No E175 integration or clean-clone rerun, per
+the spec, since the executable AST is proven unchanged.
+
+**Deviation to report.** An initial commit staged `bsm3/core/projections/` as a
+directory, which swept in **12 untracked research artifacts** including
+`.stp`, `.pkl`, and `.pickle` binaries. It was detected by the allowlist check
+immediately, reset with `git reset --soft HEAD~1 && git reset`, and replaced by
+an explicit per-file staging. The final commit contains 8 files; all 12
+artifacts are verified still untracked and the dirty tree is unchanged.
+
+M1.6 slice 2 is **ready for Codex review**. Not marked complete by me.
+
+Status:    closed
