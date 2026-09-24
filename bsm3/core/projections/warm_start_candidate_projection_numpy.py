@@ -5,13 +5,15 @@ boundaries: the closest location may lie on an edge, or on a neighbouring
 patch entirely. This module builds several candidate seeds per query point,
 solves each, and keeps the closest converged result.
 
-It also handles the two awkward cases that motivated it. Degenerate edges,
-where a patch boundary has collapsed to nearly a point, are excluded via a
-measured extent map. Points that "converge" only because the active set masked
-an outward residual at a boundary are flagged and retried, since such a point
-usually belongs on the other side of that edge.
+It also handles the two awkward cases that motivated it. A boundary edge whose
+sampled arc length has collapsed to nearly a point cannot support a
+one-dimensional edge solve, so that solve is replaced by a single fixed-point
+candidate. Points whose final parameter sits on a bound with an outward
+unmasked residual are flagged ``boundary_clamped`` and retried, since such a
+point usually belongs on the other side of that edge.
 
-Everything here is pure NumPy and runs at setup time.
+Everything here is eager NumPy: the kernels execute when called, either
+directly or from a CSDL custom operation's ``compute``.
 """
 
 from __future__ import annotations
@@ -87,8 +89,9 @@ class WarmStartCandidateProjectionResult:
     residual, converged, iterations
         Newton evidence for the accepted candidate.
     candidate_kind
-        Which candidate type won for each point, for example a patch interior, a
-        named boundary edge, or a neighbouring patch.
+        Which candidate type won for each point, for example a patch interior,
+        a named boundary edge, a fixed point on a degenerate edge, or a
+        neighbouring patch.
     warm_patch_id, warm_uv0
         The seed the winning solve started from.
     edge_map
@@ -1076,26 +1079,40 @@ def project_points_with_warm_start_candidates_numpy(
 ) -> WarmStartCandidateProjectionResult:
     """Project points by trying several warm-started candidates and keeping the best.
 
-    For each query point the search assembles candidate seeds: the nearest
-    tessellated vertex's own patch, optionally that patch's boundary edges, and
-    optionally the neighbouring patch and its edges. Each candidate is solved with
-    the Newton routines in :mod:`orthogonality_projection_numpy`, and the
-    candidate with the smallest squared distance wins.
+    Runs eagerly. For each query point the search assembles candidate seeds:
+    the nearest tessellated vertex's own patch, optionally that patch's
+    boundary edges, and optionally the neighbouring patch and its edges. Each
+    candidate is solved with the Newton routines in
+    :mod:`orthogonality_projection_numpy`.
 
-    Degenerate edges are excluded using the supplied extent map, because a
-    collapsed edge gives a seed that cannot converge usefully.
+    Candidates are ranked rather than compared on distance alone. A converged
+    candidate always outranks a non-converged one. Among converged candidates
+    the smaller squared distance wins, with residual as the tie-break; when no
+    candidate converged, the smaller residual wins, with squared distance as
+    the tie-break.
 
-    A point that converges only by boundary clamping, or that fails outright, is
-    routed into the retry path controlled by the ``retry_*`` arguments: additional
-    nearby edges, a local multi-scale search, and acceptance thresholds that let a
-    slightly worse but genuinely converged candidate replace a clamped one.
+    For an edge listed in ``degenerate_edge_map``, the one-dimensional edge
+    solve is replaced by a single fixed-point candidate, because a collapsed
+    edge cannot support a solve along its length.
+
+    A point flagged ``boundary_clamped``, or one that fails outright, is routed
+    into the retry path controlled by the ``retry_*`` arguments: additional
+    nearby edges, a local multi-scale search, and acceptance thresholds that
+    let a genuinely converged candidate replace a clamped one even when it is
+    slightly farther away.
+
+    Parameters
+    ----------
+    degenerate_edge_map
+        Maps ``(patch_id, edge_name)`` to measured arc length for edges that
+        have collapsed. ``None`` disables fixed-point substitution.
 
     Returns
     -------
     WarmStartCandidateProjectionResult
-        The accepted candidate per point together with its convergence evidence
-        and the seed it started from. Points that never converged are returned
-        rather than raising.
+        The accepted candidate per point together with its convergence
+        evidence and the seed it started from. Points that never converged are
+        returned rather than raising.
     """
     points = np.asarray(points, dtype=float)
     if points.ndim != 2:

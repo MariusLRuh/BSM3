@@ -7,23 +7,31 @@ on the surface and returns a differentiable scalar measure per point.
 
 The work is split deliberately:
 
-* :class:`FunctionSetProjectionModel` performs the NumPy, setup-time geometry.
-  It caches patch metadata, builds the tessellated surface, and runs the
-  warm-started Newton solve. None of it is a CSDL operation.
+* :class:`FunctionSetProjectionModel` is the NumPy/PyVista kernel. Its
+  constructor caches patch metadata, B-spline space data, row spans, and the
+  initial tessellation; its :meth:`FunctionSetProjectionModel.project` and
+  reverse methods then run **eagerly** whenever called, whether directly or
+  from a CSDL custom operation's ``compute``. It is not a CSDL operation.
 * :class:`FunctionSetClosestDistanceOperation` and the two VJP classes wrap
-  that model as differentiable CSDL custom operations. They carry no geometry
-  logic of their own; each defines an ``evaluate`` that declares the CSDL
-  inputs and outputs, and a ``compute`` that calls into the model.
+  that kernel for CSDL. They carry no geometry logic: ``evaluate`` declares
+  graph inputs, outputs, and derivatives, and ``compute`` performs the eager
+  calculation.
 
-Coefficients are always passed in the stacked convention: patches concatenated
-by row in ascending patch-ID order, shape ``(total_control_points,
-physical_dimension)``. :class:`PatchInfo` records the ``start``/``stop`` row
-span each patch occupies inside that array.
+Coefficients are passed in the stacked convention: patches concatenated by row
+in ``model.patch_ids`` order, which follows an explicit ``patch_indices``
+argument when one is supplied and otherwise defaults to ascending patch ID.
+The array has shape ``(total_control_points, physical_dimension)``, and
+:class:`PatchInfo` records the half-open ``start:stop`` row span each patch
+occupies inside it.
+
+The forward output is the configured ``output_mode`` measure — distance,
+squared distance, or regularized distance — optionally signed when an SDF sign
+mode is active. It is not signed unconditionally.
 
 Second-order reverse mode is available through
 :class:`FunctionSetClosestDistanceVJPVJP`. It differentiates the first VJP and
-is only as accurate as the converged Newton state it is built from; a point
-whose projection did not converge carries no guarantee at either order.
+is only as meaningful as the Newton state it is built from; a point whose
+projection did not converge carries no guarantee at either order.
 """
 
 from __future__ import annotations
@@ -167,7 +175,8 @@ def stack_function_set_coefficients(function_set, patch_ids: Optional[Iterable[i
     -------
     numpy.ndarray
         Array of shape ``(total_control_points, physical_dimension)`` with each
-        patch's control points flattened and concatenated by row.
+        patch's control points flattened and concatenated by row, in the order
+        given by ``patch_ids``.
     """
     if patch_ids is None:
         patch_ids = sorted(int(idx) for idx in function_set.functions.keys())
@@ -371,16 +380,25 @@ class _MutableFunctionSetWrapper:
 
 
 class FunctionSetProjectionModel:
-    """Setup-time NumPy projection state for one function set.
+    """Eager NumPy/PyVista projection kernel for one function set.
 
-    Holds the cached patch metadata, tessellated surface, edge maps, and solver
-    tolerances needed to project points onto a deformed function set, and provides
-    the forward projection plus its first- and second-order reverse-mode
-    derivatives.
+    Construction caches patch metadata, B-spline space data, stacked row
+    spans, edge maps, solver tolerances, and the initial tessellation.
+    :meth:`project`, :meth:`compute_vjp`, and :meth:`compute_vjp_vjp` then
+    execute immediately whenever they are called.
 
-    This class is not a CSDL operation. It is pure NumPy and is constructed once,
-    then reused for every forward and reverse evaluation; the CSDL custom
-    operations in this module hold a reference to it.
+    This class is not a CSDL operation; the custom operations in this module
+    hold a reference to it and call it from their ``compute``.
+
+    Attributes
+    ----------
+    patch_ids
+        Patch order defining the stacked coefficient layout. Follows an
+        explicit ``patch_indices`` argument when supplied, otherwise ascending
+        patch ID.
+    output_mode
+        One of ``"distance"``, ``"squared_distance"``, or
+        ``"regularized_distance"``.
     """
     def __init__(
         self,
@@ -1129,10 +1147,11 @@ class FunctionSetProjectionModel:
         return mesh
 
     def project(self, stacked_coefficients: np.ndarray, points: np.ndarray):
-        """Project points onto the surface and return a differentiable measure.
+        """Project points onto the surface and return the configured measure.
 
-        Runs the warm-started Newton solve for every query point, then forms the
-        signed output measure selected at construction.
+        Runs eagerly: the warm-started Newton solve executes for every query
+        point, then the ``output_mode`` measure is formed and signed if an SDF
+        sign mode is active.
 
         Parameters
         ----------
@@ -1266,19 +1285,24 @@ class FunctionSetProjectionModel:
         ----------
         stacked_coefficients, points
             Forward inputs, in the same conventions as :meth:`project`.
-        d_output_measure
+        d_distances
             Reverse seed, one value per query point.
+        forward_state
+            State returned by :meth:`project` for these same inputs.
 
         Returns
         -------
-        tuple of numpy.ndarray
-            Cotangents with respect to the stacked coefficients and the query points,
-            matching their input shapes.
+        d_points : numpy.ndarray
+            Cotangent with respect to the query points.
+        d_coefficients : numpy.ndarray
+            Cotangent with respect to the stacked coefficients.
 
         Notes
         -----
-        Built from the converged forward state via the implicit-function theorem, not
-        by differentiating the Newton iteration.
+        Returned in the order ``(d_points, d_coefficients)``. Built from the
+        forward state via the implicit-function theorem, not by
+        differentiating the Newton iteration, so it carries no guarantee at
+        points that did not converge.
         """
         stacked_coefficients = np.asarray(stacked_coefficients, dtype=float)
         points = np.asarray(points, dtype=float).reshape(-1, self.physical_dimension)
@@ -1393,19 +1417,35 @@ class FunctionSetProjectionModel:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Apply the second-order reverse-mode product.
 
-        Differentiates :meth:`compute_vjp`, giving the reverse product of the
-        first-order VJP with respect to its own inputs and seed.
+        Differentiates :meth:`compute_vjp` with respect to its own inputs and
+        seed.
+
+        Parameters
+        ----------
+        stacked_coefficients, points
+            Forward inputs, in the same conventions as :meth:`project`.
+        d_distances
+            First-order reverse seed.
+        d_points_cotangent, d_coefficients_cotangent
+            Second-order seeds on the two first-order outputs.
+        forward_state
+            State returned by :meth:`project` for these same inputs.
 
         Returns
         -------
-        tuple of numpy.ndarray
-            Cotangents for the stacked coefficients, the query points, and the
-            first-order seed.
+        dd_points : numpy.ndarray
+            Cotangent with respect to the query points.
+        dd_coefficients : numpy.ndarray
+            Cotangent with respect to the stacked coefficients.
+        dd_d_distances : numpy.ndarray
+            Cotangent with respect to the first-order seed.
 
         Notes
         -----
-        Inherits the first-order accuracy caveat: it is only meaningful where the
-        forward projection converged.
+        Returned in the order
+        ``(dd_points, dd_coefficients, dd_d_distances)``. Inherits the
+        first-order caveat: it is only meaningful where the forward projection
+        converged.
         """
         stacked_coefficients = np.asarray(stacked_coefficients, dtype=float)
         points = np.asarray(points, dtype=float).reshape(-1, self.physical_dimension)
@@ -1656,8 +1696,9 @@ class FunctionSetProjectionModel:
 class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBeta):
     """CSDL custom operation for the first-order reverse product.
 
-    Pairs with :class:`FunctionSetClosestDistanceOperation` and reads the forward
-    state that operation cached, so it must run against the same coefficients.
+    Pairs with :class:`FunctionSetClosestDistanceOperation` and reads the
+    forward state cached in ``shared_state``, so it must run against the same
+    coefficients.
     """
     def __init__(self, model: FunctionSetProjectionModel, shared_state: Dict[str, object]):
         super().__init__()
@@ -1677,7 +1718,8 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
         Returns
         -------
         tuple of csdl_alpha.Variable
-            Coefficient and point cotangents.
+            Point and coefficient cotangents, matching the model's
+            ``(d_points, d_coefficients)`` order.
         """
         coefficients = inputs["coefficients"]
         points = inputs["points"].reshape(-1, self.model.physical_dimension)
@@ -1702,7 +1744,7 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
         }
 
     def compute(self, inputs, outputs):
-        """Evaluate the first-order cotangents into ``outputs``."""
+        """Compute the first-order cotangents eagerly and populate ``outputs``."""
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
@@ -1721,8 +1763,9 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
 class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperationBeta):
     """CSDL custom operation for the second-order reverse product.
 
-    Differentiates :class:`FunctionSetClosestDistanceVJP`. It is only as reliable
-    as the converged forward state underneath it.
+    Differentiates :class:`FunctionSetClosestDistanceVJP` and reads the same
+    cached forward state. It is only as reliable as that state: points that
+    did not converge carry no guarantee.
     """
     def __init__(self, model: FunctionSetProjectionModel, shared_state: Dict[str, object]):
         super().__init__()
@@ -1735,7 +1778,9 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
         Returns
         -------
         tuple of csdl_alpha.Variable
-            Cotangents for the coefficients, the points, and the first-order seed.
+            Cotangents for the points, the coefficients, and the first-order
+            seed, matching the model's
+            ``(dd_points, dd_coefficients, dd_d_distances)`` order.
         """
         coefficients = inputs["coefficients"]
         points = inputs["points"].reshape(-1, self.model.physical_dimension)
@@ -1760,7 +1805,7 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
         }
 
     def compute(self, inputs, outputs):
-        """Evaluate the second-order cotangents into ``outputs``."""
+        """Compute the second-order cotangents eagerly and populate ``outputs``."""
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
@@ -1784,9 +1829,10 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
 class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperationBeta):
     """CSDL custom operation wrapping the forward projection.
 
-    Carries no geometry logic. ``evaluate`` declares the CSDL inputs and output;
-    ``compute`` delegates to :meth:`FunctionSetProjectionModel.project` and caches
-    the forward state for the reverse passes.
+    Carries no geometry logic. ``evaluate`` declares the graph inputs, output,
+    and derivatives; ``compute`` performs the eager projection through
+    :meth:`FunctionSetProjectionModel.project` and caches the forward state in
+    ``shared_state`` for the reverse passes.
     """
     def __init__(self, model: FunctionSetProjectionModel):
         super().__init__()
@@ -1794,7 +1840,7 @@ class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperat
         self.shared_state: Dict[str, object] = {}
 
     def evaluate(self, coefficients, points):
-        """Declare the CSDL inputs and the output measure.
+        """Declare the graph inputs and the output measure.
 
         Parameters
         ----------
@@ -1806,7 +1852,7 @@ class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperat
         Returns
         -------
         csdl_alpha.Variable
-            One output-measure value per query point.
+            One value per query point, in the configured ``output_mode``.
         """
         points = points.reshape(-1, self.model.physical_dimension)
 
@@ -1824,7 +1870,10 @@ class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperat
         return closest_distance
 
     def compute(self, inputs, outputs):
-        """Run the forward projection and store its state.
+        """Compute the projection eagerly and populate ``outputs``.
+
+        The forward state is cached in ``shared_state`` so the reverse passes
+        can reuse it.
 
         Parameters
         ----------

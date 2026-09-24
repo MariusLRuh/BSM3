@@ -2,8 +2,8 @@
 
 Two solves live here: an interior solve on the orthogonality residual, and an
 edge solve with one parametric coordinate pinned to a patch boundary. Both are
-pure NumPy and run at setup time; the differentiable CSDL layer sits above
-them.
+eager NumPy kernels that execute when called, either directly or from a CSDL
+custom operation's ``compute``.
 
 Neither solve raises on failure. Every point comes back inside a
 :class:`SurfaceProjectionResult` carrying its residual, step norm, iteration
@@ -83,11 +83,13 @@ class SurfaceProjectionResult:
     iterations
         Newton iterations actually taken per point.
     boundary_clamped
-        ``True`` where a point converged only because the active set masked an
-        outward residual at a patch boundary. Such a point sits on an edge and may
-        belong on a neighbouring patch, so the warm-start driver routes it into
-        the retry path. ``None`` for candidates that lie on a boundary by
-        construction.
+        ``True`` where the final parameter lies on a bound while the
+        **unmasked** residual still points outward. It is computed before the
+        active set is applied, so it is independent of ``converged`` and does
+        not by itself imply that the point converged. Such a point sits on an
+        edge and may belong on a neighbouring patch, so the warm-start driver
+        routes it into the retry path. ``None`` for candidates that lie on a
+        boundary by construction.
     """
     uv: np.ndarray
     projected_points: np.ndarray
@@ -194,7 +196,7 @@ def make_surface_orthogonality_evaluator_numpy(
     degrees: Tuple[int, ...],
     knot_vectors: Tuple[np.ndarray, ...],
 ):
-    """Build a NumPy evaluator for the orthogonality residual and its Jacobian.
+    """Build an eager NumPy evaluator for the orthogonality residual and Jacobian.
 
     The residual is the surface tangent basis dotted with the offset from the
     query point, so it vanishes exactly when that offset is orthogonal to the
@@ -292,6 +294,8 @@ def project_points_orthogonality_newton_numpy(
     params: OrthogonalityNewtonParams = OrthogonalityNewtonParams(),
 ) -> SurfaceProjectionResult:
     """Project points onto a patch interior by Newton on the orthogonality residual.
+
+    Runs eagerly when called.
 
     Parameters
     ----------

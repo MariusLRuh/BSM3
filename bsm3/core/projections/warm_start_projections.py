@@ -1,15 +1,17 @@
-"""
-pyvista_warmstart.py
+"""Per-patch triangulation and PyVista warm-start seeds for Newton projection.
 
-Build a per-patch structured triangulation from B-spline surface samples (with (patch_id,u,v)
-stored per vertex), then use PyVista's batched closest-cell query to produce warm-start
-Newton seeds (patch_id, u0, v0) via barycentric interpolation.
+Each patch is sampled on a structured parametric grid and triangulated
+independently, so no triangle ever bridges two patches. Every mesh vertex
+carries its ``(patch_id, u, v)``, which lets PyVista's batched closest-cell
+query produce Newton seeds by barycentric interpolation.
 
-Key guarantees:
-- Triangles never bridge patches (triangulate per patch only).
-- Every mesh vertex carries (patch_id, u, v).
-- Closest-point-on-triangulation gives you a robust broad-phase; barycentric interpolation
-  yields an excellent parametric warm-start for Newton on the underlying surface.
+Everything here is eager NumPy/PyVista: the functions execute when called.
+
+Notes
+-----
+Triangulating per patch is what keeps a seed's ``patch_id`` meaningful; a
+cross-patch triangle would interpolate coordinates that belong to no single
+patch.
 """
 
 from __future__ import annotations
@@ -75,18 +77,23 @@ def build_sampled_patches_mesh(
     u_range: Tuple[float, float] = (0.0, 1.0),
     v_range: Tuple[float, float] = (0.0, 1.0),
 ) -> pv.PolyData:
-    """
-    Samples each patch on a structured (Nu x Nv) parametric grid and triangulates *per patch*.
-    Stores per-vertex:
-      - patch_id (int)
-      - u (float)
-      - v (float)
+    """Triangulate every patch on a structured parametric grid.
 
-    Assumes your API:
-      function_set.evaluate(parametric_coordinates=(i, uv))
-    where uv is (M,2) and returns (M,3).
+    Each patch is sampled on an ``Nu`` by ``Nv`` grid and triangulated on its own,
+    so the merged result contains no cross-patch triangles. Every vertex stores
+    its ``patch_id``, ``u``, and ``v``.
 
-    Returns a single merged PolyData containing all patches (but with no cross-patch triangles).
+    Parameters
+    ----------
+    function_set
+        Object whose ``evaluate(parametric_coordinates=(patch_id, uv))`` accepts
+        ``uv`` of shape ``(M, 2)`` and returns points of shape ``(M, 3)``.
+
+    Returns
+    -------
+    pyvista.PolyData
+        Merged surface over all patches, carrying the per-vertex ``patch_id``,
+        ``u``, and ``v`` arrays.
     """
     patch_indices = list(patch_indices)
 
@@ -224,11 +231,24 @@ def warm_start_from_triangulation(
     mesh: pv.PolyData,
     points: np.ndarray,
 ) -> WarmStartResult:
-    """
-    Batched closest-cell query + barycentric interpolation of (u,v).
+    """Produce Newton seeds by batched closest-cell query.
 
-    Returns:
-      patch_id[i], uv0[i] as Newton seed for projecting points[i] onto patch patch_id[i].
+    Each query point's closest tessellation cell is found, and the cell's vertex
+    coordinates are barycentrically interpolated to give a starting ``(u, v)`` on
+    that cell's patch.
+
+    Parameters
+    ----------
+    mesh
+        Triangulated surface from :func:`build_sampled_patches_mesh`.
+    points
+        Query points of shape ``(N, 3)``.
+
+    Returns
+    -------
+    WarmStartResult
+        Seed patch, starting coordinates, closest tessellated point, cell index,
+        and squared seed distance for each query point.
     """
     points = np.asarray(points, dtype=np.float64)
 
@@ -291,12 +311,18 @@ EdgeName = str  # "u0", "u1", "v0", "v1"
 
 @dataclass(frozen=True)
 class NeighborEdgeMap:
-    """
-    Maps (patch_id, edge) -> (neighbor_patch_id, neighbor_edge, reverse_param)
+    """Adjacency from one patch edge to the edge that meets it.
 
-    reverse_param means: along the shared edge, swap orientation:
-      - for u-edges, "along edge" parameter is v
-      - for v-edges, "along edge" parameter is u
+    Attributes
+    ----------
+    neighbor_patch
+        Patch on the other side of the shared edge.
+    neighbor_edge
+        That patch's edge name.
+    reverse_along_edge
+        ``True`` when the two edges run in opposite parametric directions, so the
+        along-edge parameter must be flipped when crossing. The along-edge
+        parameter is ``v`` for a ``u`` edge and ``u`` for a ``v`` edge.
     """
     neighbor_patch: int
     neighbor_edge: EdgeName
@@ -356,18 +382,17 @@ def generate_edge_neighbor_seeds(
     edge_map: Dict[Tuple[int, EdgeName], NeighborEdgeMap],
     eps_edge: float = 1e-3,
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
-    """
-    Given primary seeds (patch_id, uv0), generate additional seeds across neighboring patches
-    when uv0 is near an edge.
+    """Add candidate seeds on neighbouring patches for near-edge points.
 
-    Returns a list of (patch_id_all, uv_all) candidate sets.
-    - First entry is the original seeds.
-    - Subsequent entries are neighbor seeds (same length N), but with patch_id set to neighbor
-      where an edge match exists; otherwise keeps original seed.
+    A seed close to a patch boundary may belong on the adjoining patch, so an
+    extra candidate set is emitted for each such crossing.
 
-    Typical usage:
-      candidates = generate_edge_neighbor_seeds(...)
-      run Newton for each candidate set; pick best result per point.
+    Returns
+    -------
+    list of tuple
+        Candidate sets of ``(patch_id, uv)``, each the same length as the input.
+        The first entry is the original seeds; later entries carry the neighbour's
+        ``patch_id`` where an edge match exists and the original seed otherwise.
     """
     patch_id = np.asarray(patch_id, dtype=np.int32)
     uv0 = np.asarray(uv0, dtype=np.float64)
@@ -408,14 +433,19 @@ def pick_best_newton_result(
     candidates: List[Tuple[np.ndarray, np.ndarray]],
     newton_project_fn,
 ):
-    """
-    Runs your Newton projector for each candidate seed set and selects best per point.
+    """Run a Newton projector on each candidate set and keep the best per point.
 
-    newton_project_fn signature should be something like:
-      xproj, uv, dist2 = newton_project_fn(points, patch_id, uv0)
-    with batch support.
+    Parameters
+    ----------
+    newton_project_fn
+        Batched callable returning ``(xproj, uv, dist2)`` for a given
+        ``(points, patch_id, uv0)``.
 
-    Returns best (xproj, patch_id, uv, dist2).
+    Returns
+    -------
+    tuple
+        Best ``(xproj, patch_id, uv, dist2)`` per point, selected on squared
+        distance across the candidate sets.
     """
     points = np.asarray(points, dtype=np.float64)
     N = points.shape[0]
@@ -541,13 +571,21 @@ def sample_bounding_box_faces(bbox_min, bbox_max, num_samples_per_face=10):
 
 
 def sort_by_patch(patch_id: np.ndarray, *arrays):
-    """
-    Sorts patch_id and any number of aligned arrays (same first dimension) by patch_id.
+    """Sort a patch-ID array and any aligned arrays by patch.
 
-    Returns:
-      order: permutation indices
-      inv_order: inverse permutation
-      patch_id_sorted, *arrays_sorted
+    Parameters
+    ----------
+    patch_id
+        Patch identifier per row.
+    *arrays
+        Further arrays sharing the same first dimension.
+
+    Returns
+    -------
+    tuple
+        ``(order, inv_order, patch_id_sorted, *arrays_sorted)``, where ``order``
+        is the permutation applied and ``inv_order`` restores the original
+        ordering.
     """
     patch_id = np.asarray(patch_id)
     order = np.argsort(patch_id, kind="stable")
@@ -564,8 +602,19 @@ def sort_by_patch(patch_id: np.ndarray, *arrays):
     return order, inv_order, *out
 
 def unsort(inv_order: np.ndarray, *arrays_sorted):
-    """
-    Applies inverse permutation to bring arrays back to original order.
+    """Restore arrays to their original order.
+
+    Parameters
+    ----------
+    inv_order
+        Inverse permutation produced by :func:`sort_by_patch`.
+    *arrays
+        Arrays to restore.
+
+    Returns
+    -------
+    tuple
+        The arrays in their pre-sort order.
     """
     return [np.asarray(a)[inv_order] for a in arrays_sorted]
 

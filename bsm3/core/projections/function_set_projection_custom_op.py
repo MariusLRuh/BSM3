@@ -1,13 +1,17 @@
 """Differentiable projection returning points or parametric coordinates.
 
 This is the sibling of the closest-distance operation: it runs the same
-warm-started Newton projection but exposes the projected result rather than a
-scalar measure, which is what the mesh-motion pipeline needs when it has to
-place vertices back onto a deformed surface.
+eager warm-started Newton projection but exposes the projected result rather
+than a scalar measure, which is what the mesh-motion pipeline needs when it
+has to place vertices back onto a deformed surface.
 
-Coefficients use the stacked convention. Derivatives come from the converged
-forward state via the implicit-function theorem, so a point whose Newton solve
-did not converge carries no derivative guarantee.
+Coefficients use the stacked convention, ordered by ``model.patch_ids``.
+Parametric output has shape ``(N, 3)`` with columns ``[patch_id, u, v]``; the
+patch-ID column is discrete and has zero derivative. Physical output has shape
+``(N, physical_dimension)``.
+
+Derivatives come from the forward state via the implicit-function theorem, so
+a point whose Newton solve did not converge carries no derivative guarantee.
 """
 
 from __future__ import annotations
@@ -260,7 +264,7 @@ def _compute_projection_vjp(
 class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
     """CSDL custom operation for the reverse product of the projection.
 
-    Reads the forward state cached by the paired
+    Reads the forward state cached in ``shared_state`` by the paired
     :class:`FunctionSetProjectionOperation`, so it must run against the same
     coefficients.
     """
@@ -304,7 +308,7 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
         }
 
     def compute(self, inputs, outputs):
-        """Evaluate the cotangents into ``outputs``."""
+        """Compute the cotangents eagerly and populate ``outputs``."""
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_output = np.asarray(inputs["d_output"], dtype=float)
@@ -325,8 +329,10 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
 class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBeta):
     """CSDL custom operation returning projected points or coordinates.
 
-    Wraps the same NumPy projection machinery as the closest-distance operation,
-    but exposes the projected result itself rather than a scalar distance measure.
+    Wraps the same eager NumPy projection kernel as the closest-distance
+    operation, but exposes the projected result itself rather than a scalar
+    distance measure. ``evaluate`` declares the graph inputs, output, and
+    derivatives; ``compute`` performs the calculation.
     """
     def __init__(
         self,
@@ -341,7 +347,7 @@ class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBe
         self.shared_state: Dict[str, object] = {}
 
     def evaluate(self, coefficients, points):
-        """Declare the CSDL inputs and the projection output.
+        """Declare the graph inputs and the projection output.
 
         Parameters
         ----------
@@ -353,8 +359,10 @@ class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBe
         Returns
         -------
         csdl_alpha.Variable
-            Projected points, or the converged parametric coordinates when the
-            operation was configured to return them.
+            Physical points of shape ``(N, physical_dimension)``, or, when the
+            operation was configured to return parametric output, an array of
+            shape ``(N, 3)`` with columns ``[patch_id, u, v]`` whose patch-ID
+            column has zero derivative.
         """
         points = points.reshape(-1, self.model.physical_dimension)
 
@@ -375,7 +383,10 @@ class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBe
         return output
 
     def compute(self, inputs, outputs):
-        """Run the projection and store its forward state into ``outputs``."""
+        """Compute the projection eagerly and populate ``outputs``.
+
+        The forward state is cached in ``shared_state`` for the reverse pass.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
 
