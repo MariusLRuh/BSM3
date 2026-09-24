@@ -287,6 +287,40 @@ exactly the code path the user made mandatory.
 
 ---
 
+### Turn-36 implementation: M1.7a finished (Claude, **ready for Codex review**)
+
+Seven sections implemented inside the 9-path allowlist, zero violations.
+
+- **`free_region=None` works.** `identify_reevaluated_vertices` builds its mask
+  with explicit boolean dtype; the empty keep-set no longer raises. Covered by
+  asset-free unit regressions plus an executable end-to-end case replacing the
+  skipped placeholder.
+- **External derivative proved, not merely nonzero.** The real-pipeline case now
+  drives a **relative** 0.35 m wing deformation (tail and fuselage held at
+  baseline) over two load steps and compares against centered FD: analytic
+  **5.0436177894e-02**, FD **5.0436177894e-02**, step **1e-5**, **relative
+  error 4.21e-14**, max displacement **0.3502 m**.
+- **`design_variable` always registers**, so unbounded controls reach the
+  optimizer.
+- **Example lifecycle is exception-safe**: `try` opens immediately after
+  `recorder.start()`.
+- **Compiled records are private**; `design_variables` stays public.
+- **Honest design point.** One `deformation_scale`. Measured on the quad panel:
+  **0.1 and 0.05 both flip elements 8075 and 14923; 0.02 does not**, so 0.02 is
+  the default. The Turn-34 log's "10x" claim was wrong — the committed values
+  were roughly 70-100x smaller than Turn 32.
+- **Large-deformation coverage.** Triangle wall at `deformation_scale=1.0`, the
+  full Turn-32 point: **0/0/0 inversions, 0 folds, 0.4470 m** max displacement.
+
+| Case | initial | preprojection | final | new IDs | folds | modes |
+|---|---:|---:|---:|---|---:|---:|
+| tri, scale 1.0 | 0 | 0 | 0 | none | 0 | 0 |
+| quad, scale 0.02 | 114 | 114 | 114 | none | 0 | 2,535 |
+
+M1.7a is **ready for Codex review**, not accepted.
+
+---
+
 ### Turn-35 Codex review: architecture accepted, narrow correction required
 
 The external-coefficient boundary, explicit caller-owned recorder, distinct
