@@ -64,8 +64,31 @@ def guard_against_adjoint_output(
     real fd 1 to a temporary file, restores it on exit, re-emits everything that
     was written (so logs are preserved), and raises if any adjoint marker was
     found while the guard was active.
-    """
 
+    Parameters
+    ----------
+    markers
+        Substrings whose presence in the captured output indicates an adjoint
+        solve. Matching is plain substring containment on the decoded text.
+    raise_on_match
+        Raise when a marker is found. ``False`` still captures and re-emits the
+        output, reducing the guard to a pass-through.
+    echo
+        Re-emit the captured output on exit. ``False`` discards it, so a marker
+        can still fail the run but the text is lost.
+
+    Yields
+    ------
+    None
+        The guarded block runs with file descriptor 1 redirected.
+
+    Raises
+    ------
+    RuntimeError
+        On exit, when any marker appeared and ``raise_on_match`` is set. The
+        descriptor is always restored first, so the failure cannot leave stdout
+        redirected.
+    """
     marker_list = [str(m) for m in markers]
     sys.stdout.flush()
     saved_fd = os.dup(1)
@@ -104,8 +127,26 @@ def characteristic_scales(
     Defaults to 1.0 for any variable without an explicit scale.  Steps are
     ``h_i = eta * s_i`` so a single ``eta`` sweep is meaningful across variables
     with very different physical magnitudes (translation vs. area vs. degrees).
-    """
 
+    Parameters
+    ----------
+    design_variable_specs
+        Mapping of design-variable name to shape. Only the keys are used; the
+        shapes are ignored here.
+    scales
+        Explicit characteristic scale per variable. ``None``, or any absent
+        name, yields ``1.0``.
+
+    Returns
+    -------
+    dict of str to float
+        One positive scale per design variable, keyed by name.
+
+    Raises
+    ------
+    ValueError
+        If any resolved scale is zero or negative.
+    """
     resolved: dict[str, float] = {}
     for name in design_variable_specs:
         scale = 1.0 if scales is None else float(scales.get(name, 1.0))
@@ -138,8 +179,47 @@ def centered_finite_difference(
     and calls ``reset_fn`` (if given) first, so no perturbation warm-starts from
     another.  Returns ``{(output, dv): gradient}`` with ``gradient`` shaped like
     the design variable.
-    """
 
+    Each component is perturbed independently, so the cost is two ``forward_fn``
+    calls per scalar design-variable component.
+
+    Parameters
+    ----------
+    forward_fn
+        Primal-only callable mapping a design point to a mapping of output name
+        to scalar value. It must not build or run derivative operations.
+    baseline
+        Design point every perturbation starts from. Copied per evaluation and
+        never mutated.
+    output_names
+        Outputs to differentiate. Each must be a key of ``forward_fn``'s result
+        and is read as a scalar via its first element.
+    design_variable_specs
+        Mapping of design-variable name to shape. A falsy shape is treated as
+        a single scalar component.
+    eta
+        Dimensionless step multiplier; the per-variable step is
+        ``eta * scales[dv]``.
+    scales
+        Characteristic scale per design variable, as produced by
+        :func:`characteristic_scales`. An entry is required for every variable.
+    reset_fn
+        Optional callable invoked before each individual evaluation, used to
+        restore a baseline mesh or converged flow state so perturbations stay
+        independent.
+
+    Returns
+    -------
+    dict
+        Keyed by ``(output_name, design_variable_name)``, each value an array
+        shaped like that design variable holding the centered-difference
+        derivative of that output.
+
+    Raises
+    ------
+    ValueError
+        If any resolved step is zero or negative.
+    """
     gradients: dict[tuple[str, str], np.ndarray] = {
         (output, dv): np.zeros(design_variable_specs[dv], dtype=float)
         for output in output_names
@@ -188,8 +268,46 @@ def run_forward_only_fd_sweep(
     reset_fn: Optional[Callable[[], None]] = None,
     guard: bool = True,
 ) -> dict[float, dict[tuple[str, str], np.ndarray]]:
-    """Run the guarded, forward-only centered-FD step sweep."""
+    """Run the guarded, forward-only centered-FD step sweep.
 
+    Prints ``START FORWARD-ONLY FD`` and ``END FORWARD-ONLY FD`` around the
+    sweep so a batch log can be audited.
+
+    Parameters
+    ----------
+    forward_fn
+        Primal-only callable, as in :func:`centered_finite_difference`.
+    baseline
+        Design point every perturbation starts from.
+    output_names
+        Outputs to differentiate.
+    design_variable_specs
+        Mapping of design-variable name to shape.
+    etas
+        Step multipliers to sweep. Each is evaluated as its own complete FD
+        pass, so cost scales with the number of entries.
+    scales
+        Characteristic scale per variable, resolved through
+        :func:`characteristic_scales`. ``None`` uses 1.0 for every variable.
+    reset_fn
+        Optional callable invoked before each individual evaluation.
+    guard
+        Wrap the whole sweep in :func:`guard_against_adjoint_output`, failing if
+        an adjoint marker is emitted. ``False`` runs unguarded, which does not
+        make an adjoint solve correct here, only undetected.
+
+    Returns
+    -------
+    dict
+        Keyed by ``eta``, each value the gradient mapping returned by
+        :func:`centered_finite_difference` for that step.
+
+    Raises
+    ------
+    RuntimeError
+        When guarding is enabled and an adjoint marker appears during the
+        sweep.
+    """
     resolved_scales = characteristic_scales(design_variable_specs, scales)
     print("START FORWARD-ONLY FD", flush=True)
     sweep: dict[float, dict[tuple[str, str], np.ndarray]] = {}
@@ -218,8 +336,22 @@ def run_forward_only_fd_sweep(
 def run_analytical_once(
     analytical_fn: AnalyticalFunction,
 ) -> dict[tuple[str, str], np.ndarray]:
-    """Compute analytical derivatives exactly once, inside adjoint markers."""
+    """Compute analytical derivatives exactly once, inside adjoint markers.
 
+    Prints ``START ANALYTICAL ADJOINT`` and ``END ANALYTICAL ADJOINT`` around
+    the call. The closing marker is printed even if ``analytical_fn`` raises.
+
+    Parameters
+    ----------
+    analytical_fn
+        Zero-argument callable returning a mapping keyed by
+        ``(output_name, design_variable_name)``. Called exactly once.
+
+    Returns
+    -------
+    dict
+        The same mapping with every value converted to a float array.
+    """
     print("START ANALYTICAL ADJOINT", flush=True)
     try:
         analytical = {
@@ -236,6 +368,26 @@ def run_analytical_once(
 # ---------------------------------------------------------------------------
 @dataclass
 class DerivativeComparison:
+    """Analytical and finite-difference derivatives with their relative errors.
+
+    A plain record produced by :func:`compare_and_report`. The dictionaries are
+    stored by reference after conversion to float arrays, not deep-copied.
+
+    Attributes
+    ----------
+    analytical
+        Analytical derivatives keyed by
+        ``(output_name, design_variable_name)``. Its keys define which entries
+        the comparison covers.
+    fd_by_eta
+        Finite-difference gradients keyed by step multiplier, each an inner
+        mapping with the same key convention.
+    relative_error_by_eta
+        Relative error per step, keyed by step multiplier and then by
+        ``(output_name, design_variable_name)``. Populated by
+        :func:`compare_and_report`; empty on a directly constructed instance.
+    """
+
     analytical: dict[tuple[str, str], np.ndarray]
     fd_by_eta: dict[float, dict[tuple[str, str], np.ndarray]]
     relative_error_by_eta: dict[float, dict[tuple[str, str], float]] = field(
@@ -243,8 +395,19 @@ class DerivativeComparison:
     )
 
     def best(self) -> dict[tuple[str, str], tuple[float, float]]:
-        """Return ``{(output, dv): (best_eta, best_relative_error)}``."""
+        """Return the best step and error for each derivative entry.
 
+        "Best" means the smallest recorded relative error across the swept
+        steps, which is a diagnostic of where the FD noise floor and truncation
+        error balance, not a guarantee of correctness.
+
+        Returns
+        -------
+        dict
+            Keyed by ``(output_name, design_variable_name)``, each value the
+            tuple ``(best_eta, best_relative_error)``. An entry with no
+            recorded error yields ``(None, inf)``.
+        """
         result: dict[tuple[str, str], tuple[float, float]] = {}
         keys = self.analytical.keys()
         for key in keys:
@@ -272,8 +435,32 @@ def compare_and_report(
     *,
     print_results: bool = True,
 ) -> DerivativeComparison:
-    """Assemble relative errors for the step sweep and optionally print them."""
+    """Assemble relative errors for the step sweep and optionally print them.
 
+    The relative error of each entry is
+    ``||analytical - fd|| / max(||analytical||, ||fd||, 1e-30)``, so it stays
+    finite when both sides vanish.
+
+    Parameters
+    ----------
+    analytical
+        Analytical derivatives keyed by ``(output_name, design_variable_name)``.
+        Its keys define which entries are compared.
+    fd_by_eta
+        Finite-difference gradients keyed by step, as returned by
+        :func:`run_forward_only_fd_sweep`. A key absent from a step's mapping
+        is skipped for that step.
+    print_results
+        Print the per-step error table and the per-entry best step. The printed
+        ``converges`` or ``NO CLEAR REGIME`` label is a reading aid thresholded
+        at a relative error of ``1e-1``, not a pass/fail criterion.
+
+    Returns
+    -------
+    DerivativeComparison
+        Holding the analytical derivatives, the per-step gradients, and the
+        per-step relative errors.
+    """
     comparison = DerivativeComparison(
         analytical={k: np.asarray(v, dtype=float) for k, v in analytical.items()},
         fd_by_eta={
@@ -331,8 +518,37 @@ def check_derivatives_forward_first(
 
     The finite-difference pass runs to completion before ``analytical_fn`` is
     ever called, so no analytical-derivative operation exists while FD executes.
-    """
 
+    Parameters
+    ----------
+    forward_fn
+        Primal-only callable used for every finite-difference evaluation.
+    analytical_fn
+        Zero-argument callable producing the analytical derivatives, invoked
+        exactly once and only after the sweep finishes.
+    baseline
+        Design point every perturbation starts from.
+    output_names
+        Outputs to differentiate.
+    design_variable_specs
+        Mapping of design-variable name to shape.
+    etas
+        Step multipliers to sweep.
+    scales
+        Characteristic scale per variable; ``None`` uses 1.0 for each.
+    reset_fn
+        Optional callable invoked before each individual evaluation.
+    guard
+        Fail the sweep if an adjoint marker is emitted during the FD stage.
+    print_results
+        Print the comparison table and per-entry best step.
+
+    Returns
+    -------
+    DerivativeComparison
+        The assembled comparison of analytical and finite-difference
+        derivatives.
+    """
     fd_by_eta = run_forward_only_fd_sweep(
         forward_fn,
         baseline,
@@ -360,8 +576,23 @@ def degree_radian_relative_error(
 
     Documents and independently verifies the rotation-unit convention required
     by the derivative study, without needing a second full model evaluation.
-    """
 
+    Parameters
+    ----------
+    gradient_wrt_degrees
+        Derivative with respect to an angle measured in degrees.
+    gradient_wrt_radians
+        Derivative with respect to the same angle measured in radians, scaled
+        here by ``pi / 180`` to form the expected degree-based value.
+
+    Returns
+    -------
+    float
+        Relative error between the expected and supplied degree-based
+        gradients, using the same norm ratio as the FD comparison. A small
+        value indicates the two conventions agree; it is a diagnostic, not a
+        correctness proof.
+    """
     expected = (math.pi / 180.0) * np.asarray(
         gradient_wrt_radians, dtype=float
     )

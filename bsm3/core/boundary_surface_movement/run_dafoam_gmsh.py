@@ -75,7 +75,62 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 @dataclass(frozen=True)
 class FlowConfig:
-    """Freestream and reference quantities used by DAFoam."""
+    """Freestream and reference quantities used by DAFoam.
+
+    Attributes
+    ----------
+    solver_name
+        DAFoam solver class to instantiate, for example
+        ``"DARhoSimpleCFoam"``.
+    velocity_m_per_s
+        Freestream speed in metres per second.
+    angle_of_attack_deg
+        Angle of attack in **degrees**, used to build the flow and force
+        direction vectors.
+    pressure_pa
+        Freestream static pressure in pascals.
+    temperature_k
+        Freestream static temperature in kelvin.
+    nu_tilda_m2_per_s
+        Spalart-Allmaras working variable in square metres per second.
+    reference_area_m2
+        Reference area in square metres, normalizing the force coefficients.
+    gas_constant_j_per_kg_k
+        Specific gas constant in joules per kilogram-kelvin.
+    normal_axis
+        Axis label, ``"y"`` or ``"z"``, spanning the lift direction together
+        with the flow direction.
+    use_wall_functions
+        Use wall functions instead of resolving the near-wall layer.
+    primal_min_res_tol
+        Residual the steady primal must reach. Must be positive.
+    primal_min_iterations
+        Fewest primal iterations before convergence may be declared. At least
+        one.
+    primal_max_iterations
+        Iteration ceiling, written into ``controlDict`` as ``endTime``. Must be
+        at least ``primal_min_iterations``.
+    primal_min_res_tol_difference
+        Factor of ``primal_min_res_tol`` within which the final residual must
+        fall for DAFoam to accept the primal; ``1.1`` rejects a solve stalling
+        more than 10% above the request. The default ``1e2`` is DAFoam's
+        lenient value. Must be positive.
+    adjoint_gmres_relative_tolerance
+        Relative GMRES tolerance for the adjoint solve. Must be positive.
+    adjoint_gmres_absolute_tolerance
+        Absolute GMRES tolerance for the adjoint solve. Must be positive.
+    adjoint_gmres_max_iterations
+        GMRES iteration ceiling for the adjoint solve. At least one.
+    adjoint_gmres_restart
+        GMRES restart length for the adjoint solve. At least one.
+
+    Raises
+    ------
+    ValueError
+        At construction, when any tolerance is non-positive, an iteration count
+        is below one, or ``primal_max_iterations`` is below
+        ``primal_min_iterations``.
+    """
 
     solver_name: str = "DARhoSimpleCFoam"
     velocity_m_per_s: float = 242.52
@@ -100,6 +155,14 @@ class FlowConfig:
     adjoint_gmres_restart: int = 1_000
 
     def __post_init__(self) -> None:
+        """Validate the convergence and adjoint solver settings.
+
+        Raises
+        ------
+        ValueError
+            If any tolerance is non-positive, an iteration count is below one,
+            or ``primal_max_iterations`` is below ``primal_min_iterations``.
+        """
         if self.primal_min_res_tol <= 0.0:
             raise ValueError("primal_min_res_tol must be positive")
         if self.primal_min_iterations < 1:
@@ -138,11 +201,43 @@ DAFOAM_OPTIONS_OVERRIDES: dict[str, Any] = {}
 
 
 def rank0_print(comm: MPI.Comm, *items: object) -> None:
+    """Print on rank zero only, flushing immediately.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator whose rank decides whether anything is printed.
+    *items
+        Values passed straight to :func:`print`, space separated.
+
+    Returns
+    -------
+    None
+        Printing is a side effect; non-root ranks do nothing.
+    """
     if comm.rank == 0:
         print(*items, flush=True)
 
 
 def csv_names(value: str) -> list[str]:
+    """Parse a comma-separated patch-name list, as an argparse type.
+
+    Parameters
+    ----------
+    value
+        Comma-separated names. Surrounding whitespace is stripped and empty
+        entries are dropped.
+
+    Returns
+    -------
+    list of str
+        The non-empty names in order.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If no non-empty name remains, so argparse reports a usage error.
+    """
     names = [item.strip() for item in value.split(",") if item.strip()]
     if not names:
         raise argparse.ArgumentTypeError("expected at least one comma-separated patch name")
@@ -150,16 +245,47 @@ def csv_names(value: str) -> list[str]:
 
 
 def run_command(command: list[str], cwd: Path) -> None:
-    """Run a command on rank zero with output streamed to the terminal."""
+    """Run a command on rank zero with output streamed to the terminal.
 
+    Parameters
+    ----------
+    command
+        Argument list; each item is stringified for the echoed banner.
+    cwd
+        Working directory the command runs in.
+
+    Returns
+    -------
+    None
+        Output goes to the terminal; nothing is captured.
+
+    Raises
+    ------
+    subprocess.CalledProcessError
+        If the command exits with a nonzero status.
+    """
     printable = " ".join(str(item) for item in command)
     print(f"\n>>> {printable}", flush=True)
     subprocess.run(command, cwd=str(cwd), check=True)
 
 
 def deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
-    """Recursively update a nested dictionary in place."""
+    """Recursively update a nested dictionary in place.
 
+    Parameters
+    ----------
+    base
+        Dictionary to update. **Mutated in place**, including its nested
+        dictionaries.
+    updates
+        Values to merge in. A nested dictionary is merged recursively; any
+        other value replaces the existing entry outright.
+
+    Returns
+    -------
+    dict
+        ``base`` itself, for convenient chaining.
+    """
     for key, value in updates.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
             deep_update(base[key], value)
@@ -169,8 +295,21 @@ def deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]
 
 
 def jsonable(value: Any) -> Any:
-    """Convert NumPy-like scalars/arrays and nested containers to JSON values."""
+    """Convert NumPy-like scalars/arrays and nested containers to JSON values.
 
+    Parameters
+    ----------
+    value
+        Value to convert. Dictionaries and sequences are walked recursively,
+        with dictionary keys stringified; anything exposing ``tolist`` or
+        ``item`` is converted through it; everything else is returned
+        unchanged, so an unsupported object still fails at serialization time.
+
+    Returns
+    -------
+    Any
+        A structure of plain Python types, with tuples becoming lists.
+    """
     if isinstance(value, dict):
         return {str(key): jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -188,6 +327,27 @@ def jsonable(value: Any) -> Any:
 
 
 def validate_case_template(case_dir: Path) -> None:
+    """Check that the OpenFOAM case template has its required files.
+
+    A Gmsh file supplies the mesh only, so the case must already contain the
+    ``0/``, ``constant/``, and ``system/`` directories together with
+    ``controlDict``, ``fvSchemes``, and ``fvSolution``.
+
+    Parameters
+    ----------
+    case_dir
+        Case directory to check.
+
+    Returns
+    -------
+    None
+        Returns normally when every required path exists.
+
+    Raises
+    ------
+    FileNotFoundError
+        Listing every missing path.
+    """
     required = [
         case_dir / "0",
         case_dir / "constant",
@@ -211,8 +371,23 @@ def set_control_dict_max_iterations(
     case_dir: Path,
     maximum_iterations: int,
 ) -> None:
-    """Set the steady primal iteration ceiling through controlDict endTime."""
+    """Set the steady primal iteration ceiling through controlDict endTime.
 
+    Rewrites the case's ``system/controlDict`` in place, since a steady
+    OpenFOAM run treats ``endTime`` as its iteration limit.
+
+    Parameters
+    ----------
+    case_dir
+        Case directory holding ``system/controlDict``.
+    maximum_iterations
+        Iteration ceiling written as ``endTime``.
+
+    Returns
+    -------
+    None
+        The file is modified as a side effect.
+    """
     if maximum_iterations < 1:
         raise ValueError("maximum_iterations must be at least one")
 
@@ -235,8 +410,27 @@ def set_control_dict_max_iterations(
 
 
 def read_gmsh_mesh_format(mesh_file: Path) -> tuple[str, int]:
-    """Return (version, file_type), where file_type 0=ASCII and 1=binary."""
+    """Return (version, file_type), where file_type 0=ASCII and 1=binary.
 
+    Only the first 4096 bytes are read, so this stays cheap for a large mesh.
+
+    Parameters
+    ----------
+    mesh_file
+        Gmsh ``.msh`` file to inspect.
+
+    Returns
+    -------
+    tuple
+        ``(version, file_type)``, the version as the string Gmsh wrote, such
+        as ``"2.2"``, and the file type as ``0`` for ASCII or ``1`` for binary.
+
+    Raises
+    ------
+    ValueError
+        If no ``$MeshFormat`` section appears in the leading bytes, or its
+        content line is missing.
+    """
     with mesh_file.open("rb") as stream:
         header = stream.read(4096)
 
@@ -262,8 +456,26 @@ def prepare_gmsh_22_ascii(mesh_file: Path, case_dir: Path) -> tuple[Path, bool]:
 
     If conversion is required, use the Gmsh executable and place a temporary
     file in the case directory. Physical group names are retained by Gmsh.
-    """
 
+    Parameters
+    ----------
+    mesh_file
+        Source mesh. Returned unchanged when it is already 2.2 ASCII.
+    case_dir
+        Directory the converted temporary file is written into.
+
+    Returns
+    -------
+    tuple
+        ``(path, converted)``: the file to hand to ``gmshToFoam``, and whether
+        a temporary file was created that the caller should clean up.
+
+    Raises
+    ------
+    RuntimeError
+        If ``gmsh`` is not on ``PATH``, or the conversion did not produce a 2.2
+        ASCII mesh.
+    """
     version, file_type = read_gmsh_mesh_format(mesh_file)
     if version.startswith("2.2") and file_type == 0:
         return mesh_file, False
@@ -300,6 +512,25 @@ def prepare_gmsh_22_ascii(mesh_file: Path, case_dir: Path) -> tuple[Path, bool]:
 
 
 def backup_existing_polymesh(poly_mesh_dir: Path) -> Path:
+    """Rename an existing ``polyMesh`` aside, timestamping the backup.
+
+    Parameters
+    ----------
+    poly_mesh_dir
+        Directory to move aside. It is renamed, not copied, so the original
+        path no longer exists afterwards.
+
+    Returns
+    -------
+    pathlib.Path
+        The backup path, a sibling named ``polyMesh.backup_<timestamp>`` at
+        one-second resolution.
+
+    Raises
+    ------
+    FileExistsError
+        If that backup path already exists, rather than overwriting it.
+    """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup = poly_mesh_dir.with_name(f"polyMesh.backup_{timestamp}")
     if backup.exists():
@@ -309,8 +540,26 @@ def backup_existing_polymesh(poly_mesh_dir: Path) -> Path:
 
 
 def find_patch_block(lines: list[str], patch_name: str) -> tuple[int, int]:
-    """Locate the inclusive { ... } block belonging to patch_name."""
+    """Locate the inclusive { ... } block belonging to patch_name.
 
+    Parameters
+    ----------
+    lines
+        Boundary-file lines, as read with line endings kept.
+    patch_name
+        Patch to find. Quoted and unquoted spellings both match.
+
+    Returns
+    -------
+    tuple
+        ``(start, end)`` line indices of the block, inclusive of the opening
+        and closing braces.
+
+    Raises
+    ------
+    KeyError
+        If no block for that patch is found.
+    """
     accepted_names = {patch_name, f'"{patch_name}"'}
     for name_index, line in enumerate(lines):
         if line.strip() not in accepted_names:
@@ -337,8 +586,28 @@ def find_patch_block(lines: list[str], patch_name: str) -> tuple[int, int]:
 
 
 def set_openfoam_patch_types(boundary_file: Path, patch_types: dict[str, str]) -> None:
-    """Set `type` entries for named patches in an OpenFOAM boundary file."""
+    """Set `type` entries for named patches in an OpenFOAM boundary file.
 
+    Rewrites ``boundary_file`` in place, replacing the first ``type`` entry
+    inside each named patch block and leaving every other line untouched.
+
+    Parameters
+    ----------
+    boundary_file
+        OpenFOAM ``constant/polyMesh/boundary`` file to modify.
+    patch_types
+        Mapping of patch name to the OpenFOAM patch type to set.
+
+    Returns
+    -------
+    None
+        The file is modified as a side effect.
+
+    Raises
+    ------
+    KeyError
+        If any named patch has no block in the file.
+    """
     lines = boundary_file.read_text(encoding="utf-8").splitlines(keepends=True)
     type_pattern = re.compile(r"^(\s*)type\s+[^;]+;")
 
@@ -357,6 +626,26 @@ def set_openfoam_patch_types(boundary_file: Path, patch_types: dict[str, str]) -
 
 
 def validate_patch_names(boundary_file: Path, names: Iterable[str]) -> None:
+    """Check that every named patch appears in the boundary file.
+
+    Parameters
+    ----------
+    boundary_file
+        OpenFOAM ``constant/polyMesh/boundary`` file to read.
+    names
+        Patch names that must be present. Quoted and unquoted spellings both
+        match.
+
+    Returns
+    -------
+    None
+        Returns normally when every name is found.
+
+    Raises
+    ------
+    KeyError
+        From the underlying block lookup, naming the first patch not found.
+    """
     lines = boundary_file.read_text(encoding="utf-8").splitlines(keepends=True)
     for name in names:
         find_patch_block(lines, name)
@@ -371,8 +660,46 @@ def convert_and_check_mesh(
     overwrite_existing: bool,
     skip_check_mesh: bool,
 ) -> None:
-    """Convert the Gmsh mesh, set boundary types, and run checkMesh."""
+    """Convert the Gmsh mesh, set boundary types, and run checkMesh.
 
+    Converts the mesh to 2.2 ASCII if needed, runs ``gmshToFoam``, assigns the
+    wall, farfield, and symmetry patch types, and optionally validates the
+    result. Intended to run on one rank.
+
+    Parameters
+    ----------
+    case_dir
+        Case directory the mesh is converted into.
+    mesh_file
+        Gmsh volume mesh whose named 2-D physical groups supply the patches.
+    wall_patches
+        Patch names set to the wall type.
+    farfield_patches
+        Patch names set to the farfield type.
+    symmetry_patches
+        Patch names set to the symmetry type.
+    overwrite_existing
+        Permit replacing an existing ``polyMesh``, which is first moved aside
+        as a timestamped backup.
+    skip_check_mesh
+        Skip the external ``checkMesh`` run.
+
+    Returns
+    -------
+    None
+        The case directory is modified as a side effect.
+
+    Raises
+    ------
+    RuntimeError
+        If ``gmshToFoam`` or ``checkMesh`` is not on ``PATH``, or conversion
+        did not yield a usable mesh.
+    FileExistsError
+        If a ``polyMesh`` exists, overwriting was permitted, but its backup
+        path is already taken.
+    subprocess.CalledProcessError
+        If an external command fails.
+    """
     gmsh_to_foam = shutil.which("gmshToFoam")
     if gmsh_to_foam is None:
         raise RuntimeError(
@@ -441,6 +768,31 @@ def validate_reused_mesh(
     expected_patches: list[str],
     skip_check_mesh: bool,
 ) -> None:
+    """Validate a ``polyMesh`` that is being reused instead of converted.
+
+    Parameters
+    ----------
+    case_dir
+        Case directory whose existing ``constant/polyMesh`` is checked.
+    expected_patches
+        Patch names that must appear in the boundary file.
+    skip_check_mesh
+        Skip the external ``checkMesh`` run, validating patch names only.
+
+    Returns
+    -------
+    None
+        Returns normally when the mesh is acceptable.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the case has no ``constant/polyMesh/boundary`` file.
+    RuntimeError
+        If ``checkMesh`` was requested but is not on ``PATH``.
+    subprocess.CalledProcessError
+        If ``checkMesh`` itself fails.
+    """
     boundary_file = case_dir / "constant" / "polyMesh" / "boundary"
     if not boundary_file.is_file():
         raise FileNotFoundError(
@@ -478,8 +830,26 @@ def flow_and_force_directions(
     The streamwise axis is x. The aerodynamic normal axis is selected with
     --normal-axis (z for a conventional x-z aircraft convention, or y for a
     conventional 2-D x-y airfoil convention).
-    """
 
+    Parameters
+    ----------
+    angle_deg
+        Angle of attack in **degrees**, converted to radians internally.
+    normal_axis
+        Axis label spanning the lift direction with the streamwise axis,
+        ``"z"`` or ``"y"``.
+
+    Returns
+    -------
+    tuple
+        ``(flow_direction, lift_direction)``, each a three-component unit
+        vector as a plain list, in that order.
+
+    Raises
+    ------
+    ValueError
+        If ``normal_axis`` is not a supported axis label.
+    """
     alpha = math.radians(angle_deg)
     cosine = math.cos(alpha)
     sine = math.sin(alpha)
@@ -496,8 +866,33 @@ def build_da_options(
     wall_patches: list[str],
     farfield_patches: list[str],
 ) -> dict[str, Any]:
-    """Build native DAFoam v4 options for a steady compressible primal run."""
+    """Build native DAFoam v4 options for a steady compressible primal run.
 
+    Patch-name sequences are converted to plain lists, because DAFoam requires
+    them. Any entries in the module-level ``DAFOAM_OPTIONS_OVERRIDES`` are
+    merged in recursively, so case-specific settings need no change here.
+
+    Parameters
+    ----------
+    config
+        Flow and reference quantities, including the solver name, freestream
+        state, convergence controls, and adjoint GMRES settings.
+    wall_patches
+        Patch names forming the aircraft wall, used for the force functions.
+    farfield_patches
+        Patch names forming the farfield, used for the boundary conditions.
+
+    Returns
+    -------
+    dict
+        A DAFoam options dictionary for the configured primal.
+
+    Raises
+    ------
+    ValueError
+        If the freestream velocity is not positive, or another configured
+        quantity is rejected while the options are assembled.
+    """
     # DAFoam requires native Python lists; callers may pass tuples.
     wall_patches = [str(name) for name in wall_patches]
     farfield_patches = [str(name) for name in farfield_patches]
@@ -616,8 +1011,23 @@ def apply_custom_mesh_deformation(
     map/deform the volume mesh, then pass the final volume coordinates to
     DAFoam. Keeping that operation in this hook avoids any dependency on IDWarp
     or CSDL in the baseline primal runner.
-    """
 
+    Parameters
+    ----------
+    da_solver
+        Live DAFoam solver whose volume coordinates a future implementation
+        would set. Unused here.
+    case_dir
+        Case directory the solver runs in. Unused here.
+    comm
+        MPI communicator. Unused here.
+
+    Returns
+    -------
+    None
+        This baseline deliberately performs no deformation, so the mesh is
+        left exactly as ``gmshToFoam`` produced it.
+    """
     del da_solver, case_dir, comm
 
 
@@ -628,8 +1038,36 @@ def run_dafoam(
     farfield_patches: list[str],
     comm: MPI.Comm,
 ) -> dict[str, Any]:
-    """Instantiate PYDAFOAM, run the primal, and evaluate CD and CL."""
+    """Instantiate PYDAFOAM, run the primal, and evaluate CD and CL.
 
+    Imports DAFoam lazily, so the module stays importable without a sourced
+    DAFoam environment. Collective: every rank participates in the primal.
+
+    Parameters
+    ----------
+    case_dir
+        Prepared OpenFOAM case the solver runs in.
+    config
+        Flow and reference quantities supplying the DAFoam options.
+    wall_patches
+        Patch names forming the aircraft wall.
+    farfield_patches
+        Patch names forming the farfield.
+    comm
+        MPI communicator handed to DAFoam.
+
+    Returns
+    -------
+    dict
+        Result payload with the evaluated ``CD`` and ``CL`` values and the
+        accompanying run metadata.
+
+    Raises
+    ------
+    RuntimeError
+        If DAFoam cannot be imported because its environment was not sourced,
+        or the primal failed to converge.
+    """
     try:
         from dafoam import PYDAFOAM
     except ImportError as error:
@@ -675,6 +1113,18 @@ def run_dafoam(
 
 
 def make_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for this driver.
+
+    Option defaults are taken from a default-constructed :class:`FlowConfig`,
+    so the two stay consistent. This is the CLI surface of a standalone driver
+    script; it is unrelated to the no-CLI user example.
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        Parser covering the mesh, case, patch-name, and flow options, with the
+        module docstring as its description.
+    """
     defaults = FlowConfig()
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -854,6 +1304,19 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """Run the command-line DAFoam primal analysis end to end.
+
+    A CLI driver entry point, not a library function: it parses ``sys.argv``,
+    prepares the OpenFOAM case, runs the primal across all ranks, and writes
+    the results file. It must be launched with ``mpirun`` in a sourced DAFoam
+    environment.
+
+    Returns
+    -------
+    int
+        Process exit status: ``0`` on success and nonzero on failure, suitable
+        for ``sys.exit``.
+    """
     args = make_parser().parse_args()
 
     try:

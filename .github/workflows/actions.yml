@@ -87,6 +87,27 @@ jobs:
             bsm3/preprocessing/stl.py \
             bsm3/preprocessing/symmetry.py
 
+      - name: Numpydoc checks for drivers, volume motion, and MPI
+        run: |
+          python -m ruff check --select D \
+            bsm3/__init__.py \
+            bsm3/component_parameters.py \
+            bsm3/core/__init__.py \
+            bsm3/core/boundary_surface_movement/__init__.py \
+            bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py \
+            bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py \
+            bsm3/core/boundary_surface_movement/dafoam_csdl.py \
+            bsm3/core/boundary_surface_movement/e175_derivative_ladder.py \
+            bsm3/core/boundary_surface_movement/forward_only_fd_checker.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_backend.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_mpi.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_operation.py \
+            bsm3/core/boundary_surface_movement/rbf.py \
+            bsm3/core/boundary_surface_movement/run_dafoam_gmsh.py \
+            bsm3/core/boundary_surface_movement/volume_mesh_motion.py \
+            bsm3/core/weighting_functions.py \
+            bsm3/plotting.py
+
       - name: Fast derivative gate
         run: python -m pytest -q tests/test_derivative_gate.py
 

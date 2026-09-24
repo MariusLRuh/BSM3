@@ -44,6 +44,32 @@ class ComponentDisplacementData:
     ``hard_parametric_targets`` marks components whose owned vertices follow
     the component motion exactly (lifting surfaces).  It defaults to True for
     intersection driving components and False otherwise.
+
+    Attributes
+    ----------
+    component
+        Geometry component these observations belong to; it owns the
+        parametric coordinates below.
+    vertex_ids
+        Mesh vertex indices covered by this component, flattened to shape
+        ``(n,)``.
+    parametric_coordinates
+        Closest-point coordinates on ``component`` for each covered vertex,
+        reshaped to ``(n, 3)``. Must align with ``vertex_ids``.
+    distances
+        Baseline unsigned projection distance per covered vertex, shape
+        ``(n,)``; stored as absolute values. ``None`` opts this component out
+        of the blended-target path, leaving the seam-influence fallback.
+    hard_parametric_targets
+        Whether the owned vertices follow the component motion exactly.
+        ``None`` defers to the default: ``True`` for intersection driving
+        components, ``False`` otherwise.
+
+    Raises
+    ------
+    ValueError
+        At construction, if ``vertex_ids`` and ``parametric_coordinates`` do
+        not align, or ``distances`` is given with a different length.
     """
 
     component: object
@@ -53,6 +79,17 @@ class ComponentDisplacementData:
     hard_parametric_targets: bool | None = None
 
     def __post_init__(self):
+        """Normalize the observation arrays and check that they align.
+
+        Reshapes ``vertex_ids`` to ``(n,)`` and ``parametric_coordinates`` to
+        ``(n, 3)``, and stores ``distances`` as absolute values.
+
+        Raises
+        ------
+        ValueError
+            If the ids and coordinates do not align, or ``distances`` is given
+            with a different length.
+        """
         ids = np.asarray(self.vertex_ids, dtype=np.int64).reshape(-1)
         coordinates = np.asarray(self.parametric_coordinates, dtype=float).reshape((-1, 3))
         if ids.size != coordinates.shape[0]:
@@ -70,7 +107,74 @@ class ComponentDisplacementData:
 
 @dataclass(frozen=True)
 class DisplacementInterpolationParameters:
-    """Configuration for the global displacement RBF."""
+    """Configuration for the global displacement RBF.
+
+    Attributes
+    ----------
+    intersection_params
+        One entry per intersection driving the displacement field, stored as a
+        tuple. Must be non-empty.
+    rbf_kernel
+        Radial basis function name, validated at construction against the
+        supported kernels.
+    fit_mode
+        ``"exact_interpolation"`` reproduces the observations at the training
+        points; ``"normalized_smoothing"`` trades exactness for smoothness.
+    rbf_kernel_scale
+        Explicit kernel length scale. ``None`` derives one from the training
+        geometry.
+    regularization
+        Ridge term added to the RBF system, trading exactness for
+        conditioning.
+    num_interpolation_vertices
+        Number of mesh vertices selected as RBF centers.
+    interpolation_vertex_selection_method
+        How those centers are chosen: ``"farthest_point"`` or
+        ``"density_based"``.
+    component_displacement_data
+        Per-component observation sets, stored as a tuple. The blended-target
+        path is used only when every entry supplies ``distances``.
+    seam_neighbor_blend_radius
+        Blend radius around each seam, as one value for all intersections or
+        one per intersection.
+    seam_neighbor_component_blend
+        Component-motion weight within that radius, as one value for all
+        intersections or one per intersection.
+    seam_neighbor_support_cutoff
+        Support weight below which a seam neighbor is dropped. Must lie in
+        ``[0, 1]``.
+    seam_neighbor_training_drive
+        Let seam neighbors drive the training targets as well as the
+        evaluation blend.
+    smoothing_iterations
+        Number of post-fit smoothing passes over the displacement field. Zero
+        disables smoothing.
+    smoothing_relaxation
+        Relaxation factor of each smoothing pass. Must lie in ``[0, 1]``.
+    sigma_phi
+        Width of the blended-target influence function. Must be positive.
+    seam_support_sigma
+        Absolute width of an extra SDF support band around the deformed seam.
+        ``None`` disables the absolute form.
+    seam_support_sigma_factor
+        Same band expressed as a multiple of each seam's baseline bounding-box
+        diagonal. Must be non-negative; ``0.0`` disables it. The band is
+        isotropic, so it can leak support past tight influence boxes, and it is
+        off by default.
+    setup_weight_alpha
+        Exponent applied to the setup-time observation weights.
+    projection_options
+        Extra options forwarded to the projection used to build parametric
+        targets. ``None`` uses the projection defaults.
+
+    Raises
+    ------
+    ValueError
+        At construction, if ``intersection_params`` is empty, the kernel,
+        ``fit_mode``, or selection method is unrecognized, a ratio falls
+        outside ``[0, 1]``, ``sigma_phi`` is not positive, or
+        ``seam_support_sigma_factor`` is negative.
+    """
 
     intersection_params: Sequence[IntersectionParameters]
     rbf_kernel: str = "cubic"
@@ -101,6 +205,16 @@ class DisplacementInterpolationParameters:
     projection_options: Mapping | None = None
 
     def __post_init__(self):
+        """Freeze the sequence fields and validate the configuration.
+
+        Raises
+        ------
+        ValueError
+            If ``intersection_params`` is empty, the kernel, ``fit_mode``, or
+            selection method is unrecognized, a ratio falls outside ``[0, 1]``,
+            ``sigma_phi`` is not positive, or ``seam_support_sigma_factor`` is
+            negative.
+        """
         object.__setattr__(self, "intersection_params", tuple(self.intersection_params))
         object.__setattr__(
             self,
@@ -168,7 +282,13 @@ class DisplacementInterpolationParameters:
 
 
 class DisplacementInterpolator:
-    """Setup-time selector and differentiable RBF trainer."""
+    """Setup-time selector and differentiable RBF trainer.
+
+    Holds the mesh and the interpolation parameters, selects the RBF centers,
+    and fits the global displacement field. The most recent
+    :class:`DisplacementSurrogate` is retained so the interpolation vertices can
+    be plotted afterwards.
+    """
 
     def __init__(self, *, mesh, interpolation_params: DisplacementInterpolationParameters):
         self.mesh = _as_mesh_data(mesh)
@@ -186,8 +306,24 @@ class DisplacementInterpolator:
         ``component_coeffs`` may be a sequence aligned with
         ``intersection_params`` or a mapping keyed by driving-component object.
         Query-component coefficients default to their initial values.
-        """
 
+        Parameters
+        ----------
+        component_coeffs
+            Deformed coefficients of the driving components, either a sequence
+            aligned with ``intersection_params`` or a mapping keyed by driving
+            component.
+        query_component_coeffs
+            Deformed coefficients of the components being queried, keyed by
+            component. ``None`` or an absent entry leaves that component at its
+            initial coefficients.
+
+        Returns
+        -------
+        DisplacementSurrogate
+            The fitted field, also retained for
+            :meth:`plot_interpolation_vertices`.
+        """
         driving_coefficients = _resolve_driving_coefficients(
             self.parameters.intersection_params,
             component_coeffs,
@@ -390,8 +526,28 @@ class DisplacementInterpolator:
 
         Plotting is kept optional and imported lazily so headless test
         environments do not require PyVista.
-        """
 
+        Parameters
+        ----------
+        show
+            Open a blocking render window. ``False`` builds the plot without
+            displaying it.
+        plot_influence_regions
+            Accepted and currently ignored; the influence regions are not
+            drawn.
+
+        Returns
+        -------
+        None
+            Rendering is a side effect.
+
+        Raises
+        ------
+        RuntimeError
+            If :meth:`train` has not been called, so no surrogate exists.
+        ImportError
+            If PyVista is unavailable.
+        """
         del plot_influence_regions
         if self._last_surrogate is None:
             raise RuntimeError("train must be called before plotting interpolation vertices.")
@@ -455,6 +611,23 @@ class DisplacementSurrogate:
         self._seam_neighbor_maps = tuple(seam_neighbor_maps)
 
     def evaluate(self, *, vertices, vertex_ids=None):
+        """Evaluate the fitted displacement field at query vertices.
+
+        Parameters
+        ----------
+        vertices
+            Query points of shape ``(n, 3)``, as an array or a CSDL variable. A
+            plain array is wrapped in a variable so the result stays
+            differentiable.
+        vertex_ids
+            Mesh indices of those vertices, used to apply the seam-neighbor
+            blend. ``None`` evaluates the raw field with no per-vertex blending.
+
+        Returns
+        -------
+        csdl_alpha.Variable
+            Displacements of shape ``(n, 3)``, aligned with ``vertices``.
+        """
         query_points = np.asarray(getattr(vertices, "value", vertices), dtype=float).reshape((-1, 3))
         query_variable = (
             vertices
@@ -559,7 +732,6 @@ class DisplacementSurrogate:
         A fixed graph-distance support closes that gap without changing the
         RBF fit or introducing a geometry-dependent branch in the graph.
         """
-
         if not any(radius > 0.0 for radius in self.seam_neighbor_blend_radii):
             return deformed
         for (
@@ -753,7 +925,6 @@ def _update_ids_for_component(component_update_data, component):
 
 def _build_seam_neighbor_maps(mesh, solutions, radii):
     """Precompute graph distances and the smooth along-seam map per seam."""
-
     return tuple(
         (
             _mesh_graph_distance_to_sources(mesh, solution.vertex_ids),
@@ -784,7 +955,6 @@ def _resolve_component_coefficients(
     component falls back to the query-coefficient mapping and finally to its
     undeformed coefficient stack.
     """
-
     resolved = []
     for item in component_data:
         coefficients = None
@@ -809,7 +979,6 @@ def _resolve_component_coefficients(
 
 def _component_ownership(component_data, num_vertices):
     """Index of the closest component per mesh vertex (-1 when uncovered)."""
-
     distance_table = np.full((num_vertices, len(component_data)), np.inf)
     for index, item in enumerate(component_data):
         distance_table[item.vertex_ids, index] = item.distances
@@ -863,7 +1032,6 @@ def _soft_blended_interpolation_targets(
     near-seam rows are finally driven toward the smoothly interpolated exact
     seam displacement.
     """
-
     sigma_phi = float(parameters.sigma_phi)
 
     # Per-component parametric displacement observed at each interpolation
@@ -1068,7 +1236,6 @@ def _apply_training_seam_neighbor_drive(
     support_cutoff,
 ):
     """Drive near-seam training targets toward the exact seam displacement."""
-
     row_by_component_id = {
         id(item.component): row for row, item in enumerate(component_data)
     }
@@ -1128,7 +1295,6 @@ def _smooth_seam_interpolation_matrix(vertices, seam_vertices):
     quad even though the seam itself was valid.  A fixed normalized Gaussian
     map preserves differentiability while varying continuously along the seam.
     """
-
     vertices = np.asarray(vertices, dtype=float).reshape((-1, 3))
     seam_vertices = np.asarray(
         getattr(seam_vertices, "value", seam_vertices),
@@ -1155,7 +1321,6 @@ def _smooth_seam_interpolation_matrix(vertices, seam_vertices):
 
 def _gather_rows(variable, rows):
     """Gather rows with repetition through a constant selection matrix."""
-
     rows = np.asarray(rows, dtype=np.int64).reshape(-1)
     selection = np.zeros((rows.size, variable.shape[0]), dtype=float)
     selection[np.arange(rows.size), rows] = 1.0
@@ -1185,7 +1350,6 @@ def _build_local_smoothing_matrix(mesh, vertex_ids, *, fixed_ids, relaxation):
     imposes a zero-normal-gradient boundary condition and can leave an
     order-one displacement immediately beside an untouched vertex.
     """
-
     from scipy import sparse
 
     vertex_ids = np.asarray(vertex_ids, dtype=np.int64).reshape(-1)
@@ -1239,7 +1403,6 @@ def _build_local_smoothing_matrix(mesh, vertex_ids, *, fixed_ids, relaxation):
 
 def _mesh_graph_distance_to_sources(mesh, source_vertex_ids):
     """Return nearest-source geodesic distance and source row on the mesh."""
-
     import heapq
 
     points = np.asarray(mesh.vertices, dtype=float)

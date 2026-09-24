@@ -65,6 +65,35 @@ class TetraVolumeMesh:
 
     Quadrangle boundary faces and pyramids are optional, so a purely
     tetrahedral mesh constructs exactly as before.
+
+    Attributes
+    ----------
+    source_path
+        File the mesh was read from.
+    node_ids
+        Gmsh node identifiers, shape ``(n_nodes,)``, in the file's order.
+    vertices
+        Node coordinates, shape ``(n_nodes, 3)``, aligned with ``node_ids``.
+    triangles
+        Triangular boundary faces as node indices, shape ``(n_tri, 3)``.
+    triangle_physical_ids
+        Physical-group id per triangle, shape ``(n_tri,)``.
+    tetrahedra
+        Tetrahedral cells as node indices, shape ``(n_tet, 4)``.
+    tetrahedron_physical_ids
+        Physical-group id per tetrahedron, shape ``(n_tet,)``.
+    physical_names
+        Group names keyed by ``(dimension, physical_id)``.
+    quadrangles
+        Quadrilateral boundary faces, shape ``(n_quad, 4)``. Empty for a purely
+        tetrahedral mesh.
+    quadrangle_physical_ids
+        Physical-group id per quadrangle, shape ``(n_quad,)``.
+    pyramids
+        Pyramid cells, shape ``(n_pyr, 5)``, with the four base nodes first.
+        Empty for a purely tetrahedral mesh.
+    pyramid_physical_ids
+        Physical-group id per pyramid, shape ``(n_pyr,)``.
     """
 
     source_path: Path
@@ -84,22 +113,52 @@ class TetraVolumeMesh:
 
     @property
     def is_hybrid(self) -> bool:
+        """Whether the mesh contains pyramids as well as tetrahedra.
+
+        Returns
+        -------
+        bool
+            ``True`` when at least one pyramid is present.
+        """
         return self.pyramids.shape[0] > 0
 
     @property
     def aircraft_triangles(self) -> np.ndarray:
+        """Triangular faces belonging to the aircraft wall patch.
+
+        Returns
+        -------
+        numpy.ndarray
+            Node indices of the selected faces, shape ``(k, 3)``. Empty when
+            the wall carries no triangles.
+        """
         return self.triangles[
             self.triangle_physical_ids == PHYSICAL_AIRCRAFT
         ]
 
     @property
     def aircraft_quadrangles(self) -> np.ndarray:
+        """Quadrilateral faces belonging to the aircraft wall patch.
+
+        Returns
+        -------
+        numpy.ndarray
+            Node indices of the selected faces, shape ``(k, 4)``. Empty for a
+            purely tetrahedral mesh.
+        """
         return self.quadrangles[
             self.quadrangle_physical_ids == PHYSICAL_AIRCRAFT
         ]
 
     @property
     def aircraft_nodes(self) -> np.ndarray:
+        """Nodes on the aircraft wall, from both face types.
+
+        Returns
+        -------
+        numpy.ndarray
+            Sorted unique node indices, shape ``(k,)``.
+        """
         return _unique_nodes(
             self.aircraft_triangles, self.aircraft_quadrangles
         )
@@ -128,12 +187,28 @@ class TetraVolumeMesh:
 
     @property
     def symmetry_nodes(self) -> np.ndarray:
+        """Nodes on the symmetry-plane patch.
+
+        Returns
+        -------
+        numpy.ndarray
+            Sorted unique node indices, shape ``(k,)``. These slide within the
+            plane rather than being fully fixed.
+        """
         return _nodes_for_physical_patch(
             self, PHYSICAL_SYMMETRY
         )
 
     @property
     def fixed_outer_nodes(self) -> np.ndarray:
+        """Nodes on the inlet, outlet, and farfield patches.
+
+        Returns
+        -------
+        numpy.ndarray
+            Sorted unique node indices, shape ``(k,)``, pooled across the three
+            patches. These are held fixed during volume motion.
+        """
         return np.unique(
             np.concatenate(
                 [
@@ -149,12 +224,46 @@ class TetraVolumeMesh:
 
     @property
     def boundary_nodes(self) -> np.ndarray:
+        """Every node appearing on any boundary face.
+
+        Returns
+        -------
+        numpy.ndarray
+            Sorted unique node indices, shape ``(k,)``, across all patches and
+            both face types.
+        """
         return _unique_nodes(self.triangles, self.quadrangles)
 
 
 @dataclass(frozen=True)
 class VolumeBoundaryPartition:
-    """Node and DOF partitions for a half-domain moving-aircraft mesh."""
+    """Node and DOF partitions for a half-domain moving-aircraft mesh.
+
+    Node arrays hold node indices; DOF arrays hold indices into the flattened
+    ``3 * n_nodes`` displacement vector.
+
+    Attributes
+    ----------
+    wall_nodes
+        Aircraft-wall nodes, whose motion is prescribed.
+    outer_nodes
+        Inlet, outlet, and farfield nodes, held fixed.
+    symmetry_tangent_nodes
+        Symmetry-plane nodes, free within the plane but not across it.
+    interior_nodes
+        Nodes on no constrained patch, free in every direction.
+    graph_free_xz
+        Nodes solved for in the scalar x and z graph systems, where symmetry
+        nodes are free.
+    graph_free_y
+        Nodes solved for in the scalar y graph system, which excludes symmetry
+        nodes because their normal component is pinned.
+    elasticity_free_dofs
+        Flattened DOF indices solved for in the vector elasticity system, with
+        the symmetry-normal components already removed.
+    wall_dofs
+        Flattened DOF indices of the prescribed wall motion.
+    """
 
     wall_nodes: np.ndarray
     outer_nodes: np.ndarray
@@ -168,7 +277,42 @@ class VolumeBoundaryPartition:
 
 @dataclass
 class GraphVolumeSystem:
-    """Factored scalar graph systems for x/z and y motion."""
+    """Factored scalar graph systems for x/z and y motion.
+
+    Volume motion only. It is separate from the retained surface method, which
+    is a graph Laplacian with N-gon regularization; this class propagates a
+    prescribed wall motion into the volume. The x and z components share one
+    scalar system because both leave symmetry nodes free, while y needs its own
+    because the symmetry-normal component is pinned.
+
+    Attributes
+    ----------
+    mesh
+        Volume mesh the system was assembled on; supplies the baseline
+        vertices.
+    partition
+        Node and DOF partitions separating prescribed wall motion from the
+        free interior.
+    factor_xz
+        Factored scalar operator for the x and z components.
+    factor_y
+        Factored scalar operator for the y component.
+    coupling_wall_xz
+        Block coupling free x/z rows to the prescribed wall columns.
+    coupling_wall_y
+        Block coupling free y rows to the prescribed wall columns.
+    assembly_seconds
+        Wall-clock seconds spent assembling the operators.
+    factorization_seconds
+        Wall-clock seconds spent factorizing them.
+    stiffening_exponent
+        Exponent making small cells stiffer than large ones.
+    volume_floor
+        Lower bound on the cell volume used for stiffening, guarding against
+        division by a vanishing volume.
+    method
+        Identifier of this propagator, ``"graph"``.
+    """
 
     mesh: TetraVolumeMesh
     partition: VolumeBoundaryPartition
@@ -184,7 +328,25 @@ class GraphVolumeSystem:
     method: str = "graph"
 
     def evaluate(self, wall_positions) -> csdl.Variable:
-        """Differentiable reference-matrix deformation."""
+        """Deform the volume differentiably from prescribed wall positions.
+
+        The factorization is treated as a reference matrix: it is reused as
+        assembled, so the result is linear in the wall displacement and the
+        reverse pass goes through the same factor.
+
+        Parameters
+        ----------
+        wall_positions
+            Deformed wall-node positions of shape ``(n_wall, 3)``, ordered as
+            ``partition.wall_nodes``. The displacement is formed against the
+            baseline vertices.
+
+        Returns
+        -------
+        csdl_alpha.Variable
+            Deformed volume coordinates of shape ``(n_nodes, 3)``, in the
+            mesh's node order.
+        """
         baseline = self.mesh.vertices
         wall = self.partition.wall_nodes
         wall_displacement = wall_positions - baseline[wall]
@@ -219,7 +381,30 @@ class GraphVolumeSystem:
         return csdl.Variable(value=baseline) + displacement
 
     def solve_numpy(self, wall_displacement: np.ndarray) -> np.ndarray:
-        """Solve an incremental displacement with the current factored matrix."""
+        """Solve an incremental displacement with the current factored matrix.
+
+        The eager NumPy counterpart of :meth:`evaluate`, used by the
+        forward-only load-stepping path. It returns a displacement, not a
+        position.
+
+        Parameters
+        ----------
+        wall_displacement
+            Incremental wall displacement reshaped to ``(n_wall, 3)``, ordered
+            as ``partition.wall_nodes``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Displacement of every node, shape ``(n_nodes, 3)``, carrying the
+            prescribed values on wall nodes and zeros on constrained outer
+            nodes.
+
+        Raises
+        ------
+        ValueError
+            If the row count does not match the wall-node count.
+        """
         wall_displacement = np.asarray(wall_displacement, dtype=float).reshape(
             (-1, 3)
         )
@@ -241,7 +426,42 @@ class GraphVolumeSystem:
 
 @dataclass
 class ElasticVolumeSystem:
-    """Factored coupled linear-tetrahedral elasticity system."""
+    """Factored coupled linear-tetrahedral elasticity system.
+
+    Volume motion only, and distinct from the surface method. Unlike
+    :class:`GraphVolumeSystem`, the three components are coupled, so one vector
+    system is assembled over the flattened DOFs.
+
+    Attributes
+    ----------
+    mesh
+        Volume mesh the system was assembled on.
+    partition
+        Node and DOF partitions separating prescribed wall DOFs from free
+        DOFs.
+    factor
+        Factored stiffness operator restricted to the free DOFs.
+    coupling_wall
+        Block coupling free DOF rows to the prescribed wall DOF columns.
+    free_scatter
+        Scatters the solved free-DOF vector back into the full DOF vector.
+    wall_scatter
+        Scatters the prescribed wall DOFs into the full DOF vector.
+    assembly_seconds
+        Wall-clock seconds spent assembling the stiffness operator.
+    factorization_seconds
+        Wall-clock seconds spent factorizing it.
+    poisson_ratio
+        Poisson's ratio of the fictitious elastic material.
+    stiffening_exponent
+        Exponent making small cells stiffer than large ones.
+    volume_floor
+        Lower bound on the cell volume used for stiffening.
+    stiffness_nnz
+        Number of stored nonzeros in the assembled stiffness matrix.
+    method
+        Identifier of this propagator, ``"elasticity"``.
+    """
 
     mesh: TetraVolumeMesh
     partition: VolumeBoundaryPartition
@@ -259,7 +479,23 @@ class ElasticVolumeSystem:
     method: str = "elasticity"
 
     def evaluate(self, wall_positions) -> csdl.Variable:
-        """Differentiable reference-matrix deformation."""
+        """Deform the volume differentiably from prescribed wall positions.
+
+        The factorization is treated as a reference matrix and reused as
+        assembled, so the map is linear in the wall displacement and the
+        reverse pass goes through the same factor's transpose solve.
+
+        Parameters
+        ----------
+        wall_positions
+            Deformed wall-node positions of shape ``(n_wall, 3)``, ordered as
+            ``partition.wall_nodes``.
+
+        Returns
+        -------
+        csdl_alpha.Variable
+            Deformed volume coordinates of shape ``(n_nodes, 3)``.
+        """
         wall = self.partition.wall_nodes
         wall_displacement = wall_positions - self.mesh.vertices[wall]
         wall_vector = wall_displacement.reshape(
@@ -276,7 +512,28 @@ class ElasticVolumeSystem:
         )
 
     def solve_numpy(self, wall_displacement: np.ndarray) -> np.ndarray:
-        """Solve an incremental displacement with the current factored matrix."""
+        """Solve an incremental displacement with the current factored matrix.
+
+        The eager NumPy counterpart of :meth:`evaluate`, used by the
+        forward-only load-stepping path. It returns a displacement, not a
+        position.
+
+        Parameters
+        ----------
+        wall_displacement
+            Incremental wall displacement reshaped to ``(n_wall, 3)``, ordered
+            as ``partition.wall_nodes``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Displacement of every node, shape ``(n_nodes, 3)``.
+
+        Raises
+        ------
+        ValueError
+            If the row count does not match the wall-node count.
+        """
         wall_displacement = np.asarray(wall_displacement, dtype=float).reshape(
             (-1, 3)
         )
@@ -290,7 +547,35 @@ class ElasticVolumeSystem:
 
 @dataclass(frozen=True)
 class VolumeQualityReport:
-    """Fast topology-fixed tetrahedral deformation quality."""
+    """Fast topology-fixed tetrahedral deformation quality.
+
+    Every metric compares the deformed cells against the baseline ones with the
+    topology held fixed. Percentile fields are the low tail: ``p001`` is the
+    0.1st percentile and ``p01`` the 1st, so they show how many cells sit near
+    the worst value rather than only the single extreme.
+
+    Attributes
+    ----------
+    num_tetrahedra
+        Number of tetrahedra tested, counting each decomposed pyramid cell.
+    inverted_tetrahedra
+        How many of those have a non-positive signed volume, so the cell
+        folded.
+    minimum_relative_jacobian
+        Smallest deformed-to-baseline signed Jacobian ratio. One means
+        undeformed; a value at or below zero means inversion.
+    relative_jacobian_p001, relative_jacobian_p01
+        The 0.1st and 1st percentiles of that ratio.
+    minimum_volume_ratio
+        Smallest deformed-to-baseline cell volume ratio.
+    volume_ratio_p001, volume_ratio_p01
+        The 0.1st and 1st percentiles of that ratio.
+    minimum_mean_ratio
+        Smallest mean-ratio shape metric, which measures distortion rather than
+        size: one is a similarity of the baseline cell and zero is degenerate.
+    mean_ratio_p001, mean_ratio_p01
+        The 0.1st and 1st percentiles of that metric.
+    """
 
     num_tetrahedra: int
     inverted_tetrahedra: int
@@ -305,6 +590,14 @@ class VolumeQualityReport:
     mean_ratio_p01: float
 
     def as_dict(self) -> dict[str, Any]:
+        """Return the report as JSON-serializable scalars.
+
+        Returns
+        -------
+        dict
+            Every field keyed by its own name, with NumPy scalars converted to
+            plain Python numbers.
+        """
         return {
             key: _json_scalar(value)
             for key, value in self.__dict__.items()
@@ -313,7 +606,24 @@ class VolumeQualityReport:
 
 @dataclass(frozen=True)
 class LoadStepRecord:
-    """Cost and quality for one forward-only volume load increment."""
+    """Cost and quality for one forward-only volume load increment.
+
+    Attributes
+    ----------
+    step
+        Zero-based index of this increment.
+    fraction
+        Cumulative fraction of the total wall motion applied after it, where
+        ``1.0`` is the full motion.
+    assembly_seconds
+        Wall-clock seconds spent reassembling the operator for this increment.
+    factorization_seconds
+        Wall-clock seconds spent refactorizing it.
+    solve_seconds
+        Wall-clock seconds spent solving it.
+    quality
+        Volume-quality report of the mesh after this increment.
+    """
 
     step: int
     fraction: float
@@ -323,6 +633,14 @@ class LoadStepRecord:
     quality: VolumeQualityReport
 
     def as_dict(self) -> dict[str, Any]:
+        """Return the record as JSON-serializable values.
+
+        Returns
+        -------
+        dict
+            The timing and step fields as plain Python numbers, with
+            ``"quality"`` holding the nested report dictionary.
+        """
         return {
             "step": int(self.step),
             "fraction": float(self.fraction),
@@ -335,13 +653,38 @@ class LoadStepRecord:
 
 @dataclass(frozen=True)
 class LoadSteppedVolumeResult:
+    """Final vertices and per-increment records of a load-stepped solve.
+
+    Produced by the forward-only load-stepping path, which reassembles and
+    refactorizes at each increment and therefore carries no derivative.
+
+    Attributes
+    ----------
+    vertices
+        Deformed volume coordinates after the final increment, shape
+        ``(n_nodes, 3)``.
+    records
+        One :class:`LoadStepRecord` per increment, in the order applied.
+    """
+
     vertices: np.ndarray
     records: tuple[LoadStepRecord, ...]
 
 
 @dataclass(frozen=True)
 class WallPositionHistory:
-    """Validated aircraft-wall targets for replaying volume deformation."""
+    """Validated aircraft-wall targets for replaying volume deformation.
+
+    Attributes
+    ----------
+    positions
+        One deformed wall-position array per recorded increment, each of shape
+        ``(n_wall, 3)`` in wall-node order.
+    fractions
+        Cumulative load fraction of each entry, aligned with ``positions``.
+    source_path
+        File the history was read from.
+    """
 
     positions: tuple[np.ndarray, ...]
     fractions: tuple[float, ...]
@@ -356,6 +699,26 @@ def read_gmsh22_volume(
     ``validate=False`` is reserved for diagnosing a rejected mesh that cannot
     pass the normal orientation/topology checks. Production callers should
     retain the default.
+
+    Parameters
+    ----------
+    path
+        ASCII Gmsh 2.2 volume mesh to read.
+    validate
+        Run the orientation and topology checks. Setting it to ``False`` loads
+        a mesh that would otherwise be rejected, for diagnosis only.
+
+    Returns
+    -------
+    TetraVolumeMesh
+        Nodes, tetrahedra, boundary faces, and physical-group names. Quadrangle
+        faces and pyramids are present only when the file contains them.
+
+    Raises
+    ------
+    ValueError
+        If the file is not ASCII Gmsh 2.2, lacks a required section, or fails a
+        validation check while ``validate`` is set.
     """
     source = Path(path).expanduser().resolve()
     if not source.is_file():
@@ -473,7 +836,25 @@ def extract_aircraft_wall_mesh(
     output_path: str | Path,
     mapping_path: str | Path | None = None,
 ) -> tuple[Path, Path]:
-    """Write the exact aircraft boundary as a compact surface MSH and map."""
+    """Write the exact aircraft boundary as a compact surface MSH and map.
+
+    The written surface is renumbered compactly, so the companion map is what
+    relates its nodes back to the volume mesh.
+
+    Parameters
+    ----------
+    mesh
+        Volume mesh whose aircraft wall patch is extracted.
+    output_path
+        Destination for the compact surface mesh.
+    mapping_path
+        Destination for the wall-to-volume node index map.
+
+    Returns
+    -------
+    tuple
+        The resolved ``(output_path, mapping_path)`` actually written.
+    """
     output = Path(output_path).expanduser().resolve()
     mapping = (
         output.with_suffix(".volume_map.npz")
@@ -534,7 +915,30 @@ def load_wall_to_volume_map(
     mesh: TetraVolumeMesh,
     wall_vertices: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Load and validate the compact-wall to volume-node index map."""
+    """Load and validate the compact-wall to volume-node index map.
+
+    Parameters
+    ----------
+    mapping_path
+        Map file written by :func:`extract_aircraft_wall_mesh`.
+    mesh
+        Volume mesh the map must refer to; its wall nodes are the expected
+        target.
+    wall_vertices
+        Compact wall vertices the map is checked against, so a mismatched
+        surface is rejected rather than silently misapplied.
+
+    Returns
+    -------
+    numpy.ndarray
+        Volume-node index per compact wall node, shape ``(n_wall,)``.
+
+    Raises
+    ------
+    ValueError
+        If the map does not match this mesh's wall nodes or the supplied wall
+        vertices.
+    """
     payload = np.load(Path(mapping_path), allow_pickle=False)
     mapping = np.asarray(payload["wall_to_volume"], dtype=np.int64)
     baseline = np.asarray(payload["baseline_wall_vertices"], dtype=float)
@@ -563,7 +967,27 @@ def write_wall_position_history(
     wall_history: list[np.ndarray] | tuple[np.ndarray, ...],
     fractions: list[float] | tuple[float, ...],
 ) -> Path:
-    """Persist exact surface load-step targets for cheap volume-only replay."""
+    """Persist exact surface load-step targets for cheap volume-only replay.
+
+    Parameters
+    ----------
+    path
+        Destination file.
+    mesh
+        Volume mesh the targets belong to; identifies the baseline the history
+        may be replayed against.
+    wall_history
+        One deformed wall-position array per increment, each ``(n_wall, 3)`` in
+        wall-node order.
+    fractions
+        Cumulative load fraction of each increment, aligned with
+        ``wall_history``.
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved file written.
+    """
     output = Path(path).expanduser().resolve()
     if output.suffix != ".npz":
         raise ValueError("Wall-position history must use an .npz suffix.")
@@ -586,7 +1010,26 @@ def read_wall_position_history(
     path: str | Path,
     mesh: TetraVolumeMesh,
 ) -> WallPositionHistory:
-    """Load a history and reject use with a different baseline volume mesh."""
+    """Load a history and reject use with a different baseline volume mesh.
+
+    Parameters
+    ----------
+    path
+        History file written by :func:`write_wall_position_history`.
+    mesh
+        Volume mesh the history must have been recorded against.
+
+    Returns
+    -------
+    WallPositionHistory
+        The stored positions and load fractions.
+
+    Raises
+    ------
+    ValueError
+        If the history does not correspond to this baseline mesh, so replaying
+        it would apply targets to the wrong nodes.
+    """
     source = Path(path).expanduser().resolve()
     with np.load(source, allow_pickle=False) as payload:
         positions = np.asarray(payload["wall_positions"], dtype=float)
@@ -616,7 +1059,25 @@ def write_deformed_gmsh22(
     vertices: np.ndarray,
     output_path: str | Path,
 ) -> Path:
-    """Copy the source MSH while replacing only the node coordinates."""
+    """Copy the source MSH while replacing only the node coordinates.
+
+    Connectivity, physical groups, and every other section are copied through
+    unchanged, so the output stays readable by the same tools.
+
+    Parameters
+    ----------
+    mesh
+        Mesh supplying the source file and its node ordering.
+    vertices
+        Replacement coordinates of shape ``(n_nodes, 3)``, in that same order.
+    output_path
+        Destination file.
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved file written.
+    """
     coordinates = np.asarray(vertices, dtype=float).reshape(mesh.vertices.shape)
     if not np.all(np.isfinite(coordinates)):
         raise ValueError("Cannot write nonfinite volume coordinates.")
@@ -650,7 +1111,22 @@ def write_aircraft_wall_gmsh22(
     wall_positions: np.ndarray,
     output_path: str | Path,
 ) -> Path:
-    """Write one compact aircraft-wall target for inspection or reuse."""
+    """Write one compact aircraft-wall target for inspection or reuse.
+
+    Parameters
+    ----------
+    mesh
+        Volume mesh supplying the wall connectivity.
+    wall_positions
+        Deformed wall positions of shape ``(n_wall, 3)`` in wall-node order.
+    output_path
+        Destination file.
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved compact surface mesh written.
+    """
     positions = np.asarray(wall_positions, dtype=float).reshape((-1, 3))
     wall_nodes = mesh.aircraft_nodes
     if positions.shape[0] != wall_nodes.size:
@@ -689,7 +1165,23 @@ def write_aircraft_wall_gmsh22(
 
 
 def make_boundary_partition(mesh: TetraVolumeMesh) -> VolumeBoundaryPartition:
-    """Create fixed/freedom sets with tangential symmetry-plane motion."""
+    """Create fixed/freedom sets with tangential symmetry-plane motion.
+
+    Wall nodes are prescribed and inlet, outlet, and farfield nodes are fixed.
+    Symmetry-plane nodes are free to slide within the plane but pinned across
+    it, which is why the scalar graph systems use different free sets for the
+    in-plane and normal components.
+
+    Parameters
+    ----------
+    mesh
+        Volume mesh whose patches define the partition.
+
+    Returns
+    -------
+    VolumeBoundaryPartition
+        Node sets and the flattened DOF index sets for the elasticity system.
+    """
     wall = mesh.aircraft_nodes
     outer = mesh.fixed_outer_nodes
     symmetry = mesh.symmetry_nodes
@@ -732,7 +1224,32 @@ def assemble_graph_volume_system(
     stiffening_exponent: float = 0.0,
     volume_floor: float = 1.0e-15,
 ) -> GraphVolumeSystem:
-    """Assemble and factor the tetrahedral all-edge graph Laplacian."""
+    """Assemble and factor the tetrahedral all-edge graph Laplacian.
+
+    Uses the assembly cell set, so each pyramid contributes the single
+    better-conditioned split rather than both. Two scalar systems are factored:
+    one shared by the x and z components, one for y.
+
+    Parameters
+    ----------
+    mesh
+        Volume mesh to assemble on.
+    vertices
+        Coordinates the operator is assembled about, allowing a load-stepped
+        caller to reassemble at the current configuration rather than the
+        baseline.
+    stiffening_exponent
+        Exponent making small cells stiffer than large ones. Zero gives uniform
+        weights.
+    volume_floor
+        Lower bound on cell volume used for that weighting, guarding against a
+        vanishing volume.
+
+    Returns
+    -------
+    GraphVolumeSystem
+        The factored systems with their coupling blocks and timings.
+    """
     started = time.perf_counter()
     points = (
         mesh.vertices
@@ -812,7 +1329,32 @@ def assemble_elastic_volume_system(
     stiffening_exponent: float = 0.0,
     volume_floor: float = 1.0e-15,
 ) -> ElasticVolumeSystem:
-    """Assemble and factor coupled linear elasticity on four-node tets."""
+    """Assemble and factor coupled linear elasticity on four-node tets.
+
+    Uses the assembly cell set, so each pyramid contributes one split. Unlike
+    the graph systems the three components are coupled, giving one vector
+    system over the free DOFs.
+
+    Parameters
+    ----------
+    mesh
+        Volume mesh to assemble on.
+    vertices
+        Coordinates the stiffness is assembled about, allowing reassembly at
+        the current configuration.
+    poisson_ratio
+        Poisson's ratio of the fictitious elastic material.
+    stiffening_exponent
+        Exponent making small cells stiffer than large ones.
+    volume_floor
+        Lower bound on cell volume used for that weighting.
+
+    Returns
+    -------
+    ElasticVolumeSystem
+        The factored system with its coupling and scatter blocks, timings, and
+        stiffness sparsity count.
+    """
     started = time.perf_counter()
     points = (
         mesh.vertices
@@ -886,7 +1428,46 @@ def run_forward_volume_load_steps(
     elasticity_stiffening_exponent: float = 0.0,
     volume_floor: float = 1.0e-15,
 ) -> LoadSteppedVolumeResult:
-    """Reassemble/refactor at each prescribed wall-position increment."""
+    """Reassemble/refactor at each prescribed wall-position increment.
+
+    Forward-only: the operator is reassembled and refactorized about the
+    current configuration at every increment, so the sequence carries no
+    derivative and is not the differentiable path.
+
+    Parameters
+    ----------
+    mesh
+        Volume mesh supplying the baseline configuration and connectivity.
+    wall_history
+        Deformed wall positions per increment, each ``(n_wall, 3)`` in
+        wall-node order.
+    fractions
+        Cumulative load fraction of each increment, aligned with
+        ``wall_history`` and validated against it.
+    method
+        Which propagator to use at each increment, the graph systems or the
+        elasticity system.
+    graph_stiffening_exponent
+        Cell-size stiffening exponent for the graph method.
+    elasticity_poisson_ratio
+        Poisson's ratio for the elasticity method.
+    elasticity_stiffening_exponent
+        Cell-size stiffening exponent for the elasticity method.
+    volume_floor
+        Lower bound on cell volume used by either stiffening rule.
+
+    Returns
+    -------
+    LoadSteppedVolumeResult
+        Final coordinates and one record per increment, each carrying its
+        timings and resulting volume quality.
+
+    Raises
+    ------
+    ValueError
+        If the history and fractions are inconsistent, or do not match this
+        mesh's wall nodes.
+    """
     targets, load_fractions = _validate_wall_history(
         mesh, wall_history, fractions
     )
@@ -972,6 +1553,25 @@ def evaluate_volume_quality(
 
     When ``pyramids`` is given, each pyramid is tested under both base splits,
     so ``inverted_tetrahedra`` counts every decomposed cell that folded.
+
+    Parameters
+    ----------
+    baseline_vertices
+        Undeformed coordinates, shape ``(n_nodes, 3)``, forming the denominator
+        of every ratio.
+    deformed_vertices
+        Deformed coordinates in the same node order and shape.
+    tetrahedra
+        Tetrahedral cells as node indices, shape ``(n_tet, 4)``.
+    pyramids
+        Pyramid cells, shape ``(n_pyr, 5)``. ``None`` or an empty array tests
+        the tetrahedra alone.
+
+    Returns
+    -------
+    VolumeQualityReport
+        Cell count, inverted-cell count, and the minimum and low-percentile
+        values of the relative Jacobian, volume ratio, and mean ratio.
     """
     baseline = np.asarray(baseline_vertices, dtype=float)
     deformed = np.asarray(deformed_vertices, dtype=float)
@@ -1011,6 +1611,23 @@ def evaluate_gmsh_tetra_quality(
 
     Running this on the written result also verifies that the deformed output
     remains a readable volume mesh.
+
+    Parameters
+    ----------
+    mesh_path
+        Volume mesh file to evaluate. It is read back through Gmsh, so an
+        unreadable or invalid file fails here.
+
+    Returns
+    -------
+    dict
+        Gmsh's CFD-oriented metrics over all linear tetrahedra, keyed by metric
+        name.
+
+    Raises
+    ------
+    ImportError
+        If Gmsh is unavailable.
     """
     import gmsh
 
@@ -1068,6 +1685,23 @@ def evaluate_gmsh_tetra_quality(
 def write_comparison_summary(
     path: str | Path, payload: dict[str, Any]
 ) -> Path:
+    """Write a JSON comparison summary, creating parent directories.
+
+    Parameters
+    ----------
+    path
+        Destination file; ``~`` is expanded, the path resolved, and missing
+        parent directories created. An existing file is overwritten.
+    payload
+        Values to serialize. They must already be JSON-serializable; convert
+        NumPy scalars first, for example with
+        :meth:`VolumeQualityReport.as_dict`.
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved file written.
+    """
     output = Path(path).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2), encoding="utf8")

@@ -219,6 +219,25 @@ MESH_MOTION = MeshMotion(
 
 
 def run_deformation_test():
+    """Run the configured E175 surface and volume deformation once.
+
+    A concrete E175 driver, not a generic entry point: the model files,
+    geometry parameterization, and motion settings are the module-level
+    constants edited in place above, so the function takes no arguments.
+
+    Starts its own inline recorder, builds the geometry model, runs the
+    mesh-motion pipeline, and stops the recorder. When the configured
+    derivative check is enabled, an objective is selected before the recorder
+    stops and the finite-difference sweep runs afterwards. Writing deformed
+    meshes and opening visualization windows are side effects of the configured
+    settings, not of this function.
+
+    Returns
+    -------
+    MeshMotionResult
+        The pipeline result, including surface and volume coordinates and the
+        quality diagnostics gathered during the solve.
+    """
     recorder = csdl.Recorder(inline=True)
     recorder.start()
 

@@ -156,7 +156,6 @@ def _baseline_coordinates_and_direction(
     ``2 h`` (``delta_d`` is O(scale); ``h_direction`` is the JVP step), built and
     broadcast on rank 0 so every rank holds identical arrays.
     """
-
     output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
     baseline = {
         name: np.asarray(value, dtype=float)
@@ -194,7 +193,6 @@ def _resolve_level6_case():
     the adjoint levels' coloring cache. There is no fall-back to the shared case:
     Level 6 must never operate on the template case.
     """
-
     override = os.environ.get("DAFOAM_CASE_DIRECTORY")
     if not override:
         raise RuntimeError(
@@ -215,7 +213,6 @@ def _prepare_deterministic_baseline(backend, coordinates, patch_velocity):
     Every subsequent primal then restores this fixed converged state, so +h/-h
     perturbations are independent rather than chained warm starts.
     """
-
     backend.deterministic_fd_mode = False
     backend.reset_primal_state()
     backend.run_primal(
@@ -229,6 +226,32 @@ def _prepare_deterministic_baseline(backend, coordinates, patch_velocity):
 # Level 0: deterministic forward repetition
 # ---------------------------------------------------------------------------
 def level0_forward_repetition(comm, repetitions: int = 2) -> dict[str, Any]:
+    """Level 0: measure primal function noise across repeated identical solves.
+
+    Deforms the mesh once, freezes the converged flow state, then re-runs the
+    primal from that same baseline several times at an unchanged design point.
+    Any spread in the resulting function values is solver noise, which bounds
+    the finite-difference step sizes the higher levels can trust. No adjoint is
+    solved.
+
+    Requires a configured DAFoam case directory.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator. Every rank must call this, since the mesh deformation
+        runs on rank 0 and its result is broadcast.
+    repetitions
+        Number of identical primal solves to run. Two is enough to see a
+        difference; more gives a better spread estimate at proportional cost.
+
+    Returns
+    -------
+    dict
+        Diagnostic payload recording the level, rank count, and the per-run
+        function values with their spread. Also written to the ladder output
+        directory as JSON.
+    """
     driver._require_case_directory(CASE)
     backend = _make_dafoam_backend(comm, deterministic=True)
     geometry_backend = _make_geometry_backend(comm)
@@ -273,6 +296,26 @@ def level0_forward_repetition(comm, repetitions: int = 2) -> dict[str, Any]:
 # Level 1: MPI-independent mesh-motion forward
 # ---------------------------------------------------------------------------
 def level1_mesh_motion_forward(comm) -> dict[str, Any]:
+    """Level 1: check that mesh motion is independent of the rank count.
+
+    Deforms the volume mesh on rank 0 and broadcasts it, then records a
+    checksum and bounding box of the coordinates. Running the level at several
+    rank counts and comparing the recorded checksums is what establishes
+    MPI independence; a single invocation only produces one sample.
+
+    Needs the mesh-motion stack only; no DAFoam case is required.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator. Every rank must call this.
+
+    Returns
+    -------
+    dict
+        Diagnostic payload with the level, rank count, point count, coordinate
+        checksum, and coordinate bounds. Also written as JSON.
+    """
     geometry_backend = _make_geometry_backend(comm)
     output_shape = (read_gmsh_volume_point_count(MODEL_FILES.volume_mesh_file), 3)
 
@@ -301,6 +344,30 @@ def level1_mesh_motion_forward(comm) -> dict[str, Any]:
 # Level 2: mesh-motion custom-op VJP dot-product (no DAFoam)
 # ---------------------------------------------------------------------------
 def level2_mesh_motion_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
+    """Level 2: dot-product test of the mesh-motion VJP, without DAFoam.
+
+    Checks the mesh-motion reverse pass alone by comparing the two sides of
+    ``<J v, w> == <v, J^T w>`` for a pseudo-random seed. It exercises the
+    geometry-to-volume backend's adjoint only; nothing about the flow solution
+    or its adjoint is tested here.
+
+    Needs the mesh-motion stack only. Intended for one rank, but it drives the
+    same collective sequence on every rank so it stays safe at any rank count.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator. Every rank must call this.
+    seed_index
+        Seed for the random direction and cotangent, making the check
+        reproducible and allowing independent directions to be sampled.
+
+    Returns
+    -------
+    dict
+        Diagnostic payload holding both inner products and their relative
+        difference. Also written as JSON.
+    """
     # No DAFoam: all mesh-motion work is on rank 0. Every rank still drives the
     # same run_on_root sequence so a root exception cannot strand the others
     # (this level is intended for np=1 but stays collective-safe for any np).
@@ -362,6 +429,31 @@ def level2_mesh_motion_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
 # Level 3: DAFoam-only volume-coordinate VJP directional check
 # ---------------------------------------------------------------------------
 def level3_dafoam_volume_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
+    """Level 3: directional check of the DAFoam volume-coordinate VJP.
+
+    Perturbs the volume coordinates along a smooth, mesh-valid direction and
+    compares DAFoam's adjoint-based directional derivative against a
+    finite-difference estimate from primal solves. The boundary of this level
+    is the flow solver alone: the direction is supplied in coordinate space, so
+    the mesh-motion Jacobian is not exercised.
+
+    The direction is shared verbatim with Level 6, so the two probe identical
+    geometry. Requires a configured DAFoam case directory.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator. Every rank must call this.
+    seed_index
+        Seed selecting the perturbation direction, keeping the check
+        reproducible.
+
+    Returns
+    -------
+    dict
+        Diagnostic payload with the adjoint and finite-difference directional
+        derivatives and their relative difference. Also written as JSON.
+    """
     driver._require_case_directory(CASE)
     backend = _make_dafoam_backend(comm, deterministic=True)
     geometry_backend = _make_geometry_backend(comm)
@@ -437,6 +529,32 @@ def level3_dafoam_volume_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
 # Level 4: explicit chain-rule test
 # ---------------------------------------------------------------------------
 def level4_chain_rule(comm, seed_index: int = 0) -> dict[str, Any]:
+    """Level 4: chain the DAFoam cotangent through the mesh-motion VJP.
+
+    Takes the volume-coordinate cotangent DAFoam produces for each function and
+    pushes it through the mesh-motion reverse pass to design-variable
+    cotangents, then compares the resulting directional derivative against a
+    finite-difference estimate along a random design-variable direction. This
+    is the first level where both Jacobians appear together, so it isolates a
+    mismatch in how they are composed rather than in either one alone.
+
+    One baseline primal is reused by every function's adjoint. Requires a
+    configured DAFoam case directory.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator. Every rank must call this.
+    seed_index
+        Seed for the design-variable direction, keeping the check reproducible.
+
+    Returns
+    -------
+    dict
+        Diagnostic payload with the chained analytical derivative, the
+        finite-difference estimate, and their relative difference. Also written
+        as JSON.
+    """
     driver._require_case_directory(CASE)
     backend = _make_dafoam_backend(comm, deterministic=True)
     geometry_backend = _make_geometry_backend(comm)
@@ -500,6 +618,31 @@ def level4_chain_rule(comm, seed_index: int = 0) -> dict[str, Any]:
 # Level 5: one-DV, one-output end-to-end centered FD
 # ---------------------------------------------------------------------------
 def level5_end_to_end(comm) -> dict[str, Any]:
+    """Level 5: one-variable, one-output end-to-end centered FD with a step sweep.
+
+    Runs the full design-variable to aerodynamic-function chain, comparing the
+    analytical total derivative against centered finite differences over a
+    sweep of step sizes. The converged baseline flow state is frozen first and
+    restored for every sample, so the differences are not contaminated by
+    warm-start history.
+
+    A step sweep locates the window where truncation and solver-noise errors
+    balance; agreement there is evidence, not proof, and the noise floor
+    measured by Level 0 bounds what any step can resolve. Requires a configured
+    DAFoam case directory.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator. Every rank must call this.
+
+    Returns
+    -------
+    dict
+        Diagnostic payload with the analytical derivative and the
+        finite-difference estimate and relative error at each step. Also
+        written as JSON.
+    """
     driver._require_case_directory(CASE)
     backend = _make_dafoam_backend(comm, deterministic=True)
     geometry_backend = _make_geometry_backend(comm)
@@ -583,8 +726,31 @@ def level6_primal_only_deformation(comm) -> dict[str, Any]:
     * ``LADDER_PRIMAL_START`` = ``baseline`` | ``fresh`` -- initialize from a
       captured converged baseline state, or cold from the case's initial fields.
     * ``LADDER_PRIMAL_ETA`` -- directional step (default ``1e-2``).
-    """
 
+    These environment variables and the isolated DAFoam case they refer to are
+    caller-provided requirements, not repository assets. An isolated case is
+    mandatory here because the level repeatedly solves primals from initial
+    fields.
+
+    Parameters
+    ----------
+    comm
+        MPI communicator. Every rank must call this, since the mesh deformation
+        runs on rank 0 and its result is broadcast.
+
+    Returns
+    -------
+    dict
+        Diagnostic payload recording the selected point, start mode, step, and
+        the resulting primal convergence and function values. Also written as
+        JSON.
+
+    Raises
+    ------
+    ValueError
+        If ``LADDER_PRIMAL_POINT`` or ``LADDER_PRIMAL_START`` is not one of its
+        accepted values, or ``LADDER_PRIMAL_ETA`` is not a positive float.
+    """
     point = os.environ.get("LADDER_PRIMAL_POINT", "baseline").strip().lower()
     if point not in ("baseline", "plus", "minus"):
         raise ValueError(
@@ -687,6 +853,28 @@ LEVELS: dict[str, Callable[[Any], dict[str, Any]]] = {
 
 
 def main() -> None:
+    """Run one ladder level selected by the first command-line argument.
+
+    A Slurm/`mpirun` entry point, not a library function: it reads
+    ``sys.argv``, prints usage to stderr on the root rank when the level is
+    missing or unrecognized, and exits with status 2 in that case. The level
+    argument is one of ``0``-``6``.
+
+    Configuration comes from module-level constants and, for Level 6, from the
+    ``LADDER_PRIMAL_POINT``, ``LADDER_PRIMAL_START``, and ``LADDER_PRIMAL_ETA``
+    environment variables. Those variables and the referenced DAFoam case are
+    caller-provided requirements, not repository assets.
+
+    Returns
+    -------
+    None
+        Each level writes its own JSON payload to the ladder output directory.
+
+    Raises
+    ------
+    SystemExit
+        With status 2 when no recognized level argument is supplied.
+    """
     comm = resolve_comm()
     if len(sys.argv) < 2 or sys.argv[1] not in LEVELS:
         if is_root(comm):

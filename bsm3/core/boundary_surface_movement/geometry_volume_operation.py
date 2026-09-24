@@ -96,6 +96,32 @@ class GeometryVolumeOperation(csdl.experimental.CustomExplicitOperationBeta):
             raise ValueError("The root rank requires a live backend.")
 
     def evaluate(self, design_variables: Mapping[str, csdl.Variable]):
+        """Declare the design-variable inputs and the volume-coordinate output.
+
+        Also registers :class:`GeometryVolumeVJP` as the reverse function,
+        forwarding the backend, communicator, shapes, and ownership settings.
+
+        Parameters
+        ----------
+        design_variables
+            Mapping of design-variable name to CSDL variable. It must contain
+            every name declared at construction; extra entries are ignored.
+            Inputs are declared in the constructor's order, not the mapping's,
+            so every rank declares them identically.
+
+        Returns
+        -------
+        csdl_alpha.Variable
+            A single ``"volume_coordinates"`` variable of the configured
+            ``(num_points, 3)`` global shape. This is one variable, not a
+            mapping.
+
+        Raises
+        ------
+        KeyError
+            If any declared design variable is absent from
+            ``design_variables``, naming the missing entries.
+        """
         missing = set(self.design_variable_names).difference(design_variables)
         if missing:
             raise KeyError(
@@ -119,6 +145,31 @@ class GeometryVolumeOperation(csdl.experimental.CustomExplicitOperationBeta):
         return volume_coordinates
 
     def compute(self, inputs, outputs):
+        """Deform the mesh on the root rank and broadcast the coordinates.
+
+        Collective: every rank must reach this call, because all ranks
+        participate in the root-error broadcast and the coordinate broadcast.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding every declared design variable, read as float
+            arrays. Under ``debug`` they are first checked to be identical
+            across ranks.
+        outputs
+            Output buffer written in place with ``"volume_coordinates"``, the
+            broadcast global array, identical on every rank.
+
+        Returns
+        -------
+        None
+            The result is written into ``outputs``.
+
+        Raises
+        ------
+        RuntimeError
+            On every rank when the root-rank forward evaluation raised.
+        """
         design_variables = {
             name: np.asarray(inputs[name], dtype=float)
             for name, _shape in self.specs
@@ -195,6 +246,25 @@ class GeometryVolumeVJP(csdl.experimental.CustomExplicitOperationBeta):
         )
 
     def evaluate(self, inputs, d_outputs):
+        """Declare the reverse inputs and one cotangent output per design variable.
+
+        Parameters
+        ----------
+        inputs
+            Mapping of the forward operation's inputs, holding every declared
+            design variable.
+        d_outputs
+            Mapping of reverse seeds, holding ``"volume_coordinates"`` with the
+            forward output's global shape.
+
+        Returns
+        -------
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by **design-variable name**, one entry per
+            declared variable, each with that variable's own shape. The
+            underlying CSDL outputs are named ``d_<name>``, but the mapping
+            keys are the plain names. The mapping is keyed, not ordered.
+        """
         for name, _shape in self.specs:
             self.declare_input(name, inputs[name])
         self.declare_input(
@@ -206,6 +276,37 @@ class GeometryVolumeVJP(csdl.experimental.CustomExplicitOperationBeta):
         return derivatives
 
     def compute(self, inputs, outputs):
+        """Evaluate the reverse product on the root rank and broadcast it.
+
+        The per-variable cotangents are concatenated into one flat vector on
+        the root rank, broadcast once, then split back out so every rank writes
+        identical values.
+
+        Collective: every rank must reach this call. The seed-ownership
+        contract is enforced collectively *before* the broadcast, so a
+        violation cannot strand a rank.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding every declared design variable and the seed
+            ``"d_volume_coordinates"``, reshaped to the global output shape.
+        outputs
+            Output buffer written in place with one ``d_<name>`` entry per
+            design variable, each reshaped to that variable's shape and
+            identical on every rank.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+
+        Raises
+        ------
+        RuntimeError
+            On every rank when the seed violates the configured ownership
+            contract, or when the root-rank reverse evaluation raised.
+        """
         design_variables = {
             name: np.asarray(inputs[name], dtype=float)
             for name, _shape in self.specs
@@ -273,8 +374,34 @@ def build_geometry_volume_operation(
     design_variable_specs: Mapping[str, tuple[int, ...]],
     debug: bool = False,
 ) -> GeometryVolumeOperation:
-    """Construct a :class:`GeometryVolumeOperation` with a resolved comm."""
+    """Construct a :class:`GeometryVolumeOperation` with a resolved comm.
 
+    A thin convenience wrapper: it forwards its arguments unchanged and leaves
+    communicator resolution to the constructor. It does not expose
+    ``seed_ownership``, so the operation's default of ``"replicated"`` applies.
+
+    Parameters
+    ----------
+    backend
+        Live geometry-to-volume backend on the root rank; ``None`` on non-root
+        ranks.
+    comm
+        MPI communicator. ``None`` resolves to ``MPI.COMM_WORLD`` when
+        ``mpi4py`` is importable and to a serial communicator otherwise.
+    output_shape
+        Global ``(num_points, 3)`` coordinate shape, identical on every rank.
+    design_variable_specs
+        Ordered mapping of design-variable name to shape, identical on every
+        rank.
+    debug
+        Verify that replicated design variables agree across ranks before the
+        root rank uses its own copy.
+
+    Returns
+    -------
+    GeometryVolumeOperation
+        The constructed operation.
+    """
     return GeometryVolumeOperation(
         backend,
         comm,

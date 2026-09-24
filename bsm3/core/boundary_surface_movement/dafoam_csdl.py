@@ -41,14 +41,42 @@ class DAFoamBackend(Protocol):
     def run_primal(
         self, inputs: Mapping[str, np.ndarray]
     ) -> Mapping[str, float | np.ndarray]:
-        """Run the primal and return every configured aerodynamic function."""
+        """Run the primal and return every configured aerodynamic function.
+
+        Parameters
+        ----------
+        inputs
+            Mapping of DAFoam input name to value, always including the global
+            ``volume_coordinates`` array.
+
+        Returns
+        -------
+        Mapping[str, float or numpy.ndarray]
+            One entry per name in ``function_names``, each a scalar
+            aerodynamic function value.
+        """
 
     def compute_vjp(
         self,
         inputs: Mapping[str, np.ndarray],
         output_seeds: Mapping[str, np.ndarray],
     ) -> Mapping[str, np.ndarray]:
-        """Return total input cotangents from the discrete adjoint."""
+        """Return total input cotangents from the discrete adjoint.
+
+        Parameters
+        ----------
+        inputs
+            Primal input mapping the reverse product is taken about, using the
+            same names as :meth:`run_primal`.
+        output_seeds
+            Cotangent per aerodynamic function, keyed by function name.
+
+        Returns
+        -------
+        Mapping[str, numpy.ndarray]
+            One total cotangent per primal input, keyed by input name and
+            shaped like that input.
+        """
 
 
 class DAFoamAnalysisOperation(csdl.experimental.CustomExplicitOperationBeta):
@@ -75,6 +103,33 @@ class DAFoamAnalysisOperation(csdl.experimental.CustomExplicitOperationBeta):
         self.function_names = names
 
     def evaluate(self, volume_coordinates, **additional_inputs):
+        """Declare the mesh and auxiliary inputs and one output per function.
+
+        Also registers :class:`DAFoamAnalysisVJP` as the reverse function.
+
+        Parameters
+        ----------
+        volume_coordinates
+            Global ``(num_points, 3)`` BSM3 volume-coordinate variable. The
+            backend partitions it internally; the name is reserved.
+        **additional_inputs
+            Further CSDL inputs keyed by their DAFoam ``inputInfo`` names, for
+            example ``patch_velocity``. Each is declared under its keyword
+            name.
+
+        Returns
+        -------
+        dict of str to csdl_alpha.Variable
+            One output variable per configured aerodynamic function, **keyed by
+            function name**, each of shape ``(1,)``. The mapping is keyed, not
+            ordered.
+
+        Raises
+        ------
+        ValueError
+            If a keyword input is named ``volume_coordinates``, or matches the
+            backend's internally managed ``volume_input_name``.
+        """
         self.declare_input("volume_coordinates", volume_coordinates)
         for name, variable in additional_inputs.items():
             if name == "volume_coordinates":
@@ -100,6 +155,32 @@ class DAFoamAnalysisOperation(csdl.experimental.CustomExplicitOperationBeta):
         return outputs
 
     def compute(self, inputs, outputs):
+        """Run the backend primal and write each function value.
+
+        The input mapping is copied before it reaches the backend, so the
+        backend cannot mutate CSDL's buffers.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"volume_coordinates"`` and every additional
+            declared input.
+        outputs
+            Output buffer written in place with one entry per configured
+            function name, each a one-element array.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+
+        Raises
+        ------
+        KeyError
+            If the backend omitted any configured function.
+        ValueError
+            If a returned function value is not scalar.
+        """
         values = self.backend.run_primal(_copy_array_mapping(inputs))
         missing = set(self.function_names).difference(values)
         if missing:
@@ -130,6 +211,27 @@ class DAFoamAnalysisVJP(csdl.experimental.CustomExplicitOperationBeta):
         self._input_names: tuple[str, ...] = ()
 
     def evaluate(self, inputs, d_outputs):
+        """Declare the primal inputs, the function seeds, and the cotangents.
+
+        The primal input names are captured here, in iteration order, and reused
+        by :meth:`compute`.
+
+        Parameters
+        ----------
+        inputs
+            Mapping of the forward operation's primal inputs, including
+            ``"volume_coordinates"``.
+        d_outputs
+            Mapping of reverse seeds keyed by aerodynamic function name.
+
+        Returns
+        -------
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by **primal input name**, one per entry in
+            ``inputs``, each with that input's shape. The underlying CSDL
+            outputs are named ``d_<name>``, but the mapping keys are the plain
+            input names. The mapping is keyed, not ordered.
+        """
         self._input_names = tuple(inputs)
         for name, variable in inputs.items():
             self.declare_input(name, variable)
@@ -144,6 +246,31 @@ class DAFoamAnalysisVJP(csdl.experimental.CustomExplicitOperationBeta):
         return derivatives
 
     def compute(self, inputs, outputs):
+        """Ask the backend for total derivatives and write each cotangent.
+
+        Primal values and seeds are copied before they reach the backend.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding every primal input captured by :meth:`evaluate`,
+            plus one ``d_<function>`` seed per aerodynamic function.
+        outputs
+            Output buffer written in place with one ``d_<name>`` entry per
+            primal input, each shaped like that input.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+
+        Raises
+        ------
+        KeyError
+            If the backend omitted a VJP for any primal input.
+        ValueError
+            If a returned cotangent's shape does not match its primal input.
+        """
         primal_inputs = {
             name: np.asarray(inputs[name], dtype=float).copy()
             for name in self._input_names
@@ -178,8 +305,43 @@ def add_csdl_inputs_to_da_options(
     flow_axis: str = "x",
     normal_axis: str = "z",
 ) -> dict[str, Any]:
-    """Return DAFoam options with differentiable mesh/flow inputs enabled."""
+    """Return DAFoam options with differentiable mesh/flow inputs enabled.
 
+    Deep-copies ``options`` and its ``inputInfo`` entry, so the caller's
+    dictionary is never mutated.
+
+    Parameters
+    ----------
+    options
+        Existing DAFoam options. Any ``inputInfo`` already present is copied and
+        extended, not replaced.
+    volume_input_name
+        Key registered as the ``volCoord`` input, active for both the
+        ``solver`` and ``function`` components.
+    patch_velocity_input_name
+        Key registered as the ``patchVelocity`` input. ``None`` skips it
+        entirely, leaving the flow condition non-differentiable.
+    farfield_patches
+        Patch names the patch-velocity input applies to. Ignored when
+        ``patch_velocity_input_name`` is ``None``.
+    flow_axis
+        Axis label DAFoam uses as the freestream direction for the patch
+        velocity.
+    normal_axis
+        Axis label DAFoam uses as the normal direction for the patch velocity.
+
+    Returns
+    -------
+    dict
+        A deep copy of ``options`` whose ``inputInfo`` carries the volume-
+        coordinate entry and, unless suppressed, the patch-velocity entry.
+
+    Raises
+    ------
+    ValueError
+        If a patch-velocity input is requested with an empty
+        ``farfield_patches``.
+    """
     result = deepcopy(dict(options))
     input_info = deepcopy(result.get("inputInfo", {}))
     input_info[str(volume_input_name)] = {
@@ -202,8 +364,22 @@ def add_csdl_inputs_to_da_options(
 
 
 def make_patch_velocity(airspeed_m_per_s, angle_of_attack_deg):
-    """Create the two-entry DAFoam ``patchVelocity`` CSDL input."""
+    """Create the two-entry DAFoam ``patchVelocity`` CSDL input.
 
+    Parameters
+    ----------
+    airspeed_m_per_s
+        Freestream speed in metres per second, as a CSDL variable or scalar.
+    angle_of_attack_deg
+        Angle of attack in **degrees**, matching DAFoam's ``patchVelocity``
+        convention.
+
+    Returns
+    -------
+    csdl_alpha.Variable
+        The two entries concatenated in the order
+        ``[airspeed, angle_of_attack]``.
+    """
     return csdl.concatenate((airspeed_m_per_s, angle_of_attack_deg))
 
 
@@ -218,8 +394,33 @@ def build_local_volume_coordinate_map(
     The map is coordinate based because ``gmshToFoam`` and domain decomposition
     are free to reorder points. Processor-boundary duplicates intentionally map
     to the same global point; their adjoint contributions are summed later.
-    """
 
+    Parameters
+    ----------
+    dafoam_instance
+        Live DAFoam instance, queried for this rank's local point count and
+        its OpenFOAM mesh points.
+    reference_volume_coordinates
+        Global BSM3/Gmsh coordinates of shape ``(n_global, 3)`` that the local
+        points are matched against.
+    absolute_tolerance
+        Largest accepted distance between a local point and its global match.
+        ``None`` derives a tolerance from the reference geometry rather than
+        accepting any distance.
+
+    Returns
+    -------
+    numpy.ndarray
+        Global index per local point, shape ``(n_local,)``. Entries repeat
+        wherever a processor boundary duplicates a point.
+
+    Raises
+    ------
+    ValueError
+        If ``reference_volume_coordinates`` is not ``(n, 3)``, contains
+        nonfinite values, or a local point has no global match within
+        tolerance.
+    """
     reference = np.asarray(reference_volume_coordinates, dtype=float)
     if reference.ndim != 2 or reference.shape[1] != 3:
         raise ValueError("reference_volume_coordinates must have shape (n, 3).")
@@ -353,8 +554,40 @@ class PYDAFoamBackend:
         case_directory: str | Path,
         **kwargs,
     ) -> "PYDAFoamBackend":
-        """Instantiate ``PYDAFOAM`` lazily inside a prepared OpenFOAM case."""
+        """Instantiate ``PYDAFOAM`` lazily inside a prepared OpenFOAM case.
 
+        The DAFoam import happens here rather than at module import, and the
+        process working directory is temporarily changed to ``case_directory``
+        while ``PYDAFOAM`` is constructed, because it reads the case files
+        relative to the current directory. The original directory is always
+        restored.
+
+        Parameters
+        ----------
+        options
+            DAFoam options dictionary, deep-copied before use.
+        comm
+            MPI communicator handed to ``PYDAFOAM``.
+        reference_volume_coordinates
+            Global BSM3/Gmsh coordinates used to build the local-to-global
+            point map.
+        case_directory
+            Prepared OpenFOAM case on local disk; ``~`` is expanded and the
+            path resolved. It must already exist.
+        **kwargs
+            Further keyword arguments forwarded unchanged to the constructor.
+
+        Returns
+        -------
+        PYDAFoamBackend
+            Backend wrapping the freshly constructed DAFoam instance.
+
+        Raises
+        ------
+        RuntimeError
+            If ``dafoam.PYDAFOAM`` cannot be imported, meaning the DAFoam
+            environment was not sourced before launching Python.
+        """
         try:
             from dafoam import PYDAFOAM
         except ImportError as error:
@@ -383,6 +616,42 @@ class PYDAFoamBackend:
     def run_primal(
         self, inputs: Mapping[str, np.ndarray]
     ) -> Mapping[str, np.ndarray]:
+        """Run the DAFoam primal and return the configured function values.
+
+        Executes with the working directory set to the case directory. The
+        deformed mesh is optionally checked first, and the starting state
+        depends on the mode: :attr:`deterministic_fd_mode` restores the frozen
+        baseline before every solve, while the production path warm-starts from
+        the previously cached solution. A missing baseline in deterministic
+        mode is an error rather than a silent fall back to history-dependent
+        state.
+
+        On success the input mapping, converged states, and function values are
+        cached, and any previously assembled adjoint linearization is
+        invalidated when :attr:`invalidate_adjoint_on_primal` is set, because a
+        newly accepted primal makes it stale.
+
+        Parameters
+        ----------
+        inputs
+            Mapping of DAFoam input name to value, including the global
+            ``volume_coordinates`` array. Copied before use, so the caller's
+            arrays are not mutated.
+
+        Returns
+        -------
+        Mapping[str, numpy.ndarray]
+            One entry per configured function name, each a one-element array.
+            The values are copies of the cache.
+
+        Raises
+        ------
+        RuntimeError
+            If mesh checking is enabled and DAFoam rejects the deformed mesh
+            (the failed mesh is written out first); if deterministic FD mode is
+            active without a captured baseline; or if the primal did not
+            converge.
+        """
         arrays = _copy_array_mapping(inputs)
         solver_inputs = self._solver_inputs(arrays)
         dafoam = self.dafoam_instance
@@ -440,8 +709,24 @@ class PYDAFoamBackend:
         the intended sequence is: run one tightly converged baseline primal,
         call this, enable :attr:`deterministic_fd_mode`, then evaluate every
         ``+h``/``-h`` perturbation from that fixed state.
-        """
 
+        Parameters
+        ----------
+        states
+            State vector to freeze. ``None`` uses the most recent cached
+            converged state. The value is copied, so later solves do not
+            disturb the stored baseline.
+
+        Returns
+        -------
+        None
+            The baseline is stored on the backend.
+
+        Raises
+        ------
+        RuntimeError
+            If ``states`` is ``None`` and no primal has been run yet.
+        """
         source = self._cached_states if states is None else states
         if source is None:
             raise RuntimeError(
@@ -452,7 +737,6 @@ class PYDAFoamBackend:
 
     def reset_primal_state(self) -> None:
         """Clear the warm-start cache so the next primal cold-starts."""
-
         self._cached_states = None
         self._cached_inputs = None
 
@@ -466,7 +750,6 @@ class PYDAFoamBackend:
         :meth:`_solve_adjoint`).  The old PETSc objects are explicitly destroyed
         so their memory is released instead of leaked.
         """
-
         dafoam = self.dafoam_instance
         ksp = getattr(dafoam, "ksp", None)
         if ksp is not None:
@@ -490,7 +773,6 @@ class PYDAFoamBackend:
         (a different mesh), which is the sole case where the reusable coloring
         becomes stale. A pure coordinate deformation does not need it.
         """
-
         self._run_coloring = (
             self.dafoam_instance.getOption("adjEqnSolMethod") != "fixedPoint"
         )
@@ -501,6 +783,42 @@ class PYDAFoamBackend:
         inputs: Mapping[str, np.ndarray],
         output_seeds: Mapping[str, np.ndarray],
     ) -> Mapping[str, np.ndarray]:
+        """Return total input cotangents from the discrete adjoint.
+
+        Re-runs the primal first whenever the requested inputs differ from the
+        cached ones, so the adjoint is always taken about the matching primal
+        state. For each function with a nonzero seed, transposed
+        Jacobian-vector products accumulate the direct function sensitivities
+        and the state sensitivity; the adjoint system is then solved once and
+        the residual contribution subtracted, giving the total derivative.
+
+        Inputs participate only where DAFoam's ``inputInfo`` lists the relevant
+        component: ``"function"`` for the direct term, ``"solver"`` for the
+        residual term. Functions whose seed is entirely zero are skipped.
+
+        Parameters
+        ----------
+        inputs
+            Primal input mapping, including ``volume_coordinates``. Copied
+            before use.
+        output_seeds
+            Cotangent per function name. A missing entry is treated as zero.
+
+        Returns
+        -------
+        Mapping[str, numpy.ndarray]
+            One cotangent per primal input, keyed by input name.
+            ``"volume_coordinates"`` is scattered from the local partitioned
+            layout back to the global BSM3/Gmsh ordering, summing
+            processor-boundary duplicates; every other entry is reshaped to its
+            own input shape.
+
+        Raises
+        ------
+        RuntimeError
+            If a triggered primal re-solve fails, or the adjoint solve does not
+            converge.
+        """
         arrays = _copy_array_mapping(inputs)
         if not _same_array_mapping(arrays, self._cached_inputs):
             self.run_primal(arrays)

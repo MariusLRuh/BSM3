@@ -1,3 +1,18 @@
+"""Optional PyVista-backed plotting helpers for components and surface meshes.
+
+Every entry point builds and returns a list of *plotting elements* -- plain
+dictionaries of the form ``{"mesh": pyvista.PolyData, "kwargs": {...}}`` -- so
+calls can be chained by threading one call's returned list into the next call's
+``plotting_elements`` argument. Nothing is rendered unless ``show=True``, which
+opens a blocking window as a side effect and returns the same list.
+
+PyVista is imported lazily, only when mesh data is actually converted, and a
+missing install raises :exc:`ImportError`. ``meshio`` is likewise lazy: without
+it, only ASCII Gmsh 2.2 ``.msh`` files can be read. Rendering prefers
+``lsdo_function_spaces.show_plot`` when importable and otherwise falls back to a
+direct :class:`pyvista.Plotter`.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,8 +36,42 @@ def plot_components(
     opacity=1.0,
     plotting_elements=None,
 ):
-    """Plot component function sets and return plotting elements by default."""
+    """Build plotting elements for a sequence of components.
 
+    Parameters
+    ----------
+    components
+        Iterable of components. Each entry must either expose a ``.plot(...)``
+        method, which is called with ``show=False`` so its elements accumulate,
+        or already be a plotting-element dictionary containing a ``"mesh"``
+        key. ``None`` is treated as an empty sequence. Any other entry raises
+        :exc:`TypeError`.
+    colors
+        A single color applied to every component, or one color per component.
+        The empty string and ``None`` mean "leave the component's own color
+        alone". A per-component sequence whose length does not match
+        ``components`` raises :exc:`ValueError`.
+    show
+        When ``True``, render the accumulated elements in a blocking window
+        before returning them.
+    opacity
+        A single opacity applied to every component, or one per component,
+        broadcast under the same rules as ``colors``.
+    plotting_elements
+        Existing elements to append to. ``None`` starts a new list. The list is
+        not copied defensively, so passing one in may extend it in place.
+
+    Returns
+    -------
+    list of dict
+        The accumulated plotting elements, components in input order.
+
+    Raises
+    ------
+    TypeError
+        If a component neither exposes ``.plot(...)`` nor is a plotting-element
+        dictionary with a ``"mesh"`` entry.
+    """
     component_list = [] if components is None else list(components)
     elements = _normalize_plotting_elements(plotting_elements)
     color_values = _broadcast(colors, len(component_list), "colors")
@@ -79,8 +128,39 @@ def plot_mesh(
     same triangle-then-quad order the quality module uses.  The highlighted cells
     are nudged slightly along their normals so they do not z-fight with the base
     surface.
-    """
 
+    Parameters
+    ----------
+    mesh
+        Surface to draw, as a path, a :class:`pyvista.PolyData`, a ``MeshData``
+        with ``vertices``/``cell_blocks``, or a meshio-like object. ``None``
+        loads the packaged default E175 surface mesh.
+    color
+        Face color of the base surface.
+    opacity
+        Opacity of the base surface.
+    plotting_elements
+        Existing elements to append to; ``None`` starts a new list.
+    show
+        When ``True``, render the accumulated elements in a blocking window
+        before returning them.
+    inverted_elements
+        Cells to highlight: an id array, an ``ElementInversionReport`` whose
+        ``inverted_element_ids`` are used, or ``None`` for no highlight. When
+        the selection is empty no highlight element is appended.
+    inverted_color
+        Face and edge color of the highlighted cells.
+    inverted_line_width
+        Edge width used for the highlighted cells.
+    inverted_opacity
+        Opacity of the highlighted cells.
+
+    Returns
+    -------
+    list of dict
+        The accumulated plotting elements: the base surface, followed by one
+        highlight element when any cell was selected.
+    """
     pv_mesh = _as_pyvista_mesh(DEFAULT_MESH_FILE if mesh is None else mesh)
     elements = _normalize_plotting_elements(plotting_elements)
     elements.append(
@@ -118,7 +198,6 @@ def plot_mesh(
 
 def _normalize_cell_ids(value, num_cells: int) -> np.ndarray:
     """Accept an id array, an ElementInversionReport, or None."""
-
     if value is None:
         return np.empty((0,), dtype=np.int64)
     ids = getattr(value, "inverted_element_ids", value)
@@ -133,7 +212,6 @@ def _normalize_cell_ids(value, num_cells: int) -> np.ndarray:
 
 def _extract_offset_cells(pv_mesh, cell_ids: np.ndarray, offset_fraction: float = 2e-3):
     """Pull out selected cells and lift them slightly off the base surface."""
-
     subset = pv_mesh.extract_cells(cell_ids)
     surface = subset.extract_surface() if hasattr(subset, "extract_surface") else subset
     try:
@@ -165,8 +243,40 @@ def highlight_mesh_nodes(
     ``nodes_to_highlight`` may be zero/one-based node indices or an ``(n, 3)``
     array of point coordinates. ``node_color`` may be a single color or one
     color per node. ``node_colore`` is accepted as the misspelled legacy alias.
-    """
 
+    Each highlighted node becomes its own single-point element rendered as a
+    sphere, so the returned list grows by one entry per node.
+
+    Parameters
+    ----------
+    mesh
+        Surface the node indices refer to, in any form
+        :func:`read_surface_mesh` accepts. It is only converted when
+        ``nodes_to_highlight`` holds indices rather than coordinates.
+    nodes_to_highlight
+        Either an ``(n, 3)`` array of point coordinates, used directly, or node
+        indices into ``mesh``. Indices may be zero- or one-based.
+    node_color
+        A single color for every node, or one color per node. ``None`` or an
+        empty value falls back to ``node_colore`` and then to ``"red"``.
+    node_colore
+        Misspelled legacy alias for ``node_color``, retained for backward
+        compatibility. It is consulted only when ``node_color`` is ``None``.
+        Prefer ``node_color`` in new code.
+    plotting_elements
+        Existing elements to append to; ``None`` starts a new list.
+    show
+        When ``True``, render the accumulated elements in a blocking window
+        before returning them.
+    point_size
+        Rendered diameter of each highlighted node.
+
+    Returns
+    -------
+    list of dict
+        The accumulated plotting elements, with one single-point element per
+        highlighted node appended in order.
+    """
     coordinate_points = _as_highlight_coordinate_points(nodes_to_highlight)
     if coordinate_points is None:
         pv_mesh = _as_pyvista_mesh(mesh)
@@ -197,8 +307,26 @@ def highlight_mesh_nodes(
 
 
 def read_surface_mesh(mesh_file: str | Path):
-    """Read a surface mesh into a PyVista ``PolyData`` object."""
+    """Read a surface mesh into a PyVista ``PolyData`` object.
 
+    Parameters
+    ----------
+    mesh_file
+        Path to the mesh file. ``meshio`` reads it when importable; otherwise
+        only ASCII Gmsh 2.2 ``.msh`` files are supported and any other suffix
+        raises :exc:`ImportError`.
+
+    Returns
+    -------
+    pyvista.PolyData
+        The surface, containing only its triangle and quadrangle faces.
+
+    Raises
+    ------
+    ImportError
+        If PyVista is unavailable, or ``meshio`` is unavailable and the file is
+        not an ASCII ``.msh``.
+    """
     return _as_pyvista_mesh(mesh_file)
 
 

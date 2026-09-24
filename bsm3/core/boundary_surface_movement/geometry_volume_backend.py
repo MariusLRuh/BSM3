@@ -55,14 +55,42 @@ class GeometryVolumeBackend(Protocol):
     def forward(
         self, design_variables: Mapping[str, np.ndarray]
     ) -> np.ndarray:
-        """Return global volume coordinates with shape ``(num_points, 3)``."""
+        """Return global volume coordinates with shape ``(num_points, 3)``.
+
+        Parameters
+        ----------
+        design_variables
+            Mapping of design-variable name to value array. Implementations
+            require every name in ``design_variable_names``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Deformed global volume-mesh coordinates of shape
+            ``(num_points, 3)`` in the stable Gmsh node ordering.
+        """
 
     def compute_vjp(
         self,
         design_variables: Mapping[str, np.ndarray],
         volume_seed: np.ndarray,
     ) -> Mapping[str, np.ndarray]:
-        """Return a VJP for every geometric design variable."""
+        """Return a VJP for every geometric design variable.
+
+        Parameters
+        ----------
+        design_variables
+            Design point the reverse product is taken about, using the same
+            names as :meth:`forward`.
+        volume_seed
+            Cotangent on the volume coordinates, shaped ``(num_points, 3)``.
+
+        Returns
+        -------
+        Mapping[str, numpy.ndarray]
+            One entry per design variable, keyed by name, each shaped like that
+            design variable.
+        """
 
 
 # ---------------------------------------------------------------------------
@@ -160,16 +188,45 @@ class CSDLRecorderBackend:
     # -- metadata ---------------------------------------------------------------
     @property
     def design_variable_names(self) -> tuple[str, ...]:
+        """Names of the design variables, in model-construction order.
+
+        Building the model on first access is a side effect, so reading this
+        property can trigger the expensive one-time setup.
+
+        Returns
+        -------
+        tuple of str
+            Design-variable names in the order the model builder created them.
+        """
         self._ensure_built()
         return self._design_variable_names
 
     @property
     def output_shape(self) -> tuple[int, int]:
+        """Global shape of the volume-coordinate output.
+
+        Building the model on first access is a side effect.
+
+        Returns
+        -------
+        tuple of int
+            ``(num_points, 3)``, taken from the built model's output.
+        """
         self._ensure_built()
         assert self._output_shape is not None
         return self._output_shape
 
     def design_variable_shapes(self) -> dict[str, tuple[int, ...]]:
+        """Return each design variable's shape.
+
+        Building the model on first access is a side effect.
+
+        Returns
+        -------
+        dict of str to tuple of int
+            Shape of every design variable, keyed by name. A new dictionary on
+            each call.
+        """
         self._ensure_built()
         return {
             name: tuple(variable.shape)
@@ -210,6 +267,33 @@ class CSDLRecorderBackend:
     def forward(
         self, design_variables: Mapping[str, np.ndarray]
     ) -> np.ndarray:
+        """Run the model at ``design_variables`` and return volume coordinates.
+
+        Applies the values to the recorder's inputs, runs the simulator, and
+        caches both the design point and the resulting coordinates so a
+        following :meth:`compute_vjp` at the same point can skip the re-solve.
+
+        Parameters
+        ----------
+        design_variables
+            Mapping of design-variable name to value. Each value is cast to
+            float and reshaped to the variable's declared shape, so a
+            compatible flat array is accepted. Every declared name is required;
+            extra entries are ignored.
+
+        Returns
+        -------
+        numpy.ndarray
+            Deformed coordinates of shape ``(num_points, 3)``. A copy, so the
+            caller cannot mutate the cache.
+
+        Raises
+        ------
+        KeyError
+            If any declared design variable is absent.
+        FloatingPointError
+            If the model produced any nonfinite coordinate.
+        """
         self._ensure_built()
         assert self._volume_output is not None and self._simulator is not None
         applied = self._apply_design_variables(design_variables)
@@ -231,6 +315,38 @@ class CSDLRecorderBackend:
         design_variables: Mapping[str, np.ndarray],
         volume_seed: np.ndarray,
     ) -> dict[str, np.ndarray]:
+        """Evaluate the matrix-free reverse product at a design point.
+
+        The seed is written into an ordinary CSDL input and the scalar
+        contraction ``sum(X * Xbar)`` is differentiated, so the result is
+        ``Xbar^T dX/dd`` without forming the Jacobian. When the requested
+        design point differs from the cached one the forward model is rerun
+        first, so the reverse pass is always taken about the matching primal
+        state.
+
+        Parameters
+        ----------
+        design_variables
+            Design point to differentiate about, using the same names and
+            reshaping rules as :meth:`forward`.
+        volume_seed
+            Cotangent on the volume coordinates, reshaped to
+            ``(num_points, 3)``.
+
+        Returns
+        -------
+        dict of str to numpy.ndarray
+            One cotangent per design variable, keyed by name and reshaped to
+            that variable's shape.
+
+        Raises
+        ------
+        KeyError
+            If any declared design variable is absent.
+        FloatingPointError
+            If the seed contains nonfinite values, or a triggered forward
+            re-solve produced nonfinite coordinates.
+        """
         self._ensure_built()
         assert (
             self._simulator is not None
@@ -303,7 +419,6 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
         inline forward, including the surface/volume mesh-quality gates) so the
         coupled driver can still emit its quality diagnostics.
         """
-
         return self._last_mesh_motion_result
 
     def _build_model(
@@ -347,8 +462,27 @@ def read_gmsh_volume_point_count(volume_mesh_file: Any) -> int:
     output shape without building the geometry backend.  Only the ``$Nodes``
     header line is read, so this stays a lightweight, login-node-safe operation
     even for a large mesh file.
-    """
 
+    Parameters
+    ----------
+    volume_mesh_file
+        Path to the mesh file; ``~`` is expanded and the path resolved. Decoding
+        errors are ignored, so a file with stray bytes outside the header still
+        reads.
+
+    Returns
+    -------
+    int
+        Number of nodes. A single-integer header is read as Gmsh 2.2; a header
+        with two or more fields is read as MSH4, whose node total is the second
+        field.
+
+    Raises
+    ------
+    ValueError
+        If the file has no ``$Nodes`` section, or its header line is empty and
+        so matches neither layout.
+    """
     from pathlib import Path
 
     path = Path(volume_mesh_file).expanduser().resolve()

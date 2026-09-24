@@ -264,6 +264,40 @@ FLOW = FlowConfig(
 
 @dataclass(frozen=True)
 class OpenFOAMCaseConfig:
+    """Location and patch layout of the OpenFOAM case this driver runs in.
+
+    Describes a concrete E175/OpenFOAM case; it is not a generic geometry
+    contract. The patch-name tuples must match the case's ``boundary`` file,
+    because they drive both mesh conversion and the DAFoam options.
+
+    Attributes
+    ----------
+    case_directory
+        Complete OpenFOAM case containing ``0/``, ``constant/``, and
+        ``system/``. ``None`` means DAFoam is not configured yet and the driver
+        raises before doing expensive setup.
+    reuse_openfoam_mesh
+        Validate and reuse the ``polyMesh`` already in the case instead of
+        converting the Gmsh volume mesh again.
+    overwrite_existing_polymesh
+        Permit conversion to replace an existing ``polyMesh``. Ignored when the
+        mesh is reused.
+    run_check_mesh
+        Run OpenFOAM's ``checkMesh`` during preparation, and let DAFoam reject a
+        deformed mesh during the primal.
+    wall_patches
+        Patch names forming the aircraft wall, deformed by mesh motion.
+    farfield_patches
+        Patch names forming the farfield, where the patch-velocity input
+        applies.
+    symmetry_patches
+        Patch names forming the symmetry plane.
+    function_names
+        Aerodynamic functions DAFoam evaluates and exposes as CSDL outputs.
+    results_file
+        File the driver writes its JSON result payload to.
+    """
+
     # TODO: set this once the E175 OpenFOAM case template exists.
     case_directory: Path | None = None
     reuse_openfoam_mesh: bool = False
@@ -315,7 +349,28 @@ GEOMETRY_VOLUME_DEBUG = True
 
 @dataclass(frozen=True)
 class EndToEndDerivativeCheckConfig:
-    """Optimization-level FD check through geometry, mesh motion, and DAFoam."""
+    """Optimization-level FD check through geometry, mesh motion, and DAFoam.
+
+    Attributes
+    ----------
+    enabled
+        Run the check. When ``False`` nothing is registered and no check runs.
+    lift_constraint_target
+        Value ``CL`` is constrained to equal when the optimization outputs are
+        registered.
+    step_size
+        Finite-difference step handed to CSDL's total-derivative check. Must be
+        positive.
+    print_results
+        Print CSDL's comparison table.
+    raise_on_error
+        Let CSDL raise when a derivative disagrees, instead of only reporting.
+
+    Raises
+    ------
+    ValueError
+        At construction, if ``step_size`` is not positive.
+    """
 
     enabled: bool = False
     lift_constraint_target: float = 0.5
@@ -324,6 +379,13 @@ class EndToEndDerivativeCheckConfig:
     raise_on_error: bool = False
 
     def __post_init__(self):
+        """Validate the finite-difference step.
+
+        Raises
+        ------
+        ValueError
+            If ``step_size`` is not positive.
+        """
         if self.step_size <= 0.0:
             raise ValueError("Derivative-check step_size must be positive.")
 
@@ -337,6 +399,24 @@ END_TO_END_DERIVATIVE_CHECK = EndToEndDerivativeCheckConfig(
 
 @dataclass
 class E175DAFoamResult:
+    """Coupled mesh-motion and DAFoam outputs for one E175 analysis.
+
+    A plain record holding references to the CSDL variables built by the
+    driver; it performs no computation.
+
+    Attributes
+    ----------
+    mesh_motion
+        Full mesh-motion result, including surface and volume coordinates and
+        the quality diagnostics.
+    flow_outputs
+        Every aerodynamic function DAFoam produced, keyed by function name.
+    cl
+        Lift-coefficient variable, the ``"CL"`` entry of ``flow_outputs``.
+    cd
+        Drag-coefficient variable, the ``"CD"`` entry of ``flow_outputs``.
+    """
+
     mesh_motion: MeshMotionResult
     flow_outputs: dict[str, csdl.Variable]
     cl: csdl.Variable
@@ -358,8 +438,37 @@ def prepare_openfoam_case(
     flow: FlowConfig,
     comm,
 ) -> Path:
-    """Convert/validate the mesh on rank zero and synchronize all ranks."""
+    """Convert/validate the mesh on rank zero and synchronize all ranks.
 
+    Collective: every rank must call this. Rank 0 does the file work inside a
+    try/except and the outcome is broadcast before the closing barrier, so a
+    failure raises on every rank rather than stranding the others.
+
+    Parameters
+    ----------
+    config
+        Case location and patch layout. Its patch tuples are concatenated into
+        the set of expected patch names.
+    input_files
+        Input file contracts; the Gmsh volume mesh is read from here when the
+        case mesh is converted rather than reused.
+    flow
+        Flow settings; its primal iteration limit is written into the case's
+        ``controlDict``.
+    comm
+        MPI communicator. Rank 0 performs the preparation.
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved case directory.
+
+    Raises
+    ------
+    RuntimeError
+        On every rank when ``case_directory`` is unset, or when rank 0's
+        validation or conversion failed, carrying that rank's error text.
+    """
     case_directory = _require_case_directory(config)
     expected_patches = (
         config.wall_patches
@@ -407,6 +516,38 @@ def create_dafoam_backend(
     input_files: InputFiles,
     comm,
 ) -> PYDAFoamBackend:
+    """Prepare the case and construct the live DAFoam backend.
+
+    Collective: it calls :func:`prepare_openfoam_case` first, so every rank must
+    participate. The differentiable volume-coordinate and patch-velocity inputs
+    are registered in the DAFoam options, and the Gmsh volume mesh supplies the
+    reference coordinates used to build the local-to-global point map.
+
+    Parameters
+    ----------
+    flow
+        Flow settings, supplying the DAFoam options and the normal axis of the
+        patch-velocity input.
+    case
+        Case location and patch layout, supplying the wall and farfield patches,
+        the function names, and the mesh-check setting.
+    input_files
+        Input file contracts; the Gmsh volume mesh provides the reference
+        coordinates.
+    comm
+        MPI communicator handed to DAFoam.
+
+    Returns
+    -------
+    PYDAFoamBackend
+        Backend configured with this module's
+        ``DAFOAM_VOLUME_GRADIENT_OWNERSHIP`` setting.
+
+    Raises
+    ------
+    RuntimeError
+        If case preparation failed, or the DAFoam environment was not sourced.
+    """
     case_directory = prepare_openfoam_case(case, input_files, flow, comm)
     da_options = add_csdl_inputs_to_da_options(
         build_da_options(
@@ -441,8 +582,43 @@ def build_cfd_analysis(
     flow: FlowConfig,
     backend: PYDAFoamBackend,
 ) -> E175DAFoamResult:
-    """Build the end-to-end graph and return CL/CD as CSDL variables."""
+    """Build the end-to-end graph and return CL/CD as CSDL variables.
 
+    The replicated path: the full mesh-motion graph is built on every rank and
+    the aerodynamic analysis is attached as the pipeline's callback, so DAFoam
+    sees the volume coordinates produced in-graph. Compare
+    :func:`build_cfd_analysis_rank0`, which confines mesh motion to rank 0.
+
+    Parameters
+    ----------
+    recorder
+        Active CSDL recorder the graph is built into.
+    input_files
+        Input file contracts for the geometry and meshes.
+    geometry
+        Geometry model carrying the registered design variables.
+    mesh_motion
+        Mesh-motion configuration. It must use ``volume.load_mode='final'`` and
+        include the ``elasticity`` volume method.
+    flow
+        Flow settings supplying the freestream speed and angle of attack, which
+        become CSDL variables feeding the patch-velocity input.
+    backend
+        Live DAFoam backend evaluating the aerodynamic functions.
+
+    Returns
+    -------
+    E175DAFoamResult
+        The mesh-motion result together with every aerodynamic output and the
+        ``CL`` and ``CD`` variables.
+
+    Raises
+    ------
+    ValueError
+        If ``volume.load_mode`` is not ``'final'``, because the synchronized
+        re-factorization path is forward-only, or if the elasticity volume
+        method is absent.
+    """
     if mesh_motion.volume.load_mode != "final":
         raise ValueError(
             "DAFoam coupling requires volume.load_mode='final'; the "
@@ -512,8 +688,54 @@ def build_cfd_analysis_rank0(
     ``GeometryVolumeOperation`` runs the mesh motion on rank 0 and broadcasts the
     global coordinates; ``DAFoamAnalysisOperation`` extracts each rank's local
     OpenFOAM partition and runs the collective primal/adjoint.
-    """
 
+    Collective: every rank must call this and declare the same design variables
+    in the same order.
+
+    Parameters
+    ----------
+    recorder
+        Present for signature symmetry with :func:`build_cfd_analysis`; the
+        active recorder owns the variables built here, so it is not used
+        directly.
+    input_files
+        Input file contracts. The Gmsh volume mesh supplies the global point
+        count, which every rank needs to declare the operation's output shape
+        without building the geometry backend.
+    geometry
+        Geometry model. Only rank 0 builds a live backend from it.
+    mesh_motion
+        Mesh-motion configuration, subject to the same ``load_mode`` and
+        elasticity requirements as :func:`build_cfd_analysis`.
+    flow
+        Flow settings supplying the freestream speed and angle of attack.
+    backend
+        Live DAFoam backend, distributed across all ranks.
+    comm
+        MPI communicator; resolved, so ``None`` yields a serial communicator.
+    geometry_values
+        Baseline design-variable values, replicated on every rank.
+    debug
+        Verify that the replicated design variables agree across ranks before
+        rank 0 uses its own copy.
+    seed_ownership
+        Ownership contract for the incoming volume-coordinate cotangent,
+        ``"replicated"`` or ``"root"``. It must agree with the DAFoam backend's
+        volume-gradient ownership.
+
+    Returns
+    -------
+    E175DAFoamResult
+        The mesh-motion result together with every aerodynamic output and the
+        ``CL`` and ``CD`` variables. On non-root ranks the mesh-motion result
+        comes from the rank-0 backend and may be absent.
+
+    Raises
+    ------
+    ValueError
+        If ``volume.load_mode`` is not ``'final'``, or the elasticity volume
+        method is absent.
+    """
     _ = recorder  # the active recorder owns the variables built below
     comm = resolve_comm(comm)
     if mesh_motion.volume.load_mode != "final":
@@ -601,8 +823,26 @@ def configure_end_to_end_derivative_check(
     result: E175DAFoamResult,
     config: EndToEndDerivativeCheckConfig,
 ) -> None:
-    """Register the aerodynamic optimization outputs before stopping CSDL."""
+    """Register the aerodynamic optimization outputs before stopping CSDL.
 
+    Mutates the CSDL variables in ``result``: ``CL`` becomes an equality
+    constraint and ``CD`` the objective. It must be called while the recorder
+    is still active, and it runs no check itself.
+
+    Parameters
+    ----------
+    result
+        Coupled analysis result whose ``cl`` and ``cd`` variables are
+        registered.
+    config
+        Check configuration supplying the lift-constraint target. Its
+        ``enabled`` flag is not consulted here; the caller decides.
+
+    Returns
+    -------
+    None
+        The variables are modified in place.
+    """
     result.cl.set_as_constraint(equals=config.lift_constraint_target)
     result.cd.set_as_objective()
 
@@ -611,8 +851,29 @@ def run_end_to_end_derivative_check(
     recorder: csdl.Recorder,
     config: EndToEndDerivativeCheckConfig,
 ):
-    """Run CSDL's Python-backend total-derivative finite-difference check."""
+    """Run CSDL's Python-backend total-derivative finite-difference check.
 
+    Builds a :class:`PySimulator` over the stopped recorder and runs CSDL's own
+    check, which constructs analytical-derivative operations. It is therefore
+    not the forward-only checker in
+    :mod:`bsm3.core.boundary_surface_movement.forward_only_fd_checker`, and each
+    perturbation may re-run the coupled primal and adjoint.
+
+    Parameters
+    ----------
+    recorder
+        Recorder holding the built graph, with the objective and constraint
+        already registered.
+    config
+        Check configuration supplying the step size, printing, and whether a
+        disagreement raises.
+
+    Returns
+    -------
+    Any
+        CSDL's comparison result, as returned by
+        ``PySimulator.check_optimization_derivatives``.
+    """
     simulator = csdl.experimental.PySimulator(recorder=recorder)
     return simulator.check_optimization_derivatives(
         step_size=config.step_size,
@@ -647,6 +908,31 @@ def _quality_payload(
 
 
 def main() -> E175DAFoamResult:
+    """Run the configured E175 DAFoam analysis once under MPI.
+
+    A concrete E175/OpenFOAM driver: there is no argument parser and no
+    environment-variable configuration beyond the case directory, so the design
+    point, mesh files, flow settings, and MPI mode come from the module-level
+    constants above. It must be launched with ``mpirun`` in a sourced DAFoam
+    environment.
+
+    Fails fast when no case directory is configured, before any expensive
+    mesh-motion setup. Which graph is built depends on ``GEOMETRY_VOLUME_MODE``:
+    ``"rank0"`` confines mesh motion to rank 0, ``"replicated"`` builds it on
+    every rank for A/B validation. Writing the JSON results file and running the
+    optional derivative check are side effects of the module-level settings.
+
+    Returns
+    -------
+    E175DAFoamResult
+        The coupled mesh-motion and aerodynamic result.
+
+    Raises
+    ------
+    RuntimeError
+        If no OpenFOAM case directory is configured, or ``mpi4py`` is
+        unavailable because the DAFoam environment was not sourced.
+    """
     # Fail before an expensive mesh-motion setup when no OpenFOAM case exists.
     _require_case_directory(CASE)
     try:

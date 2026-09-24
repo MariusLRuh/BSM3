@@ -20,6 +20,19 @@ class ComponentParameters:
     Parameters are allowed to be Python scalars, NumPy arrays, or CSDL
     variables.  Rotations use degrees and are applied in x-y-z order about
     ``pivot``.
+
+    Attributes
+    ----------
+    translation_x, translation_y, translation_z
+        Rigid translation along each global axis, in the model's length units.
+        Applied after the rotations.
+    rotation_x_degrees, rotation_y_degrees, rotation_z_degrees
+        Rotation about each axis through ``pivot``, in **degrees**, composed in
+        x-y-z order.
+    pivot
+        Point the rotations act about, as three coordinates. ``None`` lets
+        :func:`bsm3.core.boundary_surface_movement.deform_geometry` infer a
+        default from the component's control points.
     """
 
     translation_x: Any = 0.0
@@ -46,6 +59,29 @@ class WingParameters(ComponentParameters):
     ``rotation_y_degrees``.  If ``spanwise_scaling_root`` is supplied, span
     scaling is anchored at that absolute distance from the symmetry plane and
     applied only outboard of it; the target tip span is unchanged.
+
+    Inherits the rigid-body fields of :class:`ComponentParameters`.
+
+    Attributes
+    ----------
+    area
+        Absolute target planform area. ``None`` leaves area unconstrained.
+    aspect_ratio
+        Absolute target aspect ratio. ``None`` leaves it unconstrained.
+    reference_area
+        Area of the undeformed planform, forming the denominator of
+        ``area_ratio``. Required for ``area`` to have meaning.
+    reference_aspect_ratio
+        Aspect ratio of the undeformed planform, forming the denominator of
+        ``aspect_ratio_ratio``.
+    chord_axis
+        Index of the global axis along which chord is measured and scaled.
+    span_axis
+        Index of the global axis along which span is measured and scaled.
+    spanwise_scaling_root
+        Absolute distance from the symmetry plane at which span scaling is
+        anchored; only stations outboard of it move. ``None`` scales the whole
+        span from the symmetry plane.
     """
 
     area: Any | None = None
@@ -59,7 +95,13 @@ class WingParameters(ComponentParameters):
 
 @dataclass(frozen=True)
 class TailParameters(ComponentParameters):
-    """Rigid-body parameters for a tail surface."""
+    """Rigid-body parameters for a tail surface.
+
+    Carries no fields of its own; it inherits the translation, rotation, and
+    ``pivot`` fields of :class:`ComponentParameters` unchanged. The separate
+    type exists so a tail can be declared and dispatched distinctly from a
+    wing, which additionally supports planform targets.
+    """
 
 
 @dataclass(frozen=True)
@@ -72,6 +114,18 @@ class FuselageParameters(ComponentParameters):
     plane keeps ``y = 0`` mapped to ``y = 0``, so a mirror-symmetric mesh stays
     symmetric (and the symmetry-plane condition in the elastic solve stays
     exact).
+
+    Inherits the rigid-body fields of :class:`ComponentParameters`.
+
+    Attributes
+    ----------
+    diameter_scale
+        Multiplier applied to the two cross-section axes about ``pivot``;
+        ``1.0`` reproduces the reference body and ``None`` disables the
+        scaling.
+    diameter_scale_axes
+        The two global axis indices treated as the cross-section, leaving the
+        remaining longitudinal axis unscaled.
     """
 
     diameter_scale: Any | None = None
