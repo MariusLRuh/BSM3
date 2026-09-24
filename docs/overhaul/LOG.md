@@ -2746,3 +2746,102 @@ coverage with no missing or extra names, corrects return containers, and keeps
 all existing numerical gates.
 
 Status:    closed
+
+---
+
+## Turn 44 — Claude, implementer, 2026-09-24
+Scope:     M1.6 slice 2 second correction — exact parameter coverage, return containers, semantic rejection
+Base:      10fb4c40920fb3bd1dbcea94b30515c59f2567cf (TURN44_BASE)
+Commits:   c18e282 (projection docstrings), docs commit follows
+Status:    ready for Codex review — NOT accepted by the implementer
+
+### What changed
+
+Documentation and comments only, across the six allowlisted projection
+modules. No executable statement, signature, annotation, import, constant, or
+decorator was touched, and no path outside the nine-path allowlist was
+modified. The unrelated dirty tree was preserved.
+
+Seven semantic corrections:
+
+1. `FunctionSetEvaluationModel` no longer claims setup-time state, coordinates
+   fixed at construction, or a cached basis row per point. Construction caches
+   patch metadata, degrees, knot vectors, coefficient shapes, row spans and
+   space caches; the coordinates arrive per call and the stencils are built per
+   call. The class is linear in the coefficients for fixed coordinates but
+   nonlinear in the coordinates, which is why the VJP seeds both.
+2. `build_degenerate_edge_map` now documents the body: sampled
+   tessellation-boundary arc length, compared against
+   `max(atol, rtol * bounding_box_diagonal)`, returning an entry only for edges
+   at or below it — a membership test, not a length table. The "reject or
+   down-weight" claim is gone; the candidate builder substitutes a fixed-point
+   candidate for a listed edge.
+3. The `boundary_clamped` field comment now agrees with the attribute prose:
+   final parameter on a bound with an outward *unmasked* residual, computed at
+   line 370 before the active set applies at line 372, therefore independent of
+   `converged`.
+4. The four VJP `evaluate` methods document dictionaries keyed by the
+   differentiated input name. No tuple order was invented for a mapping.
+5. `unsort` documents `*arrays_sorted` (not `*arrays`) and a
+   `list[numpy.ndarray]` return (not a tuple).
+6. "Converged parametric coordinates" replaced by "final"/"selected" wherever
+   a non-converged minimum-residual fallback can be returned, with `converged`
+   retained as the separate evidence.
+7. The candidate module's opening no longer claims it keeps the closest
+   converged result; it states the ranking and the minimum-residual fallback.
+
+Contract completion: all 36 public callables now document every signature
+parameter under its exact name, including keyword-only arguments and the
+`*arrays_sorted` prefix. The audit moved from **79 missing** to **0 missing,
+0 extra** over 124 signature parameters. The 30-argument
+`project_points_with_warm_start_candidates_numpy` documents every option's
+effect, not just its name. `EvaluationPatchInfo` gained `degrees`,
+`knot_vectors`, `coefficient_shape` and `space_cache`. All six
+`compute(inputs, outputs)` callbacks document both buffers and a `None`
+return; none invents a return value. Both trusted-local pickle warnings are
+intact.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| Stripped-docstring AST, working tree | 6/6 identical |
+| Stripped-docstring AST, git blobs `10fb4c4..c18e282` | 6/6 identical |
+| Slice inventory | 80/80 public defs, 15/15 module docstrings |
+| Parameter audit | 36 callables, 124 params, **0 missing, 0 extra** |
+| Normalized rejection (whitespace + case) | 0/8 phrases present |
+| Rejection, punctuation-insensitive variant | 0/8 phrases present |
+| First-line/style audit | 0 violations |
+| Return-container audit | 0 mismatches over 13 checked returns |
+| `pytest` primary set | **82 passed, 3 deselected** |
+| `pytest` derivative + n-gon gates | **6 passed** |
+| `git diff --check` over the nine paths | clean |
+| `ruff --select D` | unavailable in `central_geom`; not installed |
+
+### Finding for the reviewer
+
+The Turn 44 rejection list is specified as whitespace- and case-normalized
+only, so it does **not** catch punctuation variants. The actual offending
+comment in `orthogonality_projection_numpy.py:101` read
+`"converged" only because the active set masked` — with quotes around
+`converged` — and therefore scored **zero hits** under the literal check even
+before it was fixed. The specified gate would have passed while the defect
+stood. I fixed the comment (item 3 above) and additionally ran a
+punctuation-insensitive variant that strips `" ' \` * _` before matching; both
+variants now report zero. Recommend the punctuation-insensitive form become
+the standing check, since this is the second time a purely textual gate has
+been defeated by formatting rather than by content.
+
+### Deviations
+
+- Ruff could not be run locally; not installed in `central_geom` and
+  dependencies were left unchanged. Pinned CI `ruff==0.9.10` remains the
+  authoritative external lint gate for these six files.
+- One change beyond the seven named errors:
+  `FunctionSetClosestDistanceOperation.compute` documented its buffers but,
+  unlike the other five `compute` callbacks, carried no `Returns` section. I
+  added `Returns: None` for consistency with the spec's "document the two
+  buffers but do not add a fictitious return value". Documentation only; the
+  AST identity gate still reports 6/6.
+
+Slice 2 is **not** marked complete and is not accepted by the implementer.
