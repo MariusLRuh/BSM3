@@ -1,335 +1,142 @@
-# Claude implementation prompt — M1.6 slice 3 (Turn 48)
+# Codex review checklist — M1.9 official-main dependency migration
 
-You are the **implementer**. Codex is the planner/reviewer. Implement this
-bounded documentation slice, verify it, commit it, and hand it back to Codex
-without accepting your own work.
+Claude was the implementer. The migration is **ready for review, not
+accepted**. M1.6 slice 3 is paused at the user's instruction and resumes once
+this is independently accepted.
 
-This prompt follows Codex's Turn-47 acceptance of M1.6 slice 2. The exact code
-baseline for all stripped-AST and path-range checks is:
+> The slice 3 prompt this file previously held is recoverable verbatim with
+> `git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
 
-```text
-SLICE3_BASE = c4f2e69
-```
+## Commits
 
-The Codex planning commit containing this prompt may sit after that hash; it
-changes collaboration docs only. Record the actual starting `HEAD` before
-editing. Do not amend, reset, rebase, or rewrite history.
+| Repo | Hash | Contents |
+| --- | --- | --- |
+| lsdo_function_spaces (temporary clone) | `b6e7b4ed862da5623e59a4315bd4b0d3c0265c10` | `utils/file_io.py`, `tests/test_file_io.py` |
+| BSM3 | `bf2afee` | 5 projection modules, `requirements-ci.txt`, `.github/workflows/actions.yml` |
+| BSM3 | *(docs commit)* | `PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
 
-## Objective
+BSM3 base was `7676b89`. Nothing was pushed in either repository. The LFS
+commit sits on official main `307ad3a` in a clean temporary clone at
+`/private/tmp/bsm3-compat.bHdusA/lsdo_function_spaces_main` (branch `main`,
+remote `LSDOlab/lsdo_function_spaces`). The dirty local LFS checkout and the
+local CSDL_alpha checkout were never modified.
 
-Complete M1.6 slice 3: accurate NumPy-style public documentation for the
-remaining **tracked** release surface (drivers, volume motion, MPI/DAFoam,
-RBF, weighting, and plotting), plus one CI doc-lint step over exactly those
-modules.
+## Baseline actually used
 
-This is documentation-only in Python. Read implementations and tests before
-describing behavior. A mechanically complete but semantically invented
-contract is a failed turn.
-
-## Literal 21-path allowlist
-
-Only these paths may change:
-
-1. `bsm3/__init__.py`
-2. `bsm3/component_parameters.py`
-3. `bsm3/core/__init__.py`
-4. `bsm3/core/boundary_surface_movement/__init__.py`
-5. `bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py`
-6. `bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py`
-7. `bsm3/core/boundary_surface_movement/dafoam_csdl.py`
-8. `bsm3/core/boundary_surface_movement/e175_derivative_ladder.py`
-9. `bsm3/core/boundary_surface_movement/forward_only_fd_checker.py`
-10. `bsm3/core/boundary_surface_movement/geometry_volume_backend.py`
-11. `bsm3/core/boundary_surface_movement/geometry_volume_mpi.py`
-12. `bsm3/core/boundary_surface_movement/geometry_volume_operation.py`
-13. `bsm3/core/boundary_surface_movement/rbf.py`
-14. `bsm3/core/boundary_surface_movement/run_dafoam_gmsh.py`
-15. `bsm3/core/boundary_surface_movement/volume_mesh_motion.py`
-16. `bsm3/core/weighting_functions.py`
-17. `bsm3/plotting.py`
-18. `.github/workflows/actions.yml`
-19. `docs/overhaul/PLAN.md`
-20. `docs/overhaul/LOG.md`
-21. `docs/overhaul/CODEX_NEXT.md`
-
-Every other path is prohibited. Preserve the existing dirty tree and all
-untracked artifacts. Stage literal files only; never stage a directory.
-
-In particular, **do not touch or commit** the untracked
-`bsm3/core/boundary_surface_movement/e175_panel_opt.py`. Turn 5 deliberately
-deferred adopting that VortexAD root until M1.7 gives it an end-to-end test.
-Documentation is not a reason to adopt an otherwise untracked production
-module. The two deferred mesh-generation candidates remain equally out of
-scope.
-
-## Permitted changes by path class
-
-- The 17 Python paths: docstrings and comments only.
-- `.github/workflows/actions.yml`: add one doc-lint step listing exactly the 17
-  Python paths. Do not alter existing steps, dependencies, triggers, or test
-  commands.
-- The three collaboration docs: record the work, measurements, deviations,
-  and handoff.
-
-In Python, do **not** change imports, annotations, decorators, signatures,
-defaults, assignments, constants, branches, expressions, executable strings,
-exports, or formatting outside docstrings/comments. Do not rename a symbol,
-fix a typo in an API, introduce a type, remove dead payload, or refactor.
-
-## Measured pre-edit inventory
-
-The 17 Python paths total **8,763 LOC**. Under the established audit convention
-(public top-level classes/functions and public methods, where the name does
-not start with `_`):
-
-- module docstrings: **15/17**; missing in `bsm3/__init__.py` and
-  `bsm3/plotting.py`;
-- public-definition docstrings: **108/167**; **59 missing**;
-- public callables: **132** with **293** signature parameters;
-- NumPy `Parameters` coverage: **293 missing / 0 extra**;
-- dataclasses: **22** with **148** locally declared public fields;
-- NumPy `Attributes` coverage: **148 missing / 0 extra**.
-
-These counts deliberately exclude the untracked `e175_panel_opt.py`.
-
-The missing public-definition docstrings are:
-
-| Path | Missing definitions at the baseline |
+| Component | Value |
 | --- | --- |
-| `cfd_mesh_dafoam_analysis.py` | `OpenFOAMCaseConfig` (266), `E175DAFoamResult` (339), `create_dafoam_backend` (404), `main` (649) |
-| `cfd_mesh_movement_test.py` | `run_deformation_test` (221) |
-| `dafoam_csdl.py` | `DAFoamAnalysisOperation.evaluate` (77), `.compute` (102), `DAFoamAnalysisVJP.evaluate` (132), `.compute` (146), `PYDAFoamBackend.run_primal` (383), `.compute_vjp` (499) |
-| `e175_derivative_ladder.py` | `level0_forward_repetition` (231), `level1_mesh_motion_forward` (275), `level2_mesh_motion_vjp` (303), `level3_dafoam_volume_vjp` (364), `level4_chain_rule` (439), `level5_end_to_end` (502), `main` (689) |
-| `forward_only_fd_checker.py` | `DerivativeComparison` (238) |
-| `geometry_volume_backend.py` | `CSDLRecorderBackend.design_variable_names` (162), `.output_shape` (167), `.design_variable_shapes` (172), `.forward` (210), `.compute_vjp` (229) |
-| `geometry_volume_mpi.py` | `SerialComm.bcast` (53), `.gather` (56), `.scatter` (59), `.allgather` (64), `.Bcast` (68), `.Reduce` (71), `.Allreduce` (74), `.Barrier` (77), `comm_rank` (98), `comm_size` (102), `is_root` (106) |
-| `geometry_volume_operation.py` | `GeometryVolumeOperation.evaluate` (98), `.compute` (121), `GeometryVolumeVJP.evaluate` (197), `.compute` (208) |
-| `rbf.py` | `DisplacementSurrogate.evaluate` (457) |
-| `run_dafoam_gmsh.py` | `rank0_print` (140), `csv_names` (145), `validate_case_template` (190), `backup_existing_polymesh` (302), `validate_patch_names` (359), `validate_reused_mesh` (439), `make_parser` (677), `main` (856) |
-| `volume_mesh_motion.py` | `TetraVolumeMesh.is_hybrid` (86), `.aircraft_triangles` (90), `.aircraft_quadrangles` (96), `.aircraft_nodes` (102), `.symmetry_nodes` (130), `.fixed_outer_nodes` (136), `.boundary_nodes` (151), `VolumeQualityReport.as_dict` (307), `LoadStepRecord.as_dict` (325), `LoadSteppedVolumeResult` (337), `write_comparison_summary` (1068) |
+| CSDL_alpha | official `LSDOlab/CSDL_alpha` main `73a9efd1033016a835779db10a9b9e81ed2254ce` |
+| lsdo_function_spaces | official `LSDOlab/lsdo_function_spaces` main `307ad3aabfff31c6fb44ddf51bc0dcc41a60c420` |
+| Python / NumPy / SciPy | 3.12.14 / 2.0.2 / 1.13.1 |
+| JAX / jaxlib | 0.4.38 / 0.4.38 |
 
-Line numbers are baseline navigation aids, not post-edit assertions.
+Note the CSDL origin change: BSM3 previously pinned the **HgXe** fork; it now
+pins **LSDOlab** official main.
 
-## Documentation contract
+## Verification requirements, one by one
 
-Bring the slice to **17/17 module docstrings and 167/167 public-definition
-docstrings**. Every public callable must have a genuine NumPy-style docstring:
+**1. No remaining patched-factory imports in tracked files.**
+`git grep 'compute_basis_matrix_numpy_factory_patched' -- '*.py'` returns **0
+files**; widening to every tracked file of any type also returns nothing. All
+five projection modules carry the canonical import.
 
-- imperative/summary first line with no leading blank line;
-- `Parameters` entries for every and only every signature parameter other
-  than `self`/`cls`, including `*items`, `**additional_inputs`, and keyword-only
-  parameters under their source names;
-- `Returns`, `Yields`, `Raises`, `Warns`, `Notes`, and `See Also` only where
-  truthful and useful;
-- exact shapes, units, coordinate ordering, key sets, ownership, mutability,
-  side effects, optional dependency behavior, and failure conditions when the
-  body establishes them;
-- no invented ordering, convergence, cost, monotonicity, differentiability,
-  or support guarantees.
+**2. Canonical and former patched factory are equivalent.** Byte-identical, not
+merely equivalent. All three of these hash to
+`sha256 3b216af2c0534eebae04fea5256de7fcaf16c9f694ccdcd7d1b4378cac6ba894`:
 
-Document all **148 locally declared dataclass fields** in NumPy `Attributes`
-sections, with zero missing and zero extra field names. Inherited fields need
-not be duplicated in subclass `Attributes` sections; explain inheritance in
-prose where useful. Properties need `Returns` sections that match the actual
-array/boolean/container returned.
+- official main tracked `compute_basis_matrix_numpy_factory.py`
+- the temporary compatibility alias
+- the local fork's `compute_basis_matrix_numpy_factory_patched.py`
 
-Do not merely add the 59 absent strings. Existing one-line and prose-only
-docstrings in this slice are incomplete: all 132 callable contracts and all 22
-dataclass contracts are in scope.
+The local fork's own `compute_basis_matrix_numpy_factory.py` hashes to
+`eb19d43a...`; that stale file is what the `_patched` name existed to shadow.
 
-## Semantic points that must be established from code
+**3. All 192 BSM3 tests under the official-main stack.** `192 passed` in
+611.32s. Run with the compatibility alias **moved out of the dependency tree**
+and proven to raise `ModuleNotFoundError`, so nothing could silently resolve
+the old name.
 
-### Generic boundary versus aircraft drivers
+**4. E175 coordinates vs reference at rtol=atol=1e-14.**
 
-Describe `cfd_mesh_movement_test.py`, `cfd_mesh_dafoam_analysis.py`,
-`e175_derivative_ladder.py`, and `run_dafoam_gmsh.py` as concrete E175 or
-OpenFOAM/DAFoam drivers/adapters. Do not imply that they define the generic
-geometry contract. Preserve the already documented generic boundary:
-externally produced, topology-compatible LFS/BSM3 coefficient arrays enter
-through `GeometryModel.add_component`; built-in wing/body helpers are optional
-conveniences.
+| array | shape | max abs diff | allclose |
+| --- | --- | --- | --- |
+| `initial` | (16400, 3) | 0.000e+00 | True |
+| `preprojected` | (16400, 3) | 0.000e+00 | True |
+| `surface` | (16400, 3) | 0.000e+00 | True |
 
-`run_dafoam_gmsh.py` is intentionally a CLI driver and may be documented as
-one. Do not confuse it with the no-CLI user example accepted in M1.7a.
+Reference measured on this machine by running the example at the
+**pre-migration** code state under `bsm3_py312_localdeps` (local forks, JAX
+0.4.30), and at the **migrated** state under `bsm3_py312_main` (official mains,
+JAX 0.4.38). Folds 0 and inversions 0/0/0 in both. This is a different and
+stronger measurement than the 7.11e-15 recorded earlier against another
+reference; I am not restating that number as if I reproduced it.
 
-### CSDL custom operations and return containers
+**5. `git diff --check` in both repositories.** Clean in both.
 
-Read each `evaluate` and `compute` body. The handoff checklist must explicitly
-record these container/side-effect contracts:
+**6. No pre-existing dirty or untracked path changed.** 15 tracked files differ
+from the pre-turn `HEAD`: the 7 that are mine, and 8 pre-existing ones with
+modification times from 2026-04-15 to 2026-08-23 that I never opened. Untracked
+entries: 394, unchanged.
 
-- `DAFoamAnalysisOperation.evaluate` returns a dictionary keyed by configured
-  aerodynamic function name; `compute` mutates `outputs` and returns `None`.
-- `DAFoamAnalysisVJP.evaluate` returns a dictionary keyed by primal input name;
-  `compute` mutates `outputs` and returns `None`.
-- `GeometryVolumeOperation.evaluate` returns one CSDL volume-coordinate
-  variable; `compute` mutates `outputs` and returns `None`.
-- `GeometryVolumeVJP.evaluate` returns a dictionary keyed by design-variable
-  name; `compute` mutates `outputs` and returns `None`.
-- backend primal and VJP mappings must document their actual key sets and
-  global/local coordinate shapes without inventing tuple ordering.
+**7. Separate commits.** LFS, then BSM3 source, then BSM3 docs. Every path
+staged literally; no directory staged; no amend, reset, rebase, or rewrite.
 
-### MPI ownership and collective safety
+## LFS change
 
-`SerialComm` is a one-rank test/fallback communicator implementing only this
-module's subset, not a general MPI replacement. Document identity/copy versus
-in-place behavior of its object and buffer collectives from their bodies.
+`import_file` rejected a valid STEP file whenever its first
+`B_SPLINE_SURFACE_WITH_KNOTS` entity began after byte 200,000, because the
+existence check read only that leading window. It now streams the file one line
+at a time and stops at the first match.
 
-For the real helpers, distinguish:
+The new regression test pads a synthetic STEP file so the surface entity starts
+past the window and asserts that offset exceeds 200,000. **It provably guards
+the fix**: reverting only `file_io.py` makes it fail with the exact
+`ValueError`; restoring `file_io.py` byte-exactly (sha `b54b3835...`) makes it
+pass.
 
-- root-only execution and symmetric exception propagation in `run_on_root`;
-- typed `Bcast`/`Reduce`/`Allreduce` array movement versus pickled object
-  collectives;
-- forward gather `global[local_to_global]` and reverse scatter-add, including
-  duplicated processor-boundary points;
-- `ownership="root"` versus `ownership="replicated"`, and what non-root ranks
-  receive;
-- collective participation requirements and synchronous validation failures.
+| LFS gate | Result |
+| --- | --- |
+| Focused `tests/test_file_io.py` | **9 passed** |
+| Complete non-plotting suite | **80 passed** |
+| `tests/test_plotting.py` | 5 passed in this environment |
 
-Do not claim that import-only or mocked tests exercise a real MPI launch.
+Prohibited files confirmed absent from the clone: `file_io_patched.py`,
+`compute_basis_matrix_numpy_factory_patched.py`,
+`b_spline_patch_projection_optimized_patched.py`,
+`b_spline_patch_proejction_numpy.py`. All four `.stp` files present are
+upstream-tracked; no untracked STEP asset was added.
 
-### DAFoam boundary
+## CI
 
-Document lazy optional imports, local case-directory requirements, global Gmsh
-versus local OpenFOAM coordinates, the coordinate matching tolerance, primal
-state/cache invalidation, deterministic-baseline behavior, function/input key
-contracts, and the discrete-adjoint VJP only where the implementation proves
-them. Do not claim live DAFoam/OpenFOAM execution is covered by this turn.
+Python 3.12; `jax[cpu]==0.4.38`; `csdl_alpha` from `LSDOlab/CSDL_alpha@73a9efd`;
+`lsdo_function_spaces` pinned to `307ad3a` and still installed with `--no-deps`
+so its unpinned CSDL dependency cannot replace the validated commit.
 
-### Forward-only derivative checker and ladder
+## Findings requiring a Codex decision
 
-Document the deliberate forward-first order, centered-FD step/scaling
-conventions, output/design-variable mapping keys, relative-error calculation,
-degree/radian diagnostic, and each ladder level's actual boundary. Do not turn
-diagnostics into guarantees. Environment variables and local files are caller
-requirements, not repository assets.
+1. **Two untracked research scripts still import the patched factory** —
+   `bsm3/core/projections/gauss_newton_projection.py` and
+   `bsm3/core/projections/function_set_sdf_custom_op_wing_test.py`. Untracked,
+   outside the release surface and outside the literal allowlist, so untouched.
+   They will fail to import wherever the alias is absent. Retire or migrate
+   under a later allowlist?
+2. **CI does not yet carry the LFS fix.** CI pins official `307ad3a`, which
+   predates the unpushed `b6e7b4e`. The BSM3 suite does not depend on the fix,
+   but the pin should move only after the LFS change lands upstream.
+3. **Plotting did not segfault here**; 5 passed under this macOS/VTK build. The
+   hazard is environment-dependent and plotting behavior was not changed.
+4. **The compatibility alias was moved aside, not destroyed**, to
+   `/tmp/t47_alias_backup/`. It is byte-identical to the canonical module and
+   restorable with one copy.
 
-### Volume motion, RBF, and plotting
+## Deviations
 
-- Keep surface motion and volume motion distinct. The retained surface method
-  is graph Laplacian plus N-gon regularization; this module separately exposes
-  graph and linear-elasticity **volume** propagators.
-- Document hybrid tetrahedron/pyramid decomposition, assembly versus quality
-  cell sets, physical-patch node sets, reference-matrix differentiable paths,
-  forward-only load stepping, and quality metric meanings from the body.
-- For RBF data/training/evaluation, document coefficient/vertex shapes,
-  component ownership, seam behavior, and fit-mode effects only as implemented.
-- `plotting.py` lazily requires PyVista/mesh readers. Document returned plotting
-  element lists and `show` side effects. `node_colore` is a misspelled legacy
-  alias that must be documented, not removed or renamed.
-- `bsm3/__init__.py` conditionally exposes optional projection helpers; its
-  documentation must not promise those names exist when their imports fail.
+- Ruff was not run; the migration spec did not request it. The pinned CI
+  `ruff==0.9.10` step is unchanged.
+- Nothing pushed in either repository, by instruction.
 
-## CI change
+## Decision requested
 
-Add one step named exactly:
-
-```text
-Numpydoc checks for drivers, volume motion, and MPI
-```
-
-It must run `python -m ruff check --select D` over exactly the 17 Python paths
-in the literal allowlist, each named explicitly. Do not collapse directories
-or alter the three existing documentation steps.
-
-Ruff is known to be absent from `central_geom`. Attempt the exact local command
-once, do not install anything, and record the limitation. CI's pinned
-`ruff==0.9.10` remains authoritative. If static reading shows an obvious Ruff-D
-violation, correct the docstring rather than assuming CI will forgive it.
-
-## Mechanical gates
-
-Before editing, save:
-
-```bash
-git rev-parse HEAD
-git status --short
-```
-
-After editing, prove all of the following:
-
-1. The changed-path set from `c4f2e69` is a subset of the literal 21 paths.
-2. Every non-allowlisted dirty/untracked path remains untouched.
-3. Stripping docstrings from both sides gives identical ASTs for all 17 Python
-   files, comparing both working-tree files and the committed source-doc blob
-   against `c4f2e69`.
-4. Module/definition coverage is **17/17 and 167/167**.
-5. The signature audit reports **132 public callables, 293 parameters, 0
-   missing, 0 extra**.
-6. The dataclass audit reports **22 dataclasses, 148 fields, 0 missing, 0
-   extra** in `Attributes` sections.
-7. The four custom-operation return containers and four `compute -> None`
-   callback contracts above match their bodies.
-8. Workflow YAML parses and the new step lists exactly the 17 paths once each.
-9. `git diff --check` is clean over the 21 paths.
-
-Use an AST docstring stripper, not line comparison, for item 3. The parameter
-and dataclass-field audits must be embedded verbatim in the handoff checklist
-so Codex can extract and reproduce them from a clean directory. A grep is not
-a substitute for semantic review.
-
-## Numerical regression gates
-
-Run exactly:
-
-```bash
-conda run -n central_geom python -m pytest -q \
-  tests/test_dafoam_csdl.py \
-  tests/test_geometry_volume_mpi.py \
-  tests/test_volume_mesh_motion.py \
-  tests/test_preprocessing_plotting.py \
-  tests/test_e175_driver_configuration.py
-
-conda run -n central_geom python -m pytest -q \
-  tests/test_derivative_gate.py \
-  tests/test_ngon_affine_operator.py \
-  tests/test_ngon_affine_load_step.py
-```
-
-Pre-edit baselines independently measured by Codex are **89 passed** (30
-warnings) and **6 passed** (11 warnings). No live DAFoam, OpenFOAM, real-MPI,
-VortexAD, E175 integration, or clean-clone run is required for a doc-only
-slice whose executable AST is identical.
-
-## Commit structure
-
-Make exactly two new commits after the Codex planning commit:
-
-1. One implementation commit containing only changed files among the 17
-   Python paths and `.github/workflows/actions.yml`.
-2. One handoff-doc commit containing only `PLAN.md`, `LOG.md`, and
-   `CODEX_NEXT.md`.
-
-Stage every file literally. Do not stage a directory, `bsm3/`, or `docs/`.
-Do not use amend/reset/rebase.
-
-## Stop rule
-
-Stop and report without widening scope if:
-
-- truthful documentation requires a behavioral/signature/type/export change;
-- a dependency outside the allowlist must change;
-- the measured inventories cannot be reproduced under the stated convention;
-- a numerical regression appears;
-- or the existing dirty tree prevents isolating the change.
-
-The stop rule is mandatory and is not a planning failure on your part. Do not
-silently absorb an allowlist or baseline defect.
-
-## Definition of done and handoff
-
-Update `PLAN.md` and append a concise Turn-48 entry to `LOG.md`. Replace this
-file with a Codex review checklist containing:
-
-- exact two commit hashes and base;
-- exact changed paths;
-- before/after coverage, parameter, and dataclass-field counts;
-- the reproducible AST/signature/field/workflow audit commands;
-- the explicit custom-operation return-container table;
-- exact test/lint/diff results;
-- semantic findings and every deviation, prominently;
-- confirmation that `e175_panel_opt.py` and all other unrelated artifacts
-  remain untouched;
-- a clear statement that M1.6 slice 3 is ready for Codex review and is **not
-  accepted by the implementer**.
-
-Do not mark M1.6 complete. Codex accepts or rejects the slice after review.
+Accept or reject the M1.9 migration, and rule on finding 1 (the two untracked
+scripts) and finding 2 (when the CI LFS pin advances). On acceptance, M1.6
+slice 3 resumes from `git show 7676b89:docs/overhaul/CODEX_NEXT.md`.

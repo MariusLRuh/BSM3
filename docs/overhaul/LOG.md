@@ -3028,3 +3028,137 @@ points, CI step, commands, stop rule, and two-commit handoff are in
 acceptance.
 
 Status:    closed
+
+---
+
+## Turn 49 — Claude, implementer, 2026-09-24
+Scope:     M1.9 official-main dependency migration (M1.6 slice 3 paused at user request)
+Base:      7676b89 (BSM3), official LFS main 307ad3a, official CSDL_alpha main 73a9efd
+Commits:   LFS b6e7b4e (temporary clone, unpushed); BSM3 bf2afee; docs commit follows
+Status:    ready for Codex review — NOT accepted by the implementer
+
+### Why this was needed
+
+BSM3 imported `compute_basis_matrix_numpy_factory_patched` from a local
+lsdo_function_spaces fork. That name existed only to shadow a stale canonical
+file inside the fork. Official LFS main ships the same implementation under
+its canonical name, so the dependency on the fork was removable.
+
+**Byte-identity evidence** (verification requirement 2). These three files all
+hash to `sha256 3b216af2c0534eebae04fea5256de7fcaf16c9f694ccdcd7d1b4378cac6ba894`:
+
+- official LFS main, tracked `.../compute_basis_matrix_numpy_factory.py`
+- the temporary compatibility alias used in the earlier validation
+- the local fork's `.../compute_basis_matrix_numpy_factory_patched.py`
+
+The local fork's *own* `compute_basis_matrix_numpy_factory.py` hashes to
+`eb19d43a...` and is the stale file the `_patched` name was working around. The
+migration is therefore a pure rename of the import target, with no change in
+executed numerics.
+
+### LFS change (allowlist: 2 paths)
+
+Made in a clean temporary clone of official main `307ad3a`, branch `main`,
+remote `LSDOlab/lsdo_function_spaces`. The dirty local fork checkout was never
+modified, reset, stashed, cleaned, or merged. Nothing was pushed.
+
+`import_file` rejected a valid STEP file whenever its first
+`B_SPLINE_SURFACE_WITH_KNOTS` entity began after byte 200,000, because the
+quick existence check read only that leading window. The check now streams the
+file line by line and stops at the first match, so memory stays bounded and the
+whole file is considered. This is the useful half of the local uncommitted
+`file_io_patched.py` diff, ported to the canonical importer.
+
+`tests/test_file_io.py` gains one focused regression test that pads a synthetic
+STEP file so the surface entity starts past the old window, and asserts that
+offset really exceeds 200,000 so the test cannot quietly stop exercising the
+fix. **Proven to guard the fix**: reverting only `file_io.py` makes the new
+test fail with the exact `ValueError`, and restoring it byte-exactly
+(sha `b54b3835...`) makes it pass again.
+
+None of the prohibited files were restored or added: `file_io_patched.py`,
+`compute_basis_matrix_numpy_factory_patched.py`,
+`b_spline_patch_projection_optimized_patched.py`,
+`b_spline_patch_proejction_numpy.py` are all absent from the clone, and all
+four `.stp` files present are upstream-tracked, not added.
+
+### BSM3 change (allowlist: 7 paths + 3 docs)
+
+Five projection modules now import
+`lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory`,
+and the two `ImportError` messages name it. The diff is exactly 7 changed
+lines and touches only that identifier — no projection algorithm, signature,
+annotation, or other statement changed.
+
+CI moves to the validated official-main stack: Python 3.12, `jax[cpu]==0.4.38`,
+`csdl_alpha` from `LSDOlab/CSDL_alpha@73a9efd` in place of the HgXe fork, and
+`lsdo_function_spaces` pinned to `LSDOlab/lsdo_function_spaces@307ad3a`. LFS is
+still installed with `--no-deps` so its unpinned CSDL dependency cannot replace
+the validated commit.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| Tracked references to the patched factory, any file type | **0** |
+| Canonical import present in each of the 5 modules | 5/5 |
+| Factory byte-identity (canonical vs former patched) | identical, sha256 `3b216af2...` |
+| Compatibility alias during the BSM3 test run | **removed**, and proven unimportable |
+| BSM3 full suite, official-main stack | **192 passed** in 611s |
+| LFS focused file-I/O tests | **9 passed** |
+| LFS complete non-plotting suite | **80 passed** |
+| LFS plotting suite | 5 passed in this environment (see note) |
+| E175 coordinates vs pre-migration reference | **max abs diff 0.000e+00**, `allclose(rtol=atol=1e-14)` True on all three arrays |
+| `git diff --check`, BSM3 and LFS | clean in both |
+| Pre-existing dirty/untracked paths changed | **none** |
+
+The E175 reference was measured on this machine by running the example twice:
+once at the pre-migration code state under `bsm3_py312_localdeps` (local forks,
+JAX 0.4.30), once at the migrated state under `bsm3_py312_main` (official mains,
+JAX 0.4.38). Surface shape `(16400, 3)`; folds 0; inversions 0/0/0 in both.
+This is a stronger result than the 7.11e-15 recorded earlier, which compared
+against a different reference; it is not the same measurement.
+
+### Dirty-tree preservation
+
+15 tracked files differ from `HEAD` before this turn's commits: the 7 that are
+mine and 8 pre-existing ones, whose modification times range from 2026-04-15 to
+2026-08-23 and which I never opened. Untracked entries: 394, unchanged.
+
+### Findings for the reviewer
+
+1. **Two untracked research scripts still import the patched factory** —
+   `bsm3/core/projections/gauss_newton_projection.py` and
+   `bsm3/core/projections/function_set_sdf_custom_op_wing_test.py`. Both are
+   untracked, outside the release surface and outside the literal allowlist, so
+   I did not touch them. They will fail to import wherever the alias is absent.
+   Codex should decide whether they are retired or migrated under a later
+   allowlist.
+2. **CI cannot yet carry the LFS fix.** CI pins official LFS `307ad3a`, which
+   predates my `b6e7b4e`. That commit is local and unpushed by instruction, so
+   the STEP byte-200,000 fix is *not* active in CI. The BSM3 suite does not
+   depend on it. The pin should move only once the LFS change is reviewed and
+   landed upstream.
+3. **The plotting tests did not segfault here.** `tests/test_plotting.py`
+   reported 5 passed under macOS with this VTK build. The segfault hazard is
+   environment-dependent; I am recording what I observed rather than repeating
+   it as observed. Plotting behavior was not changed.
+4. **The compatibility alias was moved aside, not deleted permanently.** It now
+   sits at `/tmp/t47_alias_backup/`. It is byte-identical to the canonical
+   module, so it is reproducible with a single copy if any untracked script
+   still needs it.
+5. **The M1.6 slice 3 prompt was overwritten** in `CODEX_NEXT.md` by this
+   turn's checklist. It is recoverable verbatim from
+   `git show 7676b89:docs/overhaul/CODEX_NEXT.md`.
+
+### Deviations
+
+- Ruff was not run for this turn; it was not requested in the migration spec.
+  The pinned CI `ruff==0.9.10` step is unchanged and still gates the same files.
+- Nothing was pushed in either repository. The LFS commit exists only in the
+  temporary clone at `/private/tmp/bsm3-compat.bHdusA/lsdo_function_spaces_main`.
+
+The migration is **not** marked accepted by the implementer. M1.6 slice 3
+resumes from the recoverable prompt once Codex accepts this.
+
+Status:    closed
