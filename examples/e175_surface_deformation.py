@@ -49,12 +49,28 @@ QUAD_SURFACE_MESH_FILE = (
 )
 CACHE_DIRECTORY = Path(tempfile.gettempdir()) / "bsm3_e175_example_cache"
 
+# Full-size deformation targets, and the neutral value each one moves from.
+# ``deformation_scale`` interpolates between the two, so one number controls
+# the whole design point coherently.
+FULL_DEFORMATION = {
+    "wing_shift": (0.0, 0.35),
+    "wing_incidence": (0.0, 0.75),
+    "wing_area": (70.0, 71.5),
+    "tail_incidence": (0.0, 1.2),
+    "fuselage_width": (1.0, 1.02),
+}
+# Largest coherent scale that leaves the sliver-sensitive quad-dominant panel
+# with no new inverted element. Measured in Turn 36: 0.1 and 0.05 both flip
+# elements 8075 and 14923; 0.02 does not.
+DEFAULT_DEFORMATION_SCALE = 0.02
+
 
 def main(
     *,
     geometry_file: Path = STEP_FILE,
     surface_mesh_file: Path = SURFACE_MESH_FILE,
     cache_directory: Path = CACHE_DIRECTORY,
+    deformation_scale: float = DEFAULT_DEFORMATION_SCALE,
 ) -> mm.MeshMotionResult:
     """Deform the E175 surface mesh and report its quality.
 
@@ -66,6 +82,10 @@ def main(
         Surface mesh whose nodes follow the deformed geometry.
     cache_directory
         Directory for reusable setup data. Reused runs are much faster.
+    deformation_scale
+        One control for the whole design point. ``0.0`` leaves the geometry
+        neutral and ``1.0`` applies the full targets in
+        :data:`FULL_DEFORMATION`.
 
     Returns
     -------
@@ -81,71 +101,84 @@ def main(
 
     # 2. Define design variables and component motion
     # The recorder is created, started, and stopped here: BSM3 never owns
-    # global CSDL state, so this script composes inside a larger graph.
+    # global CSDL state. The try begins immediately so a failure in any stage
+    # below still stops it.
     recorder = csdl.Recorder(inline=True)
     recorder.start()
-    geometry = mm.GeometryModel()
-    wing_shift = geometry.design_variable("wing_shift", 0.005)
-    wing_incidence = geometry.design_variable("wing_incidence", 0.01)
-    wing_area = geometry.design_variable("wing_area", 70.02)
-    tail_incidence = geometry.design_variable("tail_incidence", 0.015)
-    fuselage_width = geometry.design_variable("fuselage_width", 1.0002)
-
-    geometry.add_lifting_surface(
-        name="wing",
-        search_name="wing",
-        pivot_intersection="wing_root",
-        translation_x=wing_shift,
-        rotation_y_degrees=wing_incidence,
-        area=wing_area,
-        reference_area=70.0,
-        reference_aspect_ratio=8.4,
-    )
-    geometry.add_lifting_surface(
-        name="tail",
-        search_name="HT",
-        pivot_intersection="tail_root",
-        rotation_y_degrees=tail_incidence,
-        projection_name="horizontal_tail",
-    )
-    geometry.add_body(
-        name="fuselage",
-        search_name="fuselage",
-        diameter_scale=fuselage_width,
-    )
-    geometry.connect(
-        name="wing_root",
-        driving_component="wing",
-        query_component="fuselage",
-    )
-    geometry.connect(
-        name="tail_root",
-        driving_component="tail",
-        query_component="fuselage",
-    )
-
-    # 3. Choose mesh-motion and quality settings
-    motion = mm.MeshMotion(
-        surface=mm.SurfaceMotion(
-            load_steps=2,
-            stiffening_exponent=1.5,
-            distance_weighting=mm.DistanceWeighting(
-                enabled=True,
-                beta=5.0,
-                length_scale=10.0,
-                decay="exp",
-            ),
-            # Applies to whichever cells the mesh has. Triangles carry no
-            # affine hourglass mode, so this is inactive on the tri wall and
-            # active on the quad-dominant panel.
-            polygon_regularization=mm.PolygonRegularization(weight=0.3),
-        ),
-        quality=mm.QualityChecks(surface=True),
-        symmetry=True,
-    )
-
-    # 4. Run the differentiable mesh-motion model
     try:
+        geometry = mm.GeometryModel()
+        values = {
+            name: neutral + deformation_scale * (target - neutral)
+            for name, (neutral, target) in FULL_DEFORMATION.items()
+        }
+        wing_shift = geometry.design_variable(
+            "wing_shift", values["wing_shift"]
+        )
+        wing_incidence = geometry.design_variable(
+            "wing_incidence", values["wing_incidence"]
+        )
+        wing_area = geometry.design_variable("wing_area", values["wing_area"])
+        tail_incidence = geometry.design_variable(
+            "tail_incidence", values["tail_incidence"]
+        )
+        fuselage_width = geometry.design_variable(
+            "fuselage_width", values["fuselage_width"]
+        )
+
+        geometry.add_lifting_surface(
+            name="wing",
+            search_name="wing",
+            pivot_intersection="wing_root",
+            translation_x=wing_shift,
+            rotation_y_degrees=wing_incidence,
+            area=wing_area,
+            reference_area=70.0,
+            reference_aspect_ratio=8.4,
+        )
+        geometry.add_lifting_surface(
+            name="tail",
+            search_name="HT",
+            pivot_intersection="tail_root",
+            rotation_y_degrees=tail_incidence,
+            projection_name="horizontal_tail",
+        )
+        geometry.add_body(
+            name="fuselage",
+            search_name="fuselage",
+            diameter_scale=fuselage_width,
+        )
+        geometry.connect(
+            name="wing_root",
+            driving_component="wing",
+            query_component="fuselage",
+        )
+        geometry.connect(
+            name="tail_root",
+            driving_component="tail",
+            query_component="fuselage",
+        )
+
+        # 3. Choose mesh-motion and quality settings
+        motion = mm.MeshMotion(
+            surface=mm.SurfaceMotion(
+                load_steps=2,
+                stiffening_exponent=1.5,
+                distance_weighting=mm.DistanceWeighting(
+                    enabled=True,
+                    beta=5.0,
+                    length_scale=10.0,
+                    decay="exp",
+                ),
+                # Applies to whichever cells the mesh has. Triangles carry no
+                # affine hourglass mode, so this is inactive on the tri wall
+                # and active on the quad-dominant panel.
+                polygon_regularization=mm.PolygonRegularization(weight=0.3),
+            ),
+            quality=mm.QualityChecks(surface=True),
+            symmetry=True,
+        )
+
+        # 4. Run the differentiable mesh-motion model
         result = mm.run(
             inputs=inputs,
             geometry=geometry,

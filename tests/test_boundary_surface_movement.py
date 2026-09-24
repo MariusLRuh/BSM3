@@ -2030,3 +2030,66 @@ def test_symmetry_reconstruct_mirrors_a_half_displacement():
     np.testing.assert_allclose(full_value[order], mirrored[mirror_order], atol=1e-12)
     plane = np.abs(np.asarray(mesh.vertices)[:, 1]) < 1e-12
     np.testing.assert_allclose(full_value[plane, 1], 0.0, atol=1e-12)
+
+
+def _two_vertex_mesh():
+    """Return a minimal two-vertex, one-triangle mesh for mask regressions."""
+    vertices = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=float
+    )
+    cell = np.array([[0, 1, 2]], dtype=np.int64)
+    return MeshData(
+        vertices=vertices,
+        connectivity=cell,
+        cell_types=np.asarray(["triangle"], dtype=object),
+        cell_blocks={"triangle": cell},
+    )
+
+
+class _MaskPatch:
+    """Coefficient stand-in for the mask-regression component."""
+
+    coefficients = np.zeros((4, 3))
+
+
+class _MaskComponent:
+    """Single-patch component stand-in for the mask regression."""
+
+    functions = {0: _MaskPatch()}
+
+
+def test_identify_reevaluated_vertices_handles_a_fully_deformed_mesh():
+    """Every vertex already deforming must yield an empty result, not a crash.
+
+    ``np.asarray([])`` is ``float64``, so an empty keep-set previously made the
+    bitwise-and in the mask reduction raise ``TypeError``. This is a general
+    preprocessing edge case: it appears whenever no vertex is reevaluated, for
+    example when every component is entirely free.
+    """
+    from bsm3.preprocessing.movement import identify_reevaluated_vertices
+
+    mesh = _two_vertex_mesh()
+    parametric = np.zeros((3, 3), dtype=float)
+    metadata = identify_reevaluated_vertices(
+        mesh=mesh,
+        vertex_ids=np.array([0, 1, 2], dtype=np.int64),
+        parametric_coords=parametric,
+        components=[_MaskComponent()],
+    )
+    assert tuple(metadata) == ()
+
+
+def test_identify_reevaluated_vertices_still_returns_kept_vertices():
+    """The nonempty path must keep working after the dtype correction."""
+    from bsm3.preprocessing.movement import identify_reevaluated_vertices
+
+    mesh = _two_vertex_mesh()
+    parametric = np.zeros((3, 3), dtype=float)
+    metadata = identify_reevaluated_vertices(
+        mesh=mesh,
+        vertex_ids=np.array([0], dtype=np.int64),
+        parametric_coords=parametric,
+        components=[_MaskComponent()],
+    )
+    assert len(metadata) == 1
+    assert metadata[0].vertex_ids.tolist() == [1, 2]

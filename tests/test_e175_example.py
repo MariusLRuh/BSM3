@@ -279,7 +279,7 @@ def test_add_component_interpolates_and_reaches_the_target_exactly():
             search_name="wing",
             deformed_coefficients=target,
         )
-        build = geometry.component_records[0].coefficient_builder
+        build = geometry._component_records[0].coefficient_builder
         full = np.asarray(build(component, 1.0, {}), dtype=float)
         half = np.asarray(build(component, 0.5, {}), dtype=float)
         baseline = np.zeros((10, 3))
@@ -287,6 +287,41 @@ def test_add_component_interpolates_and_reaches_the_target_exactly():
         np.testing.assert_allclose(half, baseline + 0.5 * (target - baseline))
     finally:
         recorder.stop()
+
+
+def test_compiled_records_are_not_public():
+    """The facade promised to hide compiled records and their callbacks."""
+    geometry = mm.GeometryModel()
+    assert not hasattr(geometry, "component_records")
+    assert not hasattr(geometry, "intersection_records")
+    # The design-variable mapping stays public.
+    assert hasattr(geometry, "design_variables")
+
+
+def test_unbounded_design_variable_is_registered_with_the_recorder():
+    """``design_variable`` must register even without bounds or a scaler."""
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    try:
+        geometry = mm.GeometryModel()
+        variable = geometry.design_variable("unbounded", 1.25)
+        assert variable in recorder.design_variables
+    finally:
+        recorder.stop()
+
+
+def test_example_stops_the_recorder_when_an_early_stage_fails(monkeypatch):
+    """A failure in stage 2 or 3 must not leave an active recorder."""
+    example = _load_example()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("stage 2 failure")
+
+    monkeypatch.setattr(mm.GeometryModel, "add_lifting_surface", _boom)
+    assert _active_recorder() is None
+    with pytest.raises(RuntimeError, match="stage 2 failure"):
+        example.main()
+    assert _active_recorder() is None
 
 
 def test_validate_does_not_require_a_model_owned_design_variable():
@@ -327,9 +362,17 @@ def test_quad_panel_introduces_no_new_inverted_elements(tmp_path):
         int(i) for i in result.surface_inversion_report.inverted_element_ids
     )
 
-    # The unchanged tracked asset's own input reference.
+    # Pin all three unchanged-input facts, evaluated on the result's own
+    # initial coordinates rather than read from the final report.
+    from bsm3.core.boundary_surface_movement import evaluate_mesh_quality
+
+    initial_quality = evaluate_mesh_quality(
+        mesh=result.surface_mesh,
+        vertices=np.asarray(result.initial_surface_coordinates, dtype=float),
+    )
     assert len(initial) == 114
-    assert result.surface_quality_report.degenerate_elements == 0
+    assert initial_quality.inverted_corners == 114
+    assert initial_quality.degenerate_elements == 0
     # Compare ID sets, not only counts: the deformation must introduce no
     # inverted element that the input did not already have.
     assert not preprojection - initial
@@ -343,12 +386,13 @@ def test_quad_panel_introduces_no_new_inverted_elements(tmp_path):
 @pytest.mark.timeout(900)
 @requires_assets
 def test_external_coefficients_drive_the_real_pipeline(tmp_path):
-    """An externally produced coefficient set reaches the full solve chain.
+    """A substantial relative external wing deformation, verified against FD.
 
     This mirrors how another package drives BSM3: it imports the same STEP
     body, deforms the coefficients with its own differentiable
     parameterization, and hands the result to ``add_component``. BSM3 supplies
-    no transformation here.
+    no transformation. Only the wing moves, so the intersection and motion
+    chain is genuinely exercised rather than a global rigid translation.
     """
     import os
 
@@ -359,6 +403,8 @@ def test_external_coefficients_drive_the_real_pipeline(tmp_path):
         stack_component_coefficients,
     )
 
+    wing_shift_metres = 0.35
+
     recorder = csdl.Recorder(inline=True)
     recorder.start()
     try:
@@ -366,8 +412,7 @@ def test_external_coefficients_drive_the_real_pipeline(tmp_path):
         cache.mkdir(parents=True, exist_ok=True)
         # lsdo_function_spaces writes its STEP-import cache relative to the
         # process working directory. The library contains that side effect
-        # internally; a direct import here must contain it too, or the test
-        # dirties the checkout.
+        # internally; a direct import here must contain it too.
         previous_directory = Path.cwd()
         try:
             os.chdir(cache)
@@ -380,7 +425,7 @@ def test_external_coefficients_drive_the_real_pipeline(tmp_path):
         )
 
         geometry = mm.GeometryModel()
-        shift = geometry.design_variable("external_shift", 0.004)
+        shift = geometry.design_variable("external_wing_shift", 1.0)
         free_regions = {
             "wing": {"y": (None, 0.3, "abs")},
             "tail": {"y": (None, 0.3, "abs")},
@@ -392,14 +437,18 @@ def test_external_coefficients_drive_the_real_pipeline(tmp_path):
             ("fuselage", "fuselage", fuselage),
         ):
             baseline = stack_component_coefficients(component)
-            # An external, differentiable target built outside BSM3: a rigid
-            # chordwise shift applied to every control point.
-            direction = np.zeros(baseline.shape)
-            direction[:, 0] = 1.0
+            if name == "wing":
+                # Only the wing moves: a substantial chordwise shift built
+                # entirely outside BSM3.
+                direction = np.zeros(baseline.shape)
+                direction[:, 0] = wing_shift_metres
+                target = baseline + shift * direction
+            else:
+                target = baseline
             geometry.add_component(
                 name=name,
                 search_name=search,
-                deformed_coefficients=baseline + shift * direction,
+                deformed_coefficients=target,
                 free_region=free_regions[name],
             )
         geometry.connect(
@@ -420,33 +469,215 @@ def test_external_coefficients_drive_the_real_pipeline(tmp_path):
             ),
             geometry=geometry,
             motion=mm.MeshMotion(
-                surface=mm.SurfaceMotion(load_steps=1),
+                surface=mm.SurfaceMotion(load_steps=2),
                 quality=mm.QualityChecks(surface=True),
                 symmetry=True,
             ),
             recorder=recorder,
         )
-        objective = csdl.sum(result.surface_coordinates)
-        derivative = csdl.derivative(objective, shift)
+        # A well-scaled scalar built from the FINAL REPROJECTED coordinates:
+        # mean nodal displacement relative to the initial mesh.
+        initial = np.asarray(result.initial_surface_coordinates, dtype=float)
+        displacement = result.surface_coordinates - initial
+        objective = csdl.average(displacement * displacement)
+        objective.add_name("mean_squared_nodal_displacement")
+        objective.set_as_objective()
+        analytic = csdl.derivative(objective, shift)
     finally:
         recorder.stop()
 
+    final = np.asarray(result.surface_coordinates.value, dtype=float)
+    assert np.all(np.isfinite(final))
     assert result.surface_fold_count == 0
     assert result.surface_inversion_report.num_inverted == 0
-    # The external variable must stay analytically differentiable through
-    # intersections, the graph solve, and OML reprojection.
-    assert abs(float(np.asarray(derivative.value).reshape(-1)[0])) > 1.0e-6
+    assert not (
+        set(int(i) for i in result.surface_inversion_report.inverted_element_ids)
+        - set(
+            int(i)
+            for i in result.initial_inversion_report.inverted_element_ids
+        )
+    )
+    max_displacement = float(
+        np.max(np.linalg.norm(final - initial, axis=1))
+    )
+    assert max_displacement > 0.05, max_displacement
+
+    analytic_value = float(np.asarray(analytic.value).reshape(-1)[0])
+    assert abs(analytic_value) > 1.0e-6
+
+    # Centered finite difference, best step, matching the derivative gate.
+    simulator = csdl.experimental.JaxSimulator(recorder=recorder, gpu=False)
+    baseline_value = np.asarray(shift.value).copy()
+    best_error = float("inf")
+    best_step = None
+    best_fd = None
+    for step in (1.0e-4, 1.0e-5, 1.0e-6):
+        simulator[shift] = baseline_value + step
+        simulator.run()
+        plus = float(np.asarray(simulator[objective]).reshape(-1)[0])
+        simulator[shift] = baseline_value - step
+        simulator.run()
+        minus = float(np.asarray(simulator[objective]).reshape(-1)[0])
+        centered = (plus - minus) / (2.0 * step)
+        error = abs(analytic_value - centered) / max(
+            abs(analytic_value), abs(centered), 1.0e-14
+        )
+        if error < best_error:
+            best_error, best_step, best_fd = error, step, centered
+    simulator[shift] = baseline_value
+    print(
+        f"[external-fd] wing_shift={wing_shift_metres} "
+        f"analytic={analytic_value:.10e} fd={best_fd:.10e} "
+        f"step={best_step:.0e} rel_error={best_error:.3e} "
+        f"max_disp={max_displacement:.4f}"
+    )
+    assert best_error < 1.0e-5, best_error
 
 
-@pytest.mark.skip(
-    reason="Blocked on bsm3/preprocessing/movement.py:305, outside the "
-    "Turn-34 allowlist. free_region=None on every component leaves no "
-    "reevaluation vertices, and np.asarray([]) yields float64 so the "
-    "'local_mask &= ~assigned' bitwise-and raises TypeError. One-line fix: "
-    "pass dtype=bool. Reported to Codex for an allowlist ruling."
-)
 @pytest.mark.integration
+@pytest.mark.timeout(900)
 @requires_assets
 def test_external_coefficients_with_whole_component_free_regions(tmp_path):
-    """``free_region=None`` should mean the whole imported component is free."""
-    raise AssertionError("Enable once the movement.py dependency is approved.")
+    """``free_region=None`` means the whole imported component is free.
+
+    With no reevaluation vertices at all, the preprocessing mask reduction
+    used to raise ``TypeError``; this is the end-to-end regression for that
+    fix.
+    """
+    import os
+
+    import lsdo_function_spaces as lfs
+
+    import bsm3
+    from bsm3.core.boundary_surface_movement import (
+        stack_component_coefficients,
+    )
+
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    try:
+        cache = tmp_path / "whole-free-cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(cache)
+            imported = lfs.import_file_patched(STEP_FILE, parallelize=False)
+        finally:
+            os.chdir(previous_directory)
+        wing, tail, fuselage = bsm3.preprocessing.create_components(
+            geometry=imported,
+            search_names=["wing", "HT", "fuselage"],
+        )
+
+        geometry = mm.GeometryModel()
+        shift = geometry.design_variable("whole_free_shift", 1.0)
+        for name, search, component in (
+            ("wing", "wing", wing),
+            ("tail", "HT", tail),
+            ("fuselage", "fuselage", fuselage),
+        ):
+            baseline = stack_component_coefficients(component)
+            if name == "wing":
+                direction = np.zeros(baseline.shape)
+                direction[:, 0] = 0.05
+                target = baseline + shift * direction
+            else:
+                target = baseline
+            # No free region: the whole imported component is free.
+            geometry.add_component(
+                name=name,
+                search_name=search,
+                deformed_coefficients=target,
+                free_region=None,
+            )
+        geometry.connect(
+            name="wing_root",
+            driving_component="wing",
+            query_component="fuselage",
+        )
+        geometry.connect(
+            name="tail_root",
+            driving_component="tail",
+            query_component="fuselage",
+        )
+        result = mm.run(
+            inputs=mm.InputFiles(
+                geometry_file=STEP_FILE,
+                surface_mesh_file=TRIANGLE_SURFACE_FILE,
+                cache_directory=cache,
+            ),
+            geometry=geometry,
+            motion=mm.MeshMotion(
+                surface=mm.SurfaceMotion(load_steps=2),
+                quality=mm.QualityChecks(surface=True),
+                symmetry=True,
+            ),
+            recorder=recorder,
+        )
+    finally:
+        recorder.stop()
+
+    final = np.asarray(result.surface_coordinates.value, dtype=float)
+    assert final.shape == (16400, 3)
+    assert np.all(np.isfinite(final))
+    assert result.surface_fold_count == 0
+    initial_ids = set(
+        int(i) for i in result.initial_inversion_report.inverted_element_ids
+    )
+    assert not (
+        set(
+            int(i)
+            for i in result.preprojection_inversion_report.inverted_element_ids
+        )
+        - initial_ids
+    )
+    assert not (
+        set(
+            int(i)
+            for i in result.surface_inversion_report.inverted_element_ids
+        )
+        - initial_ids
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(900)
+@requires_assets
+def test_triangle_wall_at_full_deformation_scale(tmp_path):
+    """Deliberate large-deformation coverage on the triangle wall.
+
+    ``deformation_scale=1.0`` is the full Turn-32 design point: 0.35 m wing
+    shift, 0.75 deg wing incidence, 71.5 m^2 wing area, 1.2 deg tail
+    incidence, and a 1.02 fuselage width scale. The quad panel is
+    sliver-sensitive and keeps its own smaller supported point.
+    """
+    example = _load_example()
+    result = example.main(
+        surface_mesh_file=TRIANGLE_SURFACE_FILE,
+        cache_directory=tmp_path / "full-scale-cache",
+        deformation_scale=1.0,
+    )
+
+    initial = np.asarray(result.initial_surface_coordinates, dtype=float)
+    final = np.asarray(result.surface_coordinates.value, dtype=float)
+    assert final.shape == (16400, 3)
+    assert np.all(np.isfinite(final))
+
+    initial_ids = set(
+        int(i) for i in result.initial_inversion_report.inverted_element_ids
+    )
+    preprojection_ids = set(
+        int(i)
+        for i in result.preprojection_inversion_report.inverted_element_ids
+    )
+    final_ids = set(
+        int(i) for i in result.surface_inversion_report.inverted_element_ids
+    )
+    assert not preprojection_ids - initial_ids
+    assert not final_ids - initial_ids
+    assert result.surface_fold_count == 0
+
+    # Guard against the case silently collapsing to a near-null deformation.
+    max_displacement = float(np.max(np.linalg.norm(final - initial, axis=1)))
+    print(f"[full-scale-tri] max nodal displacement {max_displacement:.4f} m")
+    assert max_displacement > 0.1, max_displacement
