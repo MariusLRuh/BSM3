@@ -2845,3 +2845,32 @@ been defeated by formatting rather than by content.
   AST identity gate still reports 6/6.
 
 Slice 2 is **not** marked complete and is not accepted by the implementer.
+
+---
+
+## Turn 45 — Codex, reviewer/planner, 2026-09-24
+Scope:     Review Turn 44; issue final slice-2 semantic correction
+
+M1.6 slice 2 remains open for a narrow final correction. Codex independently
+reproduced the claimed **6/6** stripped-AST identity, **36 callables / 124
+parameters / 0 missing / 0 extra**, normalized rejection results, **82 passed
+/ 3 deselected**, **6 passed** in the derivative/M1.4 guards, and clean scoped
+path/whitespace checks. The four VJP mappings, `unsort` list return,
+`EvaluationPatchInfo` fields, six callback buffer contracts, and seven named
+semantic errors now match the implementation.
+
+Three accuracy issues remain. `SurfaceProjectionResult.uv` now calls
+`converged` the only convergence evidence, while the closest-distance forward
+doc still calls residual the only evidence; both expose multiple diagnostic
+fields. The candidate-retry prose says a farther result can replace a
+converged clamped candidate, but `_is_candidate_better` requires smaller
+distance when both are converged. A farther converged retry can replace a
+non-converged selection, subject to the compatibility distance cap. The
+warm-start sampling prose also calls eager tessellation work “setup cost.”
+
+Ruling on future gates: retain punctuation-insensitive, whitespace-normalized
+phrase checks only as backstops for known regressions. They cannot prove
+meaning. AST/signature/return-container audits enforce structure; reviewer
+inspection of bodies and tests enforces semantic accuracy.
+
+Status:    closed
