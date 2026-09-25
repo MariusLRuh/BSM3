@@ -3179,6 +3179,11 @@ and 8 deselected on the broader LFS non-plotting selection under
 `-k "not plot"`, Ruff clean over all five migrated projection modules, and
 independent confirmation of factory byte identity and dependency provenance.
 
+*Corrected in Turn 54:* that Ruff line meant the repository's **default** Ruff
+selection, which `ruff.toml` sets to `E9,F63,F7,F82`. It was not
+`ruff check --select D`, which those five modules did not pass at the time.
+The original result stands as measured; only the wording here was imprecise.
+
 M1.9 stayed open only because two claims I wrote in the collaboration documents
 were inaccurate. No source, CI, test, requirement, dependency repository, dirty
 file, or untracked artifact was touched in this turn.
@@ -3494,5 +3499,157 @@ the non-optional `mesh_motion` annotation, two unused DAFoam fields, and
 `plot_components(colors=None)` failing in `_broadcast`. The literal 47-path
 allowlist, exact corrections, AST/test/lint gates, and stop rule are in
 `CODEX_NEXT.md`.
+
+Status:    closed
+
+---
+
+## Turn 54 — Claude, implementer, 2026-09-24
+Scope:     Close the M1.6 lint debt and correct the slice-3 semantic inaccuracies
+Base:      81736be (all comparisons); started from HEAD 0e980d0, Codex's review commit
+Commits:   139f35c (source), docs commit follows
+Status:    M1.6 ready for Codex acceptance — NOT accepted by the implementer
+
+Documentation, comments, and doc-rule whitespace only. No executable statement,
+signature, annotation, import, constant, or decorator changed, and
+`.github/workflows/actions.yml` was deliberately not touched.
+
+### Part A — the two failing documentation gates are green
+
+Reproduced Codex's measurements exactly before editing: surface-motion core
+**123** findings (97 `D202`, 15 `D105`, 5 `D205`, 4 `D209`, 2 `D401`) and
+projection/preprocessing **48** (23 `D202`, 16 `D204`, 5 `D205`, 2 `D401`,
+2 `D103`).
+
+`D202`, `D204`, and `D209` are pure whitespace rules and were fixed with
+`ruff check --select D202,D204,D209 --fix` scoped to exactly those two path
+sets — no unscoped formatter and no blanket fixer. The remaining 31 findings
+were written by hand after reading each body: 15 `D105` `__post_init__` and
+`__bool__` methods, 2 `D103` nested helpers inside `__main__` demo blocks,
+10 `D205` multi-line summaries, and 4 `D401` moods.
+
+| `actions.yml` step | Before | After |
+| --- | --- | --- |
+| Numpydoc checks for the M0 public surface | pass | **pass** |
+| Numpydoc checks for the surface-motion core | 123 | **pass** |
+| Numpydoc checks for projection and preprocessing | 48 | **pass** |
+| Numpydoc checks for drivers, volume motion, and MPI | pass | **pass** |
+| Critical static checks (default selection) | — | **pass** |
+
+### Part B — semantic corrections, each verified against the body
+
+Every item was confirmed in the implementation before the prose was rewritten,
+not taken on the review's word:
+
+- **`bsm3/__init__.py`** — `bsm3/core/projections/__init__.py` contains only a
+  module docstring and re-exports nothing, so my earlier advice to import the
+  helpers from that package was wrong. The three defining modules are named
+  instead.
+- **`component_parameters.py`** — `_apply_planform_scaling` returns early when
+  both `area` and `aspect_ratio` are `None`, and otherwise substitutes the
+  resolved reference for whichever is `None`; `_resolve_reference_planform`
+  infers both references from control-point extents when absent;
+  `_scale_planform_column` measures `spanwise_scaling_root` against
+  `baseline[:, span_axis] - pivot[span_axis]`, so it is about the pivot's
+  spanwise station, not the symmetry plane; and `geometry.py` dispatches only
+  on `WingParameters` and `FuselageParameters`, so `TailParameters` takes the
+  generic path.
+- **`cfd_mesh_movement_test.py`** — mesh writes, visualization, and the FD
+  sweep are conditional side effects *of the call*, governed by configuration.
+- **`cfd_mesh_dafoam_analysis.py`** — `resolve_comm(None)` returns
+  `MPI.COMM_WORLD` whenever `mpi4py` imports, falling back to `SerialComm`
+  only when it does not. `build_cfd_analysis_rank0` sets `mesh_motion` from
+  `geometry_backend.last_mesh_motion_result if geometry_backend is not None
+  else None`, so it is `None` on every non-root rank.
+- **`e175_derivative_ladder.py`** — Level 6 calls
+  `_baseline_coordinates_and_direction(comm, geometry_backend)` with no seed
+  and exposes no seed argument, so it matches Level 3 only at Level 3's
+  default `seed_index=0`.
+- **`geometry_volume_mpi.py`** — the check is
+  `max(|local - reference|) > absolute_tolerance`, so a zero tolerance demands
+  a zero numeric difference between finite values rather than bit-for-bit
+  identity, and because any comparison with `NaN` is false, `NaN` is not
+  rejected.
+- **`rbf.py`** — `__post_init__` performs eleven distinct validations, now all
+  documented, including the non-negative counts and weights, the positive
+  optional support width, the per-intersection sequence resolution, and the
+  all-or-none `distances` rule. `_rbf_evaluation_operator` adds
+  `regularization * I` to the training kernel in the `exact_interpolation`
+  branch, so that fit is exact only at zero regularization.
+  `DisplacementSurrogate.evaluate` computes
+  `query_variable + matmat(operator, training_displacements)` and therefore
+  returns **deformed positions**, which my slice-3 text had called
+  displacements.
+- **`run_dafoam_gmsh.py`** — `run_command` contains no rank check;
+  `build_da_options` hardcodes `"useWallFunction": False` and never reads
+  `nu_tilda_m2_per_s` or `use_wall_functions`; the CLI derives the latter from
+  `--no-wall-functions`, making its effective default `True` against the
+  dataclass default of `False`; `run_dafoam` returns the dictionary
+  `evalFunctions` fills in, with no metadata. Three `Raises` sections were
+  corrected to the visible validation, including the `ValueError` for a
+  missing or ambiguous `endTime`, the `KeyError` propagated from
+  `find_patch_block`, and the `FileNotFoundError` when `gmshToFoam` produces
+  no boundary file.
+- **`volume_mesh_motion.py`** — percentiles are `np.quantile` of the metric
+  values, so they describe the lower tail of those values rather than counting
+  cells. `inverted_tetrahedra` counts `relative_jacobian <= 0`, an orientation
+  reversal relative to each cell's own baseline, not a non-positive raw signed
+  volume. `_tetrahedron_mean_ratio` uses only the deformed cell's edges and
+  volume, normalized so a regular tetrahedron scores one, so it is an absolute
+  shape metric and not similarity to the baseline.
+- **`weighting_functions.py`** — the truncated Gaussian leaves a jump of
+  `exp(-sharpness)` at `d == 1`, nonzero for every finite `sharpness`.
+- **`plotting.py`** — `_broadcast(None, n, ...)` reaches `list(None)` and
+  raises `TypeError` for any non-empty component list, so
+  `plot_components(colors=None)` fails; only `""` preserves component colors.
+  In `highlight_mesh_nodes` the alias is consulted only when `node_color is
+  None`, so an explicitly empty value falls through to `"red"`.
+
+### M1.9 historical wording
+
+The Turn-50 entry's "Ruff clean over all five migrated projection modules" now
+carries an inline correction stating that it meant the repository's **default**
+selection (`E9,F63,F7,F82` per `ruff.toml`), not `ruff check --select D`, which
+those modules did not pass at the time. The original measurement is left as
+recorded; only the wording was imprecise.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| Four `actions.yml` documentation commands | **all pass** |
+| Workflow default critical-static-checks command | **pass** |
+| Slice-3 coverage audit | 17/17 modules, 167/167 definitions, 132 callables / 293 params at 0/0, 22 dataclasses / 148 fields at 0/0 |
+| Stripped-AST identity vs `81736be`, working tree | **38/38** |
+| Stripped-AST identity vs `81736be`, committed blobs | **38/38** |
+| `pytest` suite 1 | **82 passed, 3 deselected** |
+| `pytest` suite 2 | **89 passed** |
+| `pytest` suite 3 | **6 passed** |
+| `git diff --check 81736be HEAD` | empty |
+| Changed paths | subset of the 47-path allowlist |
+
+### Carry-ins recorded for M1.7, deliberately not fixed here
+
+These need executable or annotation changes and so are out of scope for a
+documentation-only turn:
+
+1. `DerivativeComparison.best` can return `None` as the best step while its
+   annotation says `tuple[float, float]`.
+2. `E175DAFoamResult.mesh_motion` is annotated non-optional but is `None` on
+   non-root ranks in the rank-0 path.
+3. `FlowConfig.nu_tilda_m2_per_s` and `FlowConfig.use_wall_functions` are
+   carried by configuration and the CLI but never consumed by
+   `build_da_options`, whose `useWallFunction` is hardcoded `False`. The CLI
+   default for the latter also disagrees with the dataclass default.
+4. `plot_components(colors=None)` raises `TypeError` rather than preserving
+   component colors.
+
+### Preservation
+
+Pre-existing dirty tree intact: 402 entries before, and afterwards the only
+additions are this turn's own edited files. No pre-existing entry was removed
+or altered, and no untracked artifact was touched.
+
+M1.6 is **ready for Codex acceptance** and is not accepted by the implementer.
 
 Status:    closed
