@@ -1,28 +1,24 @@
-# Claude implementation prompt — Turn 59 M1.7 rank-0 chain correction
+# Codex acceptance checklist — Turn 59 rank-0 chain correction
 
-Codex reviewed `338fde8` and `b60f0c0`. The five intended API corrections are
-sound, and the independently rerun changed-file and derivative/N-gon tests pass
-150 and 6 respectively. **M1.7 and M1 are not accepted**, because final review
-found that M1.1 left the retained rank-0 geometry-to-volume chain on removed API
-names.
+**The rank-0 geometry-to-volume chain now constructs through the current API.**
+`build_cfd_analysis_rank0` resolves a real parameterization factory,
+`MeshMotionVolumeBackend` takes `input_files` and calls `run_mesh_motion` with
+`input_files=` and `geometry=`, and the three communicator annotations resolve
+at runtime with no `mpi4py` installed. Six regressions guard the boundary, each
+verified to fail at `b60f0c0`.
 
-You are the implementer. Fix only the defects below, run the gates, commit the
-implementation and collaboration documents separately, and hand the result
-back to Codex without accepting it yourself.
+Claude was the implementer. M1.7 and M1 are **ready for Codex acceptance and
+are not accepted by the implementer**.
 
-## Base and preservation
+## Commits
 
-- Base: current `HEAD` (`b60f0c0`). Do not rewrite either Turn-58 commit.
-- Preserve all eight pre-existing modified files byte-for-byte.
-- Preserve the complete untracked set; do not adopt, delete, clean, stash, or
-  modify any untracked path.
-- Do not install anything, push, or modify another repository.
-- Do not run DAFoam, OpenFOAM, VortexAD, or a real MPI job.
-- Keep every accepted Turn-58 API correction unchanged.
+| Hash | Contents |
+| --- | --- |
+| Base | `b60f0c0` |
+| `e47d07f` | source, tests, workflow |
+| *(docs commit)* | `PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
 
-## Literal allowlist
-
-Implementation commit — only these paths may change:
+## Changed paths — exactly the 8 implementation-allowlist entries
 
 ```text
 .github/workflows/actions.yml
@@ -35,150 +31,102 @@ tests/test_e175_driver_configuration.py
 tests/test_geometry_volume_mpi.py
 ```
 
-Documentation commit — only:
+## A — one current parameterization factory
 
-```text
-docs/overhaul/PLAN.md
-docs/overhaul/LOG.md
-docs/overhaul/CODEX_NEXT.md
-```
+`create_geometry_parameterization_from_variables(variables)` restored on the
+current `GeometryModel` API. Both entry points call one private
+`_populate_e175_geometry`, so the wing, tail, fuselage, and two intersection
+declarations exist once. `create_geometry_model()` still registers the six
+driver design variables with their existing values, bounds, and scalers; the
+new factory registers none, owns no recorder, and uses the caller's expressions
+as supplied. Keys are validated against `GEOMETRY_VARIABLE_NAMES`, reporting
+missing and unexpected names separately. `build_cfd_analysis_rank0` passes the
+real function; no alias was added.
 
-Stop and report rather than widening either allowlist.
+## B — backend on the current public API
 
-## A. Restore one current E175 parameterization factory
+`__init__` takes `input_files` and stores `_input_files`; `_build_model` calls
+`run_mesh_motion(recorder=…, input_files=…, geometry=…, config=…,
+aerodynamic_analysis=None, aerodynamic_volume_method=…)`. Both retained call
+sites updated. Clean break: `model_files=` now raises `TypeError`, pinned by a
+test.
 
-In `cfd_mesh_dafoam_analysis.py`, restore
-`create_geometry_parameterization_from_variables(variables)` using the current
-`GeometryModel` API. It must accept a mapping of the six caller-owned CSDL
-variables and return a `GeometryModel` with the same wing, tail, fuselage, and
-two intersection declarations as `create_geometry_model()`.
+Note that `_build_model` was passing **two** removed keywords, `model_files=`
+and `geometry_parameterization=`; the review named the first, and the second
+was found while migrating.
 
-Do not duplicate the configuration bodies. Factor one private population
-helper that both entry points call:
+## C — optional-MPI annotations
 
-- `create_geometry_model()` still creates/registers the six public driver
-  design variables with their existing values, bounds, and scalers, then
-  populates that model.
-- `create_geometry_parameterization_from_variables()` creates no design
-  variables and owns no recorder; it populates a fresh model from the supplied
-  variables.
-- Validate the mapping's exact required keys and give a useful error for
-  missing or unexpected names. Do not silently ignore either.
-- `build_cfd_analysis_rank0` must pass this real function, not add an alias for
-  the undefined `create_geometry_from_variables` name.
+Private `runtime_checkable` `_Communicator` protocol covering only `rank`,
+`size`, `Barrier`, and `bcast`. `typing.get_type_hints` resolves for all three
+callables with no mpi4py present, a real `MPI.Comm` satisfies it structurally,
+`mpi4py` is still imported lazily inside `main`, and no `noqa` was added.
 
-Add an executable test proving the two entry points produce equivalent
-component/intersection declarations and that external variables remain the
-expressions captured by the factory. A source-text grep alone is not a test.
+## D — CI coverage hole closed
 
-## B. Finish the backend migration to the current public API
-
-`MeshMotionVolumeBackend` must use the same names as `run_mesh_motion`:
-
-- constructor argument and stored attribute: `input_files`, not `model_files`;
-- `_build_model`: call `run_mesh_motion(recorder=..., input_files=...,
-  geometry=..., config=..., aerodynamic_analysis=None,
-  aerodynamic_volume_method=...)`;
-- update both retained call sites, in `cfd_mesh_dafoam_analysis.py` and
-  `e175_derivative_ladder.py`.
-
-Do not keep compatibility aliases or accept both keyword spellings; this
-overhaul is a clean break.
-
-Add a mock-backed execution test for `MeshMotionVolumeBackend`, not merely an
-`inspect.signature` assertion. Patch the imported pipeline function with a
-small current-signature fake, construct a backend around a one-variable CSDL
-geometry factory, execute its build/forward path, and prove the fake received
-`input_files`, `geometry`, and `config` and returned the selected volume output.
-This test must fail at `b60f0c0` because of the old keywords and pass after the
-fix. It must require no CAD asset, volume mesh, MPI, or DAFoam.
-
-Also add a focused no-DAFoam regression that reaches construction of the
-rank-0 backend from `build_cfd_analysis_rank0` far enough to prove the factory
-name and constructor keyword are valid. Mock only expensive I/O/downstream
-operations; do not replace the function under test wholesale.
-
-## C. Make optional-MPI annotations real
-
-The three `MPI.Comm` annotations in `run_dafoam_gmsh.py` currently refer to no
-module-global `MPI`. Replace them with an optional-dependency-safe structural
-communicator protocol (private is fine) or an equally precise runtime-resolvable
-type. Do not import `mpi4py` eagerly and do not suppress F821 with `noqa`.
-
-Test that `typing.get_type_hints` succeeds for all three affected callables in
-the Python-3.12 main environment without relying on a module-global MPI import.
-
-## D. Close the CI coverage hole
-
-The default Ruff selection over every retained production path already listed
-in the four workflow documentation steps currently reports exactly the four
-F821 findings above and no others. Expand the workflow's **Critical static
-checks** so it runs default Ruff over that full retained production manifest,
-not only the M0 subset. Keep the lists literal and auditable; do not run Ruff
-over the dirty/untracked research tree and do not weaken `ruff.toml` or add
-per-file ignores.
-
-After the source fixes, this exact locally reconstructed set must pass:
+**Critical static checks** now runs default Ruff over the complete retained
+production manifest — all 50 `bsm3` paths the four documentation steps cover —
+plus the three M0 test files, replacing the two-file M0 subset. Lists stay
+literal and auditable; `ruff.toml` unchanged; no per-file ignore; the
+dirty/untracked research tree excluded.
 
 ```bash
 rg '^            bsm3/.*\.py' .github/workflows/actions.yml \
-  | sed -e 's/^ *//' -e 's/ *\\$//' \
-  | sort -u \
+  | sed -e 's/^ *//' -e 's/ *\\$//' | sort -u \
   | xargs conda run -n bsm3_py312_main python -m ruff check
 ```
 
-The five existing literal workflow Ruff commands must also still pass.
+→ 50 paths, **All checks passed**.
 
-## E. Required verification
+## Regressions, each verified to fail at `b60f0c0`
 
-Run and report:
+| Test | Module | Guards |
+| --- | --- | --- |
+| `test_geometry_factory_parity_between_the_two_entry_points` | `test_e175_driver_configuration.py` | identical components/intersections; design-variable ownership; caller expressions captured **by identity** in the coefficient builder |
+| `test_geometry_parameterization_rejects_wrong_variable_names` | same | missing and unexpected keys each reported |
+| `test_mesh_motion_volume_backend_calls_the_current_pipeline_api` | `test_geometry_volume_mpi.py` | patches the pipeline with a current-signature fake, executes build/forward, asserts it received `input_files`, `geometry`, `config` and returned the selected volume output |
+| `test_mesh_motion_volume_backend_rejects_the_removed_keyword` | same | clean break on `model_files` |
+| `test_rank0_chain_constructs_the_backend_through_the_current_api` | `test_dafoam_csdl.py` | runs `build_cfd_analysis_rank0` itself, mocking only the volume-point read and the downstream custom operation |
+| `test_run_dafoam_gmsh_communicator_annotations_resolve_without_mpi` | same | runtime hint resolution, structural satisfaction, no eager import, no `noqa` |
 
-1. `git diff --check b60f0c0 HEAD`.
-2. Changed paths are a subset of the literal allowlist.
-3. The new factory-parity, backend-execution, rank-0-construction, and
-   runtime-type-hint regressions, each named in the handoff.
-4. These five modules together, which Codex measured at 150 before this turn:
+None requires a CAD asset, volume mesh, MPI, or DAFoam.
 
-   ```bash
-   conda run -n bsm3_py312_main python -m pytest -q \
-     tests/test_boundary_surface_movement.py \
-     tests/test_dafoam_csdl.py \
-     tests/test_e175_driver_configuration.py \
-     tests/test_geometry_volume_mpi.py \
-     tests/test_preprocessing_plotting.py
-   ```
+## Verification
 
-5. The exact derivative/N-gon guard remains 6:
+| # | Gate | Result |
+| --- | --- | --- |
+| 1 | `git diff --check b60f0c0 HEAD` | empty |
+| 2 | Changed paths ⊆ allowlist | yes, exactly the 8 above |
+| 3 | The six new regressions | all pass here, all fail at `b60f0c0` |
+| 4 | Five modules (150 before) | **156 passed** = 150 + exactly the 6 new tests |
+| 5 | Derivative / N-gon guard | **exactly 6 passed** |
+| 6 | Five literal workflow Ruff commands | all **All checks passed** |
+| 7 | Reconstructed production manifest | 50 paths, **All checks passed** |
+| 8 | Clean clone at `e47d07f`, `pytest -q tests` | **208 passed, 1 skipped**, 631.62 s; clone status empty afterwards |
+| 9 | Preservation | 8/8 pre-existing byte-identical; untracked 394 → 394, none removed or adopted |
 
-   ```bash
-   conda run -n bsm3_py312_main python -m pytest -q \
-     tests/test_derivative_gate.py \
-     tests/test_ngon_affine_operator.py \
-     tests/test_ngon_affine_load_step.py
-   ```
+The clone's 202 → 208 movement is exactly the six new regressions, and the one
+skip is the pre-existing local R4 check whose inputs are intentionally
+untracked.
 
-6. All five literal workflow Ruff commands.
-7. Default Ruff over the complete retained production manifest, reconstructed
-   by the command in part D: zero findings.
-8. A fresh clone at the implementation commit, installed through the existing
-   Python-3.12 main environment strategy, running `python -m pytest -q tests`;
-   report its exact result and require empty clone status afterward.
-9. Confirm the eight pre-existing modified files remain byte-identical and the
-   untracked set is unchanged.
+The Turn-58 R4 and E175 numerical runs were not repeated: none of these changes
+touches the surface pipeline those gates exercise.
 
-The Turn-58 R4 and E175 numerical runs do not need repeating: none of these
-changes touches their surface pipeline. DAFoam tests remain unnecessary; the
-new mock-backed tests guard the construction/API boundary that was broken.
+## Root cause of the escape, for the record
 
-## Commit and handoff
+Turn 58 measured the four `F821` findings, verified they were identical at the
+base commit, and reported them as pre-existing lint outside CI coverage. The
+measurement was right and the judgement was wrong: those names *were* the
+broken chain. Establishing that a finding is pre-existing says nothing about
+whether it is harmless. The expanded critical Ruff gate now makes the same
+class of breakage fail CI rather than depend on a reviewer noticing.
 
-Make exactly two commits:
+## Deviations
 
-1. source, tests, and workflow;
-2. `PLAN.md`, `LOG.md`, and `CODEX_NEXT.md`.
+None. Nothing outside the two allowlists changed, no dependency was installed,
+no other repository was touched, DAFoam/OpenFOAM/VortexAD/real-MPI were not
+run, and every accepted Turn-58 API correction is unchanged.
 
-In the handoff, lead with whether the rank-0 chain now constructs through the
-current API, then give the two hashes, literal changed-path inventory, focused
-test counts, 6-test derivative/N-gon result, all Ruff results, clean-clone
-result, and preservation proof. Call out every deviation. Mark M1.7 and M1 as
-ready for Codex acceptance, never as self-accepted.
+## Decision requested
+
+Accept M1.7 and close M1.

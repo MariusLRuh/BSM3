@@ -4248,3 +4248,115 @@ retained production manifest. No real DAFoam, OpenFOAM, VortexAD, or dependency
 installation is required.
 
 Status:    closed
+
+---
+
+## Turn 59 — Claude, implementer, 2026-09-25
+Scope:     M1.7 rank-0 chain correction — restore the retained STEP→surface→volume API
+Base:      b60f0c0
+Commits:   e47d07f (source, tests, workflow), docs commit follows
+Status:    M1.7 and M1 ready for Codex acceptance — NOT accepted by the implementer
+
+**The rank-0 geometry-to-volume chain now constructs through the current API.**
+
+### What Turn 58 got wrong
+
+Turn 58 measured four `F821` findings, checked that they were identical at the
+base commit, and reported them as pre-existing lint that CI did not cover. The
+check was accurate and the conclusion was wrong: those four names *were* the
+defect. `build_cfd_analysis_rank0` referenced a parameterization factory that
+did not exist, and `run_dafoam_gmsh` annotated three callables against a
+module-global `MPI` that was never imported. Confirming a finding is
+pre-existing says nothing about whether it is harmless, and I did not follow
+the reference to see what it meant.
+
+Codex's review also found a second, related break that no lint rule reports:
+`MeshMotionVolumeBackend` accepted `model_files` while `run_mesh_motion` takes
+`input_files`, and `_build_model` passed **both** removed keywords,
+`model_files=` and `geometry_parameterization=`. M1.1 renamed the public API and
+left the retained rank-0 chain behind.
+
+### A. One current parameterization factory
+
+`create_geometry_parameterization_from_variables(variables)` is restored on the
+current `GeometryModel` API. Both entry points now call one private
+`_populate_e175_geometry` helper, so the wing, tail, fuselage, and two
+intersection declarations exist once:
+
+- `create_geometry_model()` still creates and registers the six driver design
+  variables with their existing values, bounds, and scalers, then populates.
+- `create_geometry_parameterization_from_variables()` registers no design
+  variables, owns no recorder, and uses the caller's expressions as supplied.
+- The mapping is validated against `GEOMETRY_VARIABLE_NAMES`, reporting missing
+  and unexpected names separately rather than ignoring either.
+- `build_cfd_analysis_rank0` passes the real function; no alias was added.
+
+### B. Backend migrated to the current public API
+
+`MeshMotionVolumeBackend.__init__` takes `input_files` and stores
+`_input_files`; `_build_model` calls
+`run_mesh_motion(recorder=…, input_files=…, geometry=…, config=…,
+aerodynamic_analysis=None, aerodynamic_volume_method=…)`. Both retained call
+sites are updated, in `cfd_mesh_dafoam_analysis` and `e175_derivative_ladder`.
+No compatibility alias: the removed spelling raises `TypeError`, and a test
+pins that.
+
+### C. Optional-MPI annotations made real
+
+The three annotations now use a private `runtime_checkable` `_Communicator`
+protocol describing only `rank`, `size`, `Barrier`, and `bcast` — what this
+module actually touches. `typing.get_type_hints` resolves for all three
+callables with no mpi4py installed, a real `MPI.Comm` satisfies the protocol
+structurally, `mpi4py` is still imported lazily inside `main`, and no `noqa`
+suppression was added.
+
+### D. CI coverage hole closed
+
+**Critical static checks** now runs the default Ruff selection over the
+complete retained production manifest — all 50 `bsm3` paths the four
+documentation steps cover — plus the three M0 test files, replacing the
+two-file M0 subset. The list is literal and auditable, `ruff.toml` is
+untouched, no per-file ignore was added, and the dirty/untracked research tree
+is excluded. The reconstruction command from the prompt now yields 50 paths and
+reports **All checks passed**.
+
+### Regressions, each verified to fail at `b60f0c0`
+
+| Test | Guards |
+| --- | --- |
+| `test_geometry_factory_parity_between_the_two_entry_points` | identical components/intersections; registered entry point owns the six design variables, the other owns none; caller expressions captured **by identity** in the coefficient builder |
+| `test_geometry_parameterization_rejects_wrong_variable_names` | missing and unexpected keys each reported |
+| `test_mesh_motion_volume_backend_calls_the_current_pipeline_api` | patches the pipeline with a current-signature fake, executes the build/forward path, asserts the fake received `input_files`, `geometry`, and `config` and returned the selected volume output |
+| `test_mesh_motion_volume_backend_rejects_the_removed_keyword` | clean break on `model_files` |
+| `test_rank0_chain_constructs_the_backend_through_the_current_api` | runs `build_cfd_analysis_rank0` itself, mocking only the volume-point read and the downstream custom operation, and checks the constructor keyword and the real factory object |
+| `test_run_dafoam_gmsh_communicator_annotations_resolve_without_mpi` | runtime hint resolution, structural satisfaction, no eager import, no `noqa` |
+
+None requires a CAD asset, volume mesh, MPI, or DAFoam.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| `git diff --check b60f0c0 HEAD` | empty |
+| Changed paths | exactly the 8 implementation-allowlist paths |
+| Five modules (150 before this turn) | **156 passed** = 150 + exactly the 6 new tests |
+| Derivative / N-gon guard | **exactly 6 passed** |
+| Five literal workflow Ruff commands | all **All checks passed** |
+| Reconstructed production manifest (50 paths), default Ruff | **All checks passed** |
+| Clean clone at `e47d07f`, full `tests` | **208 passed, 1 skipped** in 631.62 s; `git status --porcelain` empty afterwards |
+| Pre-existing modified files | 8/8 byte-identical |
+| Untracked set | 394 → 394, none removed or adopted |
+
+The Turn-58 R4 and E175 numerical runs were not repeated: none of these changes
+touches the surface pipeline those gates exercise.
+
+### Deviations
+
+None. Nothing outside the two allowlists changed, no dependency was installed,
+no other repository was touched, DAFoam/OpenFOAM/VortexAD/real-MPI were not
+run, and every accepted Turn-58 API correction is unchanged.
+
+M1.7 and M1 are **ready for Codex acceptance** and are not accepted by the
+implementer.
+
+Status:    closed
