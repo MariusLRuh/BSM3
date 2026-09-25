@@ -5423,3 +5423,98 @@ the four external mutations remain user-authorized. The M4.2 prompt remains
 preserved verbatim at `38cd0bf`.
 
 Status:    closed
+
+---
+
+## Turn 72 — Codex implements the GAMMA identity and HTML-only alpha, 2026-09-25
+Scope:     M5.1 / M6.1 repository preparation
+Base:      `a7e0434` (corrected prompt); implementation comparison base `6068892`
+Status:    Implemented in `d04dc8f`; ready for Claude review, not self-accepted
+
+### User correction to the planning ruling
+
+During implementation the user corrected the expansion to **GAMMA —
+Geometry-Aware Mesh Movement Analysis**. This supersedes the Turn-70 planning
+expansion, *Geometry Adaptation for Multidisciplinary Modeling and Analysis*.
+The display name and every technical identifier remain as ruled:
+
+```text
+display             GAMMA
+repository slug     GAMMA-MDO
+distribution        gamma-mdo
+import namespace    bsm3 (unchanged)
+Read the Docs slug  gamma-mdo
+version             0.2.0a1
+```
+
+The implementation changes 16 allowlisted paths. The package directory does
+not move, no alias or compatibility package is added, and the only edit under
+`bsm3/` is the version string in `bsm3/__init__.py`.
+
+### Packaging and hosted-documentation preparation
+
+The built artifact is `gamma_mdo-0.2.0a1-py3-none-any.whl`. `pip show
+gamma-mdo` reports version `0.2.0a1`, the GAMMA-MDO repository URL, and the
+Geometry-Aware Mesh Movement Analysis summary. From `/tmp`, a disposable
+Python 3.12 venv layered on the validated dependency stack imports `bsm3` from
+site-packages and reports `0.2.0a1`.
+
+A genuinely empty venv installs the wheel but cannot import it because NumPy
+is absent. That is consistent with the deliberate `install_requires=[]`
+contract and the documented prerequisite-first installation sequence; no
+project dependency was installed to disguise it. Claude should rule explicitly
+whether the validated-stack disposable venv satisfies the Turn-71 artifact
+gate.
+
+`.readthedocs.yaml` now uses `formats: []`: Read the Docs still builds its
+default HTML output, while the unverified PDF and HTMLZIP formats remain
+disabled. The build still installs only `docs/requirements.txt` and does not
+import the geometry stack.
+
+### Test and audit results
+
+| Gate | Result |
+| --- | --- |
+| Supported-surface stale-name grep | 0 lines |
+| Old distribution declaration grep | 0 lines |
+| Tracked Python files importing `bsm3` | 53 before / 53 after |
+| Historical collaboration grep | `CODEX_KICKOFF.md:1`, `CODEX_NEXT.md:1`, `LOG.md:40`, `PLAN.md:8` matching lines; reported, not rewritten |
+| Full non-integration suite | **228 passed, 9 deselected** |
+| Boundary-surface core | **45 passed** |
+| E175 fast | **16 passed, 5 deselected** |
+| Derivative / N-gon three-file guard | **exactly 6 passed** |
+| Full E175 triangle + quad-panel guards | **2 passed, 19 deselected** |
+| Documentation tests | **12 passed** |
+| Sphinx 9.1.0, `-W --keep-going` | **passed** |
+| Five workflow Ruff groups | **all passed** |
+| Default Ruff on changed Python paths | **passed** |
+| Clean clone at `d04dc8f` | strict docs + 12 tests passed; status empty |
+
+The line-131 test docstring was ruled to describe the import namespace and now
+says it reads the export list without importing ``bsm3``. The other three
+authorized edits update the project assertion, both public-export markers,
+and the negative recorder-ownership guard. No assertion was added, deleted,
+weakened, or reordered.
+
+After the implementation commit the user's tree returned exactly to 8 modified
+tracked files and 393 untracked entries. The dirty diff SHA-256 is
+`981318561a10dff8e9d723540902b6d2560875b29656a0b59f0803cbff116177` and the
+sorted untracked-list SHA-256 is
+`c38fd93dc32ecf7f927fc612c1079bd9786c19f6c1f74b4f8e69d28aaa44da60`, both
+identical to the pre-turn baselines.
+
+### External actions still reserved for the user
+
+- Confirm `GAMMA-MDO` is available in the authenticated GitHub account, then
+  rename the repository.
+- Import the Read the Docs project under `gamma-mdo` and add its webhook.
+- Create and push `v0.2.0a1`, activate that version on Read the Docs, and set
+  the intended default version.
+- Reserve or publish `gamma-mdo` on PyPI.
+
+No external action was performed. The PyPI and RTD 404 responses establish
+only that the names appeared unoccupied when checked; they reserve nothing.
+The unauthenticated GitHub result remains inconclusive for a private owner
+namespace.
+
+Status:    ready for Claude review
