@@ -1,135 +1,131 @@
-# Claude Turn 75 — review M4.2
+# Codex Turn 76 — M7.1: restore CI lint coverage for the M4.2 modules
 
-Codex implemented M4.2 in `027a890` and recorded the handoff in the following
-documentation commit. Review independently; do not accept Codex's measurements
-without reproducing the relevant gates, and do not implement unrelated work in
-the same turn.
+Claude accepted **M4.2 in Turn 75 and closed M4**. This is the one narrow
+correction that acceptance deferred. Codex implements; Claude reviews. Do not
+self-accept.
 
-## Review boundary
+```text
+TURN76_BASE = fb833d5
+```
 
-Implementation base: `699ad9a`
+Preserve the user's dirty tree exactly: **8 modified tracked files and 393
+untracked entries**, verified with:
 
-Implementation commit: `027a890`
+```bash
+git diff | shasum -a 256
+# 981318561a10dff8e9d723540902b6d2560875b29656a0b59f0803cbff116177
+git status --porcelain | grep '^??' | cut -c4- | sort | shasum -a 256
+# c38fd93dc32ecf7f927fc612c1079bd9786c19f6c1f74b4f8e69d28aaa44da60
+```
 
-The implementation commit must contain exactly these 11 paths:
+## The gap
+
+M4.2 added five Python files. **None appears in any of the five literal Ruff
+path lists in `.github/workflows/actions.yml`:**
 
 ```text
 bsm3/core/boundary_surface_movement/panel_aerodynamics.py
 bsm3/core/boundary_surface_movement/fuel_burn.py
-bsm3/core/boundary_surface_movement/__init__.py
-bsm3/mesh_motion.py
 examples/e175_fuel_burn_optimization.py
 tests/test_panel_aerodynamics.py
 tests/test_fuel_burn.py
-docs/src/integrations.md
-docs/src/api.md
-docs/src/examples.md
-requirements.txt
 ```
 
-The handoff commit may change only:
+All five are clean today under both default Ruff and `--select D` — Claude ran
+them directly, which is why this did not block acceptance. The defect is CI
+coverage: nothing would catch a future regression in them. The workflow was
+correctly outside M4.2's allowlist, so Codex was right to report rather than
+silently edit it.
+
+## Literal implementation allowlist — exactly one path
+
+```text
+.github/workflows/actions.yml
+```
+
+Documentation commit, separately:
 
 ```text
 docs/overhaul/PLAN.md
 docs/overhaul/LOG.md
-docs/overhaul/MANIFEST.md
 docs/overhaul/CODEX_NEXT.md
 ```
 
-Preserve the user's eight modified tracked files and 393 untracked entries.
-The expected hashes are:
+Everything else is prohibited. Do not touch source, tests, examples, docs
+pages, packaging, or the curated assets. If you believe another path is
+required, stop and report instead of widening.
 
-```text
-dirty diff:     981318561a10dff8e9d723540902b6d2560875b29656a0b59f0803cbff116177
-untracked list: c38fd93dc32ecf7f927fc612c1079bd9786c19f6c1f74b4f8e69d28aaa44da60
-```
+## Part A — required additions
 
-## Review questions
+Add both production modules to **two** steps, keeping each list's existing
+alphabetical ordering and line-continuation style exactly:
 
-1. **Pinned API.** Confirm from the official repository, without installing or
-   running VortexAD, that revision
-   `8c5bc86fda5fa1e359fecde24c6c6e8527c773b5` exports `PanelMethod`,
-   `TE_detection`, and `find_cell_adjacency`, and that the adapter's constructor,
-   grid insertion, output declaration, and evaluation calls match that revision.
-2. **Optional boundary.** Confirm importing `bsm3.mesh_motion` and
-   `bsm3.core.boundary_surface_movement` does not import or require VortexAD.
-   The actionable error must arise only when `build_panel_aerodynamics` is
-   called. `setup.py`, `requirements-ci.txt`, and the workflow must be unchanged.
-3. **Public-result discipline.** Confirm the adapter reads only public
-   `MeshMotionResult` fields, leaves recorder ownership with the caller,
-   validates projection convergence and the intersection/reprojection
-   partition, supports triangle/quad panels only, and does not reach into
-   private setup/system objects.
-4. **Real API assumptions.** Trace the pinned implementation far enough to
-   decide whether the baseline-connectivity, duplicate-node, trailing-edge,
-   output-name, scalar-shape, and `reuse_AIC=True` assumptions are honest. Pay
-   particular attention to whether a full symmetric E175 mesh and its mixed
-   triangle/quad blocks are accepted exactly as passed.
-5. **Fuel model.** Re-derive the Breguet expression, signs, units, standard
-   gravity value, and derivative direction. Decide whether returning fuel
-   **weight** in newtons is sufficiently clear and whether the illustrative
-   mission/parasite-drag constants are labelled strongly enough.
-6. **Composed derivative.** Inspect and run the fake-solver test. It must carry
-   the mesh-shape design amplitude through panel `CL`/`CDi`, total drag, and
-   `compute_fuel_burn`, then compare the fuel scalar's analytic derivative with
-   centered finite differences. A test ending at an arbitrary aerodynamic
-   scalar is not sufficient.
-7. **Example contract.** Confirm the example has five clear stages, no CLI or
-   local dataclasses, uses only the public `mm` API, keeps the caller-owned
-   recorder active through the panel/fuel graph, leaves
-   `derivative_check.enabled` false, registers the lift constraint and fuel
-   objective explicitly, and fails actionably when VortexAD is absent.
-8. **Documentation.** Confirm the API export inventory remains exact and the
-   integrations/example pages make no claim that a real VortexAD solve or
-   geometry-to-fuel optimization has been executed in this repository.
-9. **Workflow gap.** The five new Python files are not in the workflow's
-   literal Ruff path lists. Rule whether this should block M4.2 or become the
-   next narrowly scoped workflow correction. Do not silently edit the workflow
-   during this review.
-10. **Out-of-tree import.** Reproduce the installed import from outside the
-    checkout. The supported surface is `import bsm3.mesh_motion as mm`, not
-    package-root `from bsm3 import PanelCondition`; do not mistake the latter
-    for a promised export.
+1. **Critical static checks** (default Ruff over the retained production
+   manifest) — add `panel_aerodynamics.py` and `fuel_burn.py`.
+2. **Numpydoc checks for the surface-motion core** (`--select D`) — add the
+   same two files.
 
-## Gates to reproduce
+Both belong beside their existing neighbours under
+`bsm3/core/boundary_surface_movement/`.
 
-Use the validated Python 3.12 environment. Do not install or execute VortexAD,
-DAFoam, OpenFOAM, or MPI.
+## Part B — rule on the other three, do not guess
 
-```bash
-python -m pytest -q tests/test_panel_aerodynamics.py tests/test_fuel_burn.py
-python -m pytest -q tests -m "not integration"
-python -m pytest -q tests/test_boundary_surface_movement.py
-python -m pytest -q tests/test_e175_example.py -m "not integration"
-python -m pytest -q tests/test_derivative_gate.py tests/test_ngon_affine_operator.py tests/test_ngon_affine_load_step.py
-python -m pytest -q tests/test_e175_example.py -k "test_triangle_wall_at_full_deformation_scale or test_quad_panel_introduces_no_new_inverted_elements"
-python -m pytest -q tests/test_documentation.py
-python -m sphinx -W --keep-going -b html docs /tmp/gamma-turn75-docs-html
-```
+`examples/` is covered by no Ruff step, and only three of roughly twenty test
+files are listed (`test_derivative_gate.py`, `test_curated_assets.py`,
+`test_e175_driver_configuration.py`). That selectivity looks deliberate rather
+than accidental.
 
-Expected numerical counts from Codex, to verify rather than assume:
+Decide whether `tests/test_panel_aerodynamics.py` and `tests/test_fuel_burn.py`
+should join that curated set, and whether the example warrants a step at all.
+**State your reasoning and what principle you applied**, then implement your
+ruling. Either answer is acceptable if it is argued; silently adding all three,
+or silently adding none, is not.
 
-- new tests: **12 passed, 1 skipped**;
-- full non-integration: **240 passed, 10 deselected**;
-- core: **45 passed**;
-- fast E175: **16 passed, 5 deselected**;
-- derivative/N-gon: **exactly 6 passed**;
-- full-scale M4.1 guards: **2 passed, 19 deselected**;
-- documentation: **12 passed**;
-- strict Sphinx: success.
+## Verification
 
-Run the five literal workflow Ruff commands unchanged, default Ruff on all
-changed Python paths, and `ruff check --select D` on the five new Python files.
-Reproduce a fresh-clone strict documentation build and an out-of-tree installed
-import with VortexAD absent; require an empty clean-clone status.
+1. `git diff --check "$TURN76_BASE"..HEAD`; changed paths ⊆ the allowlist.
+2. Run all five workflow Ruff commands **as literally written in the edited
+   file** — extract and execute them, do not retype from memory. Report each
+   step's result and its path count before and after.
+3. Confirm the two production modules now appear in exactly the two intended
+   steps, and report where any test file landed under your Part B ruling.
+4. Run the workflow's non-Ruff steps that do not need absent dependencies, so
+   an editing slip in the YAML cannot pass unnoticed. At minimum, parse the
+   file and confirm it is valid YAML with the same step names and count as at
+   `TURN76_BASE`.
+5. Full non-integration suite: baseline **240 passed, 10 deselected**.
+6. `tests/test_documentation.py` (12) and the strict Sphinx 9.1.0 build — both
+   should be unaffected, which is the point of checking them.
+7. Preservation: both SHA-256 hashes above recomputed and matching, 8 modified,
+   393 untracked.
 
-## Ruling and handoff
+Do not install dependencies. Do not run DAFoam, OpenFOAM, VortexAD, or MPI.
 
-If all claims hold, accept M4.2 and close M4. If a defect is found, issue one
-narrow corrective prompt with a literal allowlist and preserve every accepted
-M4.1/GAMMA behavior. Record the exact VortexAD pin, pass/skip counts, the Ruff
-workflow-coverage ruling, clean-clone proof, and preservation hashes.
+## Out of scope — do not start
 
-Do not rename the repository, create/push a tag, create a Read the Docs project,
-publish to PyPI, start the blocked `bsm3` namespace migration, or begin M3.
-Those remain separate user-authorized/external or later milestones.
+- **External publication.** The GitHub rename, Read the Docs project and
+  webhook, the `v0.2.0a1` tag, and any PyPI reservation remain user-authorized.
+  Claude confirmed in Turn 75 that the repository side of hosting is already
+  complete; nothing in this turn changes that.
+- **M5.2**, the `bsm3` → `gamma_mdo` namespace migration, stays blocked on the
+  user resolving the 304 untracked entries and 8 modified files under `bsm3/`.
+- **M3** archive and history pruning remains last.
+- Do not reopen any accepted M4.1, M4.2, or GAMMA behavior.
+
+## One item to record while you are here
+
+Claude's Turn-75 review found an upstream hazard worth carrying in `LOG.md`,
+not fixing: pinned VortexAD's `PanelMethod.__init__` does
+`options_dict = default_input_dict` with **no copy** and then mutates it, so
+constructing a solver mutates VortexAD's module-level defaults for the
+process. GAMMA's exposure is low because the adapter passes all 11 keys it
+depends on explicitly, but a second `build_panel_aerodynamics` call in one
+process inherits the first call's unspecified settings. Record it; do not work
+around it in this turn.
+
+## Handoff
+
+Two commits: the workflow, then the collaboration documents. Report both
+hashes, the Part B ruling and its reasoning, each Ruff step's before/after path
+count, the YAML-validity check, the suite and documentation results, and the
+preservation hashes. Mark M7.1 ready for Claude review, never self-accepted.
