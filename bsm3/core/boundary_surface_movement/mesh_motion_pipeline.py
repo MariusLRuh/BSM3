@@ -1254,6 +1254,41 @@ def _global_surface_ids(
     )[0].astype(np.int64)
 
 
+def _global_intersection_vertices(
+    setup: _GeometrySetup,
+    half_mesh_ids,
+    half_mesh_vertices,
+    global_ids: np.ndarray,
+) -> np.ndarray:
+    """Align intersection coordinates with complete-mesh vertex IDs."""
+    local_ids = np.asarray(half_mesh_ids, dtype=np.int64).reshape(-1)
+    local_vertices = np.asarray(half_mesh_vertices, dtype=float)
+    if local_vertices.shape != (local_ids.size, 3):
+        raise ValueError(
+            "Intersection vertex IDs and coordinates must be aligned row-wise."
+        )
+
+    row_for_local_id = np.full(
+        setup.initial_vertices.shape[0], -1, dtype=np.int64
+    )
+    row_for_local_id[local_ids] = np.arange(local_ids.size, dtype=np.int64)
+    if setup.symmetry_split is None:
+        source_ids = global_ids
+        signs = None
+    else:
+        source_ids = setup.symmetry_split.gather_index[global_ids]
+        signs = setup.symmetry_split.mirror_sign[global_ids]
+
+    rows = row_for_local_id[source_ids]
+    if np.any(rows < 0):
+        raise ValueError(
+            "Complete-mesh intersection IDs do not map to retained-half "
+            "coordinates."
+        )
+    vertices = local_vertices[rows]
+    return vertices if signs is None else vertices * signs
+
+
 def _surface_vertex_classification(
     setup: _GeometrySetup,
     system: _SurfaceSystem,
@@ -1359,7 +1394,13 @@ def _write_diagnostic_dump(
     for name, vertex_ids in classification.component_vertex_ids.items():
         payload[f"{name}_ids"] = vertex_ids
     for name, vertex_ids in classification.intersection_vertex_ids.items():
-        payload[f"{name}_vertices"] = setup.intersections[name].vertices
+        intersection = setup.intersections[name]
+        payload[f"{name}_vertices"] = _global_intersection_vertices(
+            setup,
+            intersection.vertex_ids,
+            intersection.vertices,
+            vertex_ids,
+        )
         payload[f"{name}_ids"] = vertex_ids
     np.savez(dump_path, **payload)
     print(f"[diagnostics] dumped arrays to {dump_path}")

@@ -433,6 +433,7 @@ def test_quad_panel_introduces_no_new_inverted_elements(tmp_path):
         surface_mesh_file=QUAD_SURFACE_FILE,
         cache_directory=tmp_path / "quad-cache",
         polygon_regularization_weight=0.3,
+        diagnostic_dump=tmp_path / "quad-diagnostics.npz",
     )
 
     initial = set(
@@ -464,6 +465,22 @@ def test_quad_panel_introduces_no_new_inverted_elements(tmp_path):
     assert result.surface_fold_count == 0
     # Real quad cells activate the affine model.
     assert result.surface_ngon_mode_count > 0
+
+    # The production panel is a full symmetric mesh. Its diagnostic archive
+    # must therefore keep every mirror-expanded seam ID paired with the
+    # corresponding mirror-expanded coordinate in complete-mesh order.
+    with np.load(tmp_path / "quad-diagnostics.npz") as dump:
+        for name, vertex_ids in (
+            result.surface_vertex_classification.intersection_vertex_ids.items()
+        ):
+            np.testing.assert_array_equal(dump[f"{name}_ids"], vertex_ids)
+            assert dump[f"{name}_vertices"].shape == (vertex_ids.size, 3)
+            np.testing.assert_allclose(
+                dump[f"{name}_vertices"],
+                dump["initial_vertices"][vertex_ids],
+                rtol=0.0,
+                atol=1.0e-12,
+            )
 
 
 @pytest.mark.integration

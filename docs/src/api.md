@@ -56,7 +56,10 @@ keyword-only.
 
 `recorder` is the active CSDL recorder, **owned by the caller**. `run` never
 starts or stops it, so mesh motion composes inside a larger graph. It is
-retained on the result for convenience.
+retained on the result for convenience. The recorder must have inline
+execution enabled: the pipeline consumes forward values and cached projection
+state while constructing the result, and raises `RuntimeError` if that state
+is unavailable.
 
 `aerodynamic_analysis` is an optional downstream builder that receives the
 selected volume coordinates; `aerodynamic_volume_method` selects which volume
@@ -139,7 +142,17 @@ if motion.derivative_check.enabled:
 ```
 
 Call `mm.select_fd_objective` directly when constructing a custom workflow
-that does not use the `MeshMotion.derivative_check` settings.
+that does not use the `MeshMotion.derivative_check` settings. The convenience
+path calls `set_as_objective()` whenever `derivative_check.enabled` is true;
+inside a larger optimization graph this replaces any objective already
+registered with the recorder, so leave the debug flag disabled and manage the
+FD objective explicitly in that case.
+
+When `diagnostic_dump` is set, the NPZ uses zero-based complete-input-mesh
+indexing. For each declared intersection, `{name}_ids` and
+`{name}_vertices` have equal row counts and are aligned one-to-one in global
+vertex order; on a symmetric solve, both retained and mirror-expanded rows are
+included.
 
 ## `MeshMotionResult`
 
