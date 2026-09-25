@@ -5518,3 +5518,127 @@ The unauthenticated GitHub result remains inconclusive for a private owner
 namespace.
 
 Status:    ready for Claude review
+
+---
+
+## Turn 72 — Claude, reviewer/planner, 2026-09-25
+Scope:     Review the GAMMA identity and HTML-only alpha
+Base:      a7e0434
+Reviewed:  d04dc8f (implementation), caafe9f (handoff)
+Status:    **M4.1a / M4.1b ACCEPTED.** No external action taken.
+
+### Scope
+
+`d04dc8f` touches exactly the 16 declared paths and `caafe9f` exactly the three
+collaboration documents; `git diff --check` clean. `bsm3/__init__.py` changes
+only its version line. `tests/test_documentation.py` changes only the four
+authorized locations — 115, 155-156, the line-131 docstring, and 219 — with no
+other assertion added, removed, weakened, or reordered. No `gamma_mdo`
+directory, alias module, or namespace move exists.
+
+### The six review questions
+
+1. **Corrected expansion.** *Geometry-Aware Mesh Movement Analysis* appears on
+   both surfaces where a reader first meets the name, `README.md:3` and
+   `docs/index.md:3`. The superseded expansion survives only in
+   `docs/overhaul/` historical prose, which the checklist permits, and both
+   `PLAN.md` and `LOG.md` record the supersession explicitly rather than
+   silently overwriting it. The distribution/import split is stated plainly and
+   up front in both files, so no reader has to discover it by failing.
+2. **Packaging.** `name="gamma-mdo"`, `find_packages()` still resolving `bsm3`,
+   `url` pointing at `GAMMA-MDO`, `install_requires=[]` retained with its
+   DAFoam rationale intact, and the version derived from source.
+3. **Read the Docs.** `formats: []` with a comment that says PDF and HTMLZIP
+   stay disabled until independently tested — an accurate statement, not a
+   claim of validation. `fail_on_warning: true` and the docs-only install are
+   untouched.
+4. **The negative guard survived.** Line 219 now rejects
+   `"GAMMA never starts or stops a recorder"`. This was the failure mode worth
+   catching: left alone it would have kept passing while protecting nothing.
+5. **Line 131 ruled correctly.** It describes the *import*, which is unchanged,
+   so it reads "without importing ``bsm3``" rather than being swept into the
+   rebrand. That is the right reading.
+6. **Packaging proof — sufficient, and the only correct method.** I verified
+   both halves separately rather than accepting the argument. In an **isolated**
+   venv the wheel installs and `pip show` resolves, but `import bsm3` fails with
+   `ModuleNotFoundError: No module named 'numpy'` — exactly as
+   `install_requires=[]` implies. In a venv **layered on the validated stack**
+   the same wheel imports from `/tmp` and reports `0.2.0a1`. Packaging identity
+   and import behavior are therefore each proven where they can be. Making a
+   bare venv succeed would require adding install dependencies, which would
+   contradict the deliberate contract protecting DAFoam environments. No
+   alternative method is needed.
+
+### Independently reproduced
+
+| Gate | Result |
+| --- | --- |
+| `tests -m "not integration"` | 228 passed, 9 deselected |
+| `tests/test_boundary_surface_movement.py` | 45 passed |
+| `tests/test_e175_example.py -m "not integration"` | 16 passed, 5 deselected |
+| Derivative / N-gon three-file guard | **exactly 6 passed** |
+| Both E175 integration guards | **2 passed**, 19 deselected, 164.62 s |
+| `tests/test_documentation.py` | 12 passed |
+| Strict Sphinx 9.1.0, working tree | build succeeded |
+| Clean clone of `d04dc8f` | 12 docs tests, strict build succeeded, status empty |
+| Five literal workflow Ruff groups | all passed |
+| Default Ruff on the four changed `.py` files | passed |
+| Wheel | `gamma_mdo-0.2.0a1-py3-none-any.whl` |
+| Out-of-tree import | `0.2.0a1`, loaded from site-packages |
+| Stale `BSM3` on the supported surface | **zero** |
+| Import-namespace files | **53 → 53** |
+| `name="bsm3"` in `setup.py` | gone |
+
+Preservation exact: 8 modified, 393 untracked, dirty diff SHA-256
+`981318…6177`, untracked-list SHA-256 `c38fd93…da60` — both matching the
+recorded baselines byte for byte.
+
+External boundary respected and verified: zero local tags, zero remote tags,
+nothing pushed (110 commits ahead of `origin/main`), and the remote URL is
+still `MariusLRuh/BSM3`.
+
+### Two things to surface, neither blocking
+
+1. **`-MDO` no longer maps to the expansion.** The superseded expansion
+   contained "Multidisciplinary"; *Geometry-Aware Mesh Movement Analysis* does
+   not, so the `GAMMA-MDO` / `gamma-mdo` suffix now reads as a leftover rather
+   than an acronym component. It remains defensible as a **disambiguator** —
+   bare `gamma` is occupied on PyPI, `gamma-mdo` is verified unoccupied, and
+   the project genuinely serves MDO, as `setup.py`'s own docstring still says.
+   **Recommendation: keep `gamma-mdo`.** Changing it would discard a verified
+   available name for cosmetic tidiness. This is the user's call, not a defect.
+2. **The documentation is now ahead of reality.** `setup.py` and
+   `HPC_DAFOAM_INSTALL.md` point at `github.com/MariusLRuh/GAMMA-MDO`, which
+   does not exist until the rename. That is inherent to preparing a rename
+   before performing it, and GitHub redirects the old URL afterwards — but it
+   makes the repository rename the **first** external action, not an optional
+   one. Until it happens, the documented clone command 404s.
+
+Cosmetic only, not worth a turn: scratch paths such as `/tmp/bsm3-docs-html`
+and `bsm3_e175_example_cache` still read `bsm3`. They are arbitrary temporary
+directory names, not branding, and every other lowercase `bsm3` on the
+supported surface is the import namespace or a real file path.
+
+### User's external checklist
+
+None of these were performed and none may be performed by an agent:
+
+1. Rename the GitHub repository `BSM3` → `GAMMA-MDO` — **do this first**, as
+   tracked docs already reference it.
+2. Import the Read the Docs project under slug `gamma-mdo` and add its webhook.
+3. Create and push `v0.2.0a1`, then activate it on RTD and set the default
+   version.
+4. Reserve or publish `gamma-mdo` on PyPI.
+
+A 404 on PyPI or RTD means apparently unoccupied, not reserved, and the
+unauthenticated GitHub result stays inconclusive for a private namespace.
+
+### Next
+
+M4.2 is reissued verbatim from `38cd0bf`, with only its turn number, base
+hash, and one stale line updated — the line that called GAMMA "M3 guidance",
+which the adoption superseded. Order: M4.2 → M6.2 external publication
+whenever the user chooses → M5.2 namespace migration, blocked on the dirty
+tree → M3 archive/history pruning, last.
+
+Status:    closed
