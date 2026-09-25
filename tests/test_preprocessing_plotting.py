@@ -839,3 +839,172 @@ def test_highlight_mesh_nodes_accepts_point_coordinates_with_negative_values():
 
     assert len(elements) == 1
     np.testing.assert_allclose(elements[0]["mesh"].points[0], [1.0, -2.0, 3.0])
+
+
+# ---------------------------------------------------------------------------
+# Safe polygon .npz surface format
+# ---------------------------------------------------------------------------
+# Interleaved widths so a width-sorted reader cannot pass by accident.
+_NPZ_FACES = [
+    [0, 1, 2],
+    [1, 2, 3, 4, 5],
+    [0, 2, 3],
+    [2, 3, 4, 5],
+    [0, 1, 3, 4, 5, 6],
+    [3, 4, 5],
+    [1, 2, 4, 5],
+]
+
+
+def _write_polygon_npz(path, faces=None, **overrides):
+    """Write a safe polygon archive, optionally corrupting one field."""
+    faces = _NPZ_FACES if faces is None else faces
+    offsets = np.zeros(len(faces) + 1, dtype=np.int64)
+    flat = []
+    for index, face in enumerate(faces):
+        ids = np.asarray(face, dtype=np.int64)
+        flat.append(ids)
+        offsets[index + 1] = offsets[index] + ids.size
+    arrays = {
+        "vertices": np.arange(21, dtype=np.float64).reshape(7, 3),
+        "connectivity": (
+            np.concatenate(flat).astype(np.int64)
+            if flat
+            else np.empty(0, dtype=np.int64)
+        ),
+        "offsets": offsets,
+    }
+    arrays.update(overrides)
+    arrays = {k: v for k, v in arrays.items() if v is not None}
+    np.savez_compressed(path, **arrays)
+    return path
+
+
+def test_import_mesh_reads_polygon_npz_in_original_face_order(tmp_path):
+    """Preserve the archive's face order while grouping blocks by width."""
+    mesh = preprocessing.import_mesh(_write_polygon_npz(tmp_path / "s.npz"))
+
+    assert mesh.vertices.shape == (7, 3)
+    assert mesh.metadata["reader"] == "bsm3_safe_npz"
+    assert mesh.metadata["source"].endswith("s.npz")
+
+    # Original order, not width-sorted.
+    assert list(mesh.cell_types) == [
+        "triangle",
+        "polygon5",
+        "triangle",
+        "quad",
+        "polygon6",
+        "triangle",
+        "quad",
+    ]
+    assert mesh.connectivity.shape == (7,)
+    for index, face in enumerate(_NPZ_FACES):
+        np.testing.assert_array_equal(
+            mesh.connectivity[index], np.asarray(face, dtype=np.int64)
+        )
+
+    # Blocks regroup the same faces in ascending width order.
+    assert list(mesh.cell_blocks) == ["triangle", "quad", "polygon5", "polygon6"]
+    np.testing.assert_array_equal(
+        mesh.cell_blocks["triangle"], [[0, 1, 2], [0, 2, 3], [3, 4, 5]]
+    )
+    np.testing.assert_array_equal(
+        mesh.cell_blocks["quad"], [[2, 3, 4, 5], [1, 2, 4, 5]]
+    )
+    np.testing.assert_array_equal(mesh.cell_blocks["polygon5"], [[1, 2, 3, 4, 5]])
+    np.testing.assert_array_equal(
+        mesh.cell_blocks["polygon6"], [[0, 1, 3, 4, 5, 6]]
+    )
+
+
+def test_import_mesh_polygon_npz_uniform_width_is_two_dimensional(tmp_path):
+    """Return a 2-D connectivity when every face has the same width."""
+    path = _write_polygon_npz(tmp_path / "u.npz", faces=[[0, 1, 2], [2, 3, 4]])
+    mesh = preprocessing.import_mesh(path)
+
+    assert mesh.connectivity.shape == (2, 3)
+    assert mesh.connectivity.dtype == np.int64
+    assert list(mesh.cell_types) == ["triangle", "triangle"]
+    assert list(mesh.cell_blocks) == ["triangle"]
+
+
+def test_import_mesh_polygon_npz_refuses_object_arrays(tmp_path):
+    """Reject an archive that can only be decoded by executing pickle."""
+    path = tmp_path / "object.npz"
+    np.savez_compressed(
+        path,
+        vertices=np.zeros((3, 3), dtype=np.float64),
+        connectivity=np.array([[0, 1, 2], [0, 1]], dtype=object),
+        offsets=np.array([0, 3], dtype=np.int64),
+    )
+    with pytest.raises(ValueError):
+        preprocessing.import_mesh(path)
+
+    # The reader must not fall back to an allow_pickle=True load.
+    with pytest.raises(ValueError):
+        np.load(path, allow_pickle=False)["connectivity"]
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        ({"extra": np.zeros(1)}, "exactly"),
+        ({"vertices": None}, "exactly"),
+        ({"vertices": np.zeros((7, 2), dtype=np.float64)}, "shape"),
+        (
+            {"vertices": np.full((7, 3), np.nan, dtype=np.float64)},
+            "non-finite",
+        ),
+        ({"vertices": np.zeros((7, 3), dtype=np.str_)}, "numeric"),
+        ({"connectivity": np.zeros((2, 3), dtype=np.int64)}, "flat array"),
+        ({"offsets": np.array([1, 4], dtype=np.int64)}, "start at 0"),
+        ({"offsets": np.array([0, 3], dtype=np.int64)}, "end at the connectivity"),
+    ],
+)
+def test_import_mesh_polygon_npz_rejects_malformed_archives(
+    tmp_path, overrides, message
+):
+    """Give a clear ValueError for each representative schema violation."""
+    path = _write_polygon_npz(tmp_path / "bad.npz", **overrides)
+    with pytest.raises(ValueError, match=message):
+        preprocessing.import_mesh(path)
+
+
+def test_import_mesh_polygon_npz_rejects_short_faces_and_bad_node_ids(tmp_path):
+    """Reject a two-node face span and an out-of-range node ID."""
+    short = _write_polygon_npz(
+        tmp_path / "short.npz", faces=[[0, 1, 2], [3, 4]]
+    )
+    with pytest.raises(ValueError, match="fewer than 3 nodes"):
+        preprocessing.import_mesh(short)
+
+    out_of_range = _write_polygon_npz(
+        tmp_path / "range.npz", faces=[[0, 1, 2], [3, 4, 99]]
+    )
+    with pytest.raises(ValueError, match="node ID outside"):
+        preprocessing.import_mesh(out_of_range)
+
+
+def test_import_trusted_polygon_pickle_remains_an_opt_in_boundary(tmp_path):
+    """Keep the explicit trusted-pickle compatibility path working."""
+    import pickle
+
+    path = tmp_path / "trusted.pkl"
+    with path.open("wb") as stream:
+        pickle.dump(
+            {
+                "points": np.arange(15, dtype=float).reshape(5, 3),
+                "connectivity": [[0, 1, 2], [1, 2, 3, 4]],
+            },
+            stream,
+        )
+
+    mesh = preprocessing.import_trusted_polygon_pickle(path)
+    assert mesh.vertices.shape == (5, 3)
+    assert set(mesh.cell_blocks) == {"triangle", "quad"}
+    assert mesh.metadata["reader"] == "bsm3_polygon_pickle"
+
+    # It is reachable only on purpose: suffix dispatch still refuses pickles.
+    with pytest.raises(ValueError, match="Unsupported mesh format"):
+        preprocessing.import_mesh(path)

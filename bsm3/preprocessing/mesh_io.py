@@ -67,7 +67,8 @@ def import_mesh(mesh_file: str | Path) -> MeshData:
     Parameters
     ----------
     mesh_file : str or Path
-        Path to a Gmsh ``.msh`` or STL ``.stl`` mesh file.
+        Path to a Gmsh ``.msh``, STL ``.stl``, or safe polygon ``.npz`` mesh
+        file. The format is chosen from the suffix alone.
 
     Returns
     -------
@@ -78,6 +79,11 @@ def import_mesh(mesh_file: str | Path) -> MeshData:
     -----
     If ``meshio`` is installed, it is used for ``.msh`` files. Otherwise,
     ASCII Gmsh 2.x files are handled by the built-in parser.
+
+    ``.npz`` is read with ``allow_pickle=False``, so it cannot execute code on
+    load. Pickle formats are deliberately **not** part of suffix dispatch; see
+    :func:`import_trusted_polygon_pickle` for the explicit, opt-in
+    compatibility path.
     """
     path = Path(mesh_file)
     suffix = path.suffix.lower()
@@ -89,9 +95,11 @@ def import_mesh(mesh_file: str | Path) -> MeshData:
         from .stl import _import_stl
 
         return _import_stl(path)
+    if suffix == ".npz":
+        return _import_npz(path)
     raise ValueError(
         f"Unsupported mesh format {suffix!r}. Supported formats: "
-        ".msh, .stl."
+        ".msh, .stl, .npz."
     )
 
 
@@ -139,6 +147,162 @@ def _as_mesh_data(mesh) -> MeshData:
             metadata=dict(getattr(mesh, "metadata", {}) or {}),
         )
     raise TypeError("mesh must be a MeshData object, MeshData-like object, or mesh file path.")
+
+
+def _polygon_cell_type(width: int) -> str:
+    """Return the cell-type label for a polygon of ``width`` nodes."""
+    return {3: "triangle", 4: "quad"}.get(int(width), f"polygon{int(width)}")
+
+
+def _import_npz(path: Path) -> MeshData:
+    """Read a safe polygon surface from a ``.npz`` archive.
+
+    The archive is loaded with ``allow_pickle=False``, so a malicious file
+    cannot execute code. It must hold exactly three non-object arrays:
+    ``vertices`` of shape ``(n_vertices, 3)``, a flattened integer
+    ``connectivity``, and an integer ``offsets`` of shape ``(n_faces + 1,)``
+    where ``connectivity[offsets[i]:offsets[i + 1]]`` is face ``i``.
+
+    The decoded face sequence is preserved: ``MeshData.connectivity`` and
+    ``MeshData.cell_types`` follow the archive's original face order, while
+    ``MeshData.cell_blocks`` regroups the same faces by width in ascending
+    order. Those two orderings deliberately differ for a mixed-width surface.
+
+    Parameters
+    ----------
+    path : Path
+        Archive to read.
+
+    Returns
+    -------
+    MeshData
+        Polygonal surface with ``triangle``, ``quad``, and ``polygonN`` cell
+        blocks. Higher-order polygons are never triangulated.
+
+    Raises
+    ------
+    ValueError
+        If the archive cannot be read without pickle, its key set is not
+        exactly the three required names, a dtype or dimension is wrong, a
+        vertex is non-finite, the offsets do not start at zero or end at the
+        connectivity length, a face spans fewer than three nodes, there are no
+        faces, or a node ID falls outside the vertex range.
+    """
+    try:
+        archive = np.load(path, allow_pickle=False)
+    except ValueError as error:
+        raise ValueError(
+            f"{path} is not a readable NumPy archive without pickle: {error}"
+        ) from error
+
+    required = ("vertices", "connectivity", "offsets")
+    with archive:
+        present = tuple(archive.files)
+        if set(present) != set(required):
+            raise ValueError(
+                f"A safe polygon .npz must contain exactly {required}; "
+                f"{path} contains {tuple(sorted(present))}."
+            )
+        try:
+            raw = {name: archive[name] for name in required}
+        except ValueError as error:
+            raise ValueError(
+                f"{path} stores an object array, which cannot be loaded "
+                f"without pickle: {error}"
+            ) from error
+
+    vertices = raw["vertices"]
+    connectivity = raw["connectivity"]
+    offsets = raw["offsets"]
+
+    for name in required:
+        if raw[name].dtype == object:
+            raise ValueError(f"{path} field {name!r} must not be an object array.")
+
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError(
+            f"{path} field 'vertices' must have shape (n_vertices, 3); "
+            f"got {vertices.shape}."
+        )
+    if not np.issubdtype(vertices.dtype, np.number):
+        raise ValueError(f"{path} field 'vertices' must be numeric.")
+    vertices = np.asarray(vertices, dtype=float)
+    if not np.all(np.isfinite(vertices)):
+        raise ValueError(f"{path} field 'vertices' contains a non-finite value.")
+
+    if connectivity.ndim != 1:
+        raise ValueError(
+            f"{path} field 'connectivity' must be a flat array; "
+            f"got shape {connectivity.shape}."
+        )
+    if not np.issubdtype(connectivity.dtype, np.integer):
+        raise ValueError(f"{path} field 'connectivity' must have an integer dtype.")
+    if offsets.ndim != 1:
+        raise ValueError(
+            f"{path} field 'offsets' must be a flat array; got shape {offsets.shape}."
+        )
+    if not np.issubdtype(offsets.dtype, np.integer):
+        raise ValueError(f"{path} field 'offsets' must have an integer dtype.")
+
+    connectivity = np.asarray(connectivity, dtype=np.int64)
+    offsets = np.asarray(offsets, dtype=np.int64)
+
+    if offsets.size < 2:
+        raise ValueError(f"{path} must describe at least one face.")
+    if offsets[0] != 0:
+        raise ValueError(f"{path} field 'offsets' must start at 0; got {offsets[0]}.")
+    if offsets[-1] != connectivity.size:
+        raise ValueError(
+            f"{path} field 'offsets' must end at the connectivity length "
+            f"{connectivity.size}; got {offsets[-1]}."
+        )
+    widths = np.diff(offsets)
+    if np.any(widths < 3):
+        raise ValueError(
+            f"{path} describes a face with fewer than 3 nodes; "
+            "every face span must be monotonic and at least 3 wide."
+        )
+    if connectivity.size and (
+        connectivity.min() < 0 or connectivity.max() >= vertices.shape[0]
+    ):
+        raise ValueError(
+            f"{path} field 'connectivity' contains a node ID outside "
+            f"[0, {vertices.shape[0] - 1}]."
+        )
+
+    faces = [
+        connectivity[int(offsets[index]):int(offsets[index + 1])]
+        for index in range(widths.size)
+    ]
+
+    # Original archive order, for consumers that need the source face sequence.
+    unique_widths = np.unique(widths)
+    if unique_widths.size == 1:
+        ordered_connectivity = np.vstack(faces).astype(np.int64)
+    else:
+        ordered_connectivity = np.asarray(faces, dtype=object)
+    cell_types = np.asarray(
+        [_polygon_cell_type(int(width)) for width in widths], dtype=object
+    )
+
+    # Width-grouped blocks in ascending width order.
+    cell_blocks = {
+        _polygon_cell_type(int(width)): np.asarray(
+            [face for face in faces if face.size == int(width)], dtype=np.int64
+        )
+        for width in unique_widths
+    }
+
+    return MeshData(
+        vertices=vertices,
+        connectivity=ordered_connectivity,
+        cell_types=cell_types,
+        cell_blocks=cell_blocks,
+        node_ids=None,
+        element_ids=None,
+        element_tags=None,
+        metadata={"reader": "bsm3_safe_npz", "source": str(path)},
+    )
 
 
 def import_trusted_polygon_pickle(mesh_file: str | Path) -> MeshData:

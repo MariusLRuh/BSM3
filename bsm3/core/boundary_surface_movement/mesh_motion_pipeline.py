@@ -30,42 +30,39 @@ from .mesh_motion_config import (
 )
 
 
-def _load_polygon_surface_pickle(path):
-    import pickle
-    with open(path, "rb") as stream:
-        data = pickle.load(stream)
-    points = np.asarray(data["points"], dtype=float)
-    connectivity = [np.asarray(face, dtype=np.int64).reshape(-1) for face in data["connectivity"]]
-    return points, connectivity
+def _ordered_surface_cells(mesh):
+    """Return the surface cells in the imported mesh's own stored order.
 
+    Faces are kept as polygons *without* triangulating. The CFD wall is
+    hex-dominant; fan-triangulating an n-gon invents sliver cells that report
+    spurious inversions and hands the elastic solve the wrong (diagonal) edges.
 
-def _cfd_mesh_from_pickle(path):
-    """Build a MeshData from the polygonal CFD surface pickle.
+    This reads ``mesh.connectivity``, so it preserves whatever face sequence the
+    reader decoded. For the curated ``.npz`` wall that is the original source
+    face order, which is what the fold diagnostics are defined against. It is
+    deliberately *not* the same ordering as :func:`_cfd_surface_cells`, which
+    regroups by width for the quality and inversion reports.
 
-    The faces are kept as polygons *without* triangulating.  The mesh is
-    hex-dominant; fan-triangulating an n-gon invents
-    sliver cells that report spurious inversions and hands the elastic solve the
-    wrong (diagonal) edges.  Instead group faces by vertex count into uniform
-    blocks (``triangle``/``quad``/``polygonN``): the elasticity assembler and the
-    quality/inversion check both iterate ``cell_blocks`` and are n-gon general.
+    Parameters
+    ----------
+    mesh
+        Imported surface, whose ``connectivity`` is either a uniform-width 2-D
+        array or an object array of variable-width rows.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        One ``int64`` node-ID array per face, in stored order.
     """
-    from bsm3.preprocessing import MeshData
-    points, connectivity = _load_polygon_surface_pickle(path)
-    sizes = np.array([face.size for face in connectivity], dtype=np.int64)
-
-    cell_blocks = {}
-    for k in np.unique(sizes):
-        key = {3: "triangle", 4: "quad"}.get(int(k), f"polygon{int(k)}")
-        cell_blocks[key] = np.asarray(
-            [face for face in connectivity if face.size == k], dtype=np.int64
-        )
-    mesh = MeshData(
-        vertices=points,
-        connectivity=np.empty(0, dtype=np.int64),
-        cell_types=np.array([], dtype=object),
-        cell_blocks=cell_blocks,
-    )
-    return mesh, connectivity
+    connectivity = mesh.connectivity
+    if connectivity is None:
+        return []
+    array = np.asarray(connectivity, dtype=object) if connectivity.dtype == object else np.asarray(connectivity, dtype=np.int64)
+    if array.dtype == object:
+        return [np.asarray(face, dtype=np.int64).reshape(-1) for face in array]
+    if array.ndim != 2:
+        return []
+    return [np.asarray(row, dtype=np.int64).reshape(-1) for row in array]
 
 
 def _cfd_surface_cells(mesh):
@@ -631,11 +628,12 @@ def _setup_geometry_and_mesh(
             f"{paths['volume_mesh_file'].name}",
             flush=True,
         )
-    if paths["mesh_file"].suffix.lower() in (".pickle", ".pkl"):
-        mesh, polygon_connectivity = _cfd_mesh_from_pickle(paths["mesh_file"])
-    else:
-        mesh = bsm3.preprocessing.import_mesh(paths["mesh_file"])
-        polygon_connectivity = _cfd_surface_cells(mesh)
+    # Always load through the generic safe importer; suffix dispatch there
+    # covers .msh, .stl, and the safe polygon .npz. The fold diagnostics use the
+    # reader's stored face order, while the quality/inversion reports use the
+    # width-grouped order from _cfd_surface_cells.
+    mesh = bsm3.preprocessing.import_mesh(paths["mesh_file"])
+    polygon_connectivity = _ordered_surface_cells(mesh)
     block_summary = ", ".join(
         f"{key}:{np.asarray(block).shape[0]}"
         for key, block in mesh.cell_blocks.items()

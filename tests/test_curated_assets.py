@@ -1,12 +1,13 @@
 """Validation of the small E175 asset set retained for overhaul examples."""
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from bsm3.core.boundary_surface_movement import NgonAffineAssembler
-from bsm3.preprocessing import import_mesh, import_trusted_polygon_pickle
+from bsm3.preprocessing import import_mesh
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +23,23 @@ R1_WALL_MAP_FILE = (
 QUAD_PANEL_FILE = (
     ASSET_DIRECTORY / "embraer_175_quad_dominant_symmetric_no_winglets.msh"
 )
-MIXED_NGON_FILE = ASSET_DIRECTORY / "wall_surface.pkl"
+MIXED_NGON_FILE = ASSET_DIRECTORY / "wall_surface.npz"
+
+# Decoded-array evidence for the safe curated wall surface, measured from the
+# trusted legacy pickle before it was removed. These pin the exact arrays and
+# the original face order, not merely the aggregate topology.
+MIXED_NGON_ARRAY_SHA256 = {
+    "vertices": "76ceaadd74a93eeb4153e51b784a4d4ff6dfa7079382510652cf8070ed3aad1a",
+    "connectivity": "971e53f7bc46fd694955be2f00b1b4355e513d5e066c5ebe1499b72a463b4ff3",
+    "offsets": "eff2e0fe7cd471ab5bac922b5290a0560db4d8d72d4fc3b2917ff70582083509",
+}
+MIXED_NGON_FACE_COUNTS = {3: 5, 4: 565, 5: 7891, 6: 28190, 7: 3927, 8: 126, 9: 2}
+MIXED_NGON_WIDTH_TRANSITIONS = 14720
+
+
+def _array_sha256(array: np.ndarray) -> str:
+    """Hash an array's raw bytes in C order."""
+    return hashlib.sha256(np.ascontiguousarray(array).tobytes()).hexdigest()
 CURATED_ASSETS = (
     STEP_FILE,
     R1_WALL_FILE,
@@ -40,6 +57,89 @@ def test_generic_mesh_import_does_not_dispatch_pickle():
     """Require callers to opt in explicitly before executing pickle data."""
     with pytest.raises(ValueError, match="Unsupported mesh format"):
         import_mesh(Path("untrusted.pkl"))
+    with pytest.raises(ValueError, match="Unsupported mesh format"):
+        import_mesh(Path("untrusted.pickle"))
+
+
+@requires_curated_assets
+def test_curated_wall_surface_is_a_safe_npz_archive():
+    """Pin the decoded arrays of the curated wall surface, loaded without pickle."""
+    with np.load(MIXED_NGON_FILE, allow_pickle=False) as archive:
+        assert sorted(archive.files) == ["connectivity", "offsets", "vertices"]
+        vertices = archive["vertices"]
+        connectivity = archive["connectivity"]
+        offsets = archive["offsets"]
+
+    assert vertices.shape == (79207, 3)
+    assert vertices.dtype == np.float64
+    assert connectivity.shape == (239385,)
+    assert connectivity.dtype == np.int64
+    assert offsets.shape == (40707,)
+    assert offsets.dtype == np.int64
+
+    assert _array_sha256(vertices) == MIXED_NGON_ARRAY_SHA256["vertices"]
+    assert _array_sha256(connectivity) == MIXED_NGON_ARRAY_SHA256["connectivity"]
+    assert _array_sha256(offsets) == MIXED_NGON_ARRAY_SHA256["offsets"]
+
+    assert offsets[0] == 0
+    assert offsets[-1] == connectivity.size
+    assert int(connectivity.min()) == 0
+    assert int(connectivity.max()) == 79206
+
+    widths = np.diff(offsets)
+    counts = {int(w): int(c) for w, c in zip(*np.unique(widths, return_counts=True))}
+    assert counts == MIXED_NGON_FACE_COUNTS
+    assert widths.size == 40706
+    # Source-order evidence: a width-sorted archive would have only 6 transitions.
+    assert int(np.count_nonzero(widths[1:] != widths[:-1])) == (
+        MIXED_NGON_WIDTH_TRANSITIONS
+    )
+
+
+@requires_curated_assets
+def test_curated_wall_surface_imports_in_original_face_order():
+    """Check generic import preserves face order while grouping blocks by width."""
+    mesh = import_mesh(MIXED_NGON_FILE)
+    assert mesh.metadata["reader"] == "bsm3_safe_npz"
+
+    with np.load(MIXED_NGON_FILE, allow_pickle=False) as archive:
+        connectivity = archive["connectivity"]
+        offsets = archive["offsets"]
+
+    assert mesh.connectivity.shape == (40706,)
+    assert mesh.cell_types.shape == (40706,)
+
+    widths = np.diff(offsets)
+    expected_types = [
+        {3: "triangle", 4: "quad"}.get(int(w), f"polygon{int(w)}") for w in widths
+    ]
+    assert list(mesh.cell_types) == expected_types
+
+    # Every face, in the archive's own order.
+    for index in (0, 1, 2, 17, 4096, 20003, 40704, 40705):
+        expected = connectivity[offsets[index]:offsets[index + 1]]
+        np.testing.assert_array_equal(mesh.connectivity[index], expected)
+    assert all(
+        np.array_equal(
+            mesh.connectivity[i], connectivity[offsets[i]:offsets[i + 1]]
+        )
+        for i in range(widths.size)
+    )
+
+    # Blocks regroup the same faces by ascending width.
+    assert list(mesh.cell_blocks) == [
+        "triangle",
+        "quad",
+        "polygon5",
+        "polygon6",
+        "polygon7",
+        "polygon8",
+        "polygon9",
+    ]
+    assert {
+        int(block.shape[1]): int(block.shape[0])
+        for block in mesh.cell_blocks.values()
+    } == MIXED_NGON_FACE_COUNTS
 
 
 @pytest.mark.integration
@@ -56,7 +156,7 @@ def test_curated_e175_surface_assets_load_with_expected_topology():
     assert quad_panel.vertices.shape == (14411, 3)
     assert quad_panel.cell_blocks["quad"].shape == (13696, 4)
 
-    mixed_ngon = import_trusted_polygon_pickle(MIXED_NGON_FILE)
+    mixed_ngon = import_mesh(MIXED_NGON_FILE)
     assert mixed_ngon.vertices.shape == (79207, 3)
     assert mixed_ngon.cell_blocks["polygon6"].shape == (28190, 6)
     assert {"quad", "polygon5", "polygon6", "polygon7"} <= set(
@@ -83,7 +183,7 @@ def test_curated_r1_wall_map_matches_the_triangle_wall():
 @requires_curated_assets
 def test_curated_mixed_surface_has_the_expected_hourglass_mode_count():
     """Assemble, but do not solve, every trusted wall-surface N-gon mode."""
-    mixed_ngon = import_trusted_polygon_pickle(MIXED_NGON_FILE)
+    mixed_ngon = import_mesh(MIXED_NGON_FILE)
     expected_modes = sum(
         (block.shape[1] - 3) * block.shape[0]
         for block in mixed_ngon.cell_blocks.values()
