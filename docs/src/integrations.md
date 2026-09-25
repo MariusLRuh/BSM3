@@ -70,11 +70,12 @@ given geometry and mesh populates `cache_directory`; later runs reuse it. Set
 `MeshMotion(rebuild_setup_cache=True)` to force a rebuild. Point the cache
 somewhere writable and outside your source checkout.
 
-**`RuntimeError` about the recorder, or derivatives that vanish.** BSM3 never
-starts or stops a recorder. Create it, start it, pass the *same* recorder to
-`mm.run`, and stop it in a `finally` block. Every design variable your
-coefficients depend on must belong to that recorder; a variable created under a
-different recorder is not part of the graph BSM3 evaluates.
+**`RuntimeError` about the recorder, or derivatives that vanish.** The public
+`GeometryModel` and `mm.run` interfaces do not create, start, or stop the
+caller's recorder. Create it, start it, pass the *same* recorder to `mm.run`,
+and stop it in a `finally` block. Every design variable your coefficients
+depend on must belong to that recorder; a variable created under a different
+recorder is not part of the graph BSM3 evaluates.
 
 **Coefficient shape or patch-ID errors.** Component topology and coefficient
 layout must stay compatible with the STEP component found by `search_name`.
@@ -82,9 +83,10 @@ These are validated after the component is imported and the canonical patch IDs
 are known, so a mismatch surfaces during the run rather than at the
 `add_component` call.
 
-**Plotting fails or is unavailable.** Visualization is optional and PyVista is
-imported lazily. A headless environment that omits it still runs the pipeline
-and its tests; leave `Visualization(enabled=False)`.
+**A headless run should not open a plot.** Interactive BSM3 visualization is
+optional; leave `Visualization(enabled=False)`. PyVista is nevertheless part
+of the validated environment because the pinned LFS package currently imports
+it eagerly, even when no interactive window is requested.
 
 **New inverted elements after a large deformation.** Compare the three
 inversion reports: an element inverted in the input mesh was not introduced by

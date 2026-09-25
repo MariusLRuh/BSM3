@@ -19,7 +19,6 @@ ruff==0.9.10
 # CSDL_alpha now tracks official upstream main rather than the HgXe fork.
 # This commit provides the CustomExplicitOperationBeta API BSM3 depends on.
 csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git@73a9efd1033016a835779db10a9b9e81ed2254ce
-lsdo_b_splines_cython @ git+https://github.com/LSDOlab/lsdo_b_splines_cython.git@9444ea81f6fc58dabd68559323b13f0d549a383d
 
 # lsdo_function_spaces is installed separately with --no-deps in CI so its
-# unpinned CSDL dependency cannot replace the validated fork above.
+# broad dependency ranges cannot replace the validated versions above.

@@ -23,8 +23,8 @@ describe a motion than supply coefficients. They are not the generic mechanism.
 ## Who owns what
 
 The external parameterization owns its design variables **and** the recorder.
-BSM3 never starts or stops a recorder and never registers design variables on
-your behalf when you use `add_component`.
+`GeometryModel` and `mm.run` never create, start, or stop that recorder, and
+`add_component` never registers design variables on your behalf.
 
 ```python
 import csdl_alpha as csdl

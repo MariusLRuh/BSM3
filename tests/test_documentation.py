@@ -12,6 +12,7 @@ warnings as errors, runs in CI and in the documentation environment.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -25,6 +26,7 @@ INDEX = DOCS / "index.md"
 README = REPOSITORY_ROOT / "README.md"
 READTHEDOCS = REPOSITORY_ROOT / ".readthedocs.yaml"
 DOCS_REQUIREMENTS = DOCS / "requirements.txt"
+CI_REQUIREMENTS = REPOSITORY_ROOT / "requirements-ci.txt"
 WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "actions.yml"
 
 CSDL_REVISION = "73a9efd1033016a835779db10a9b9e81ed2254ce"
@@ -125,25 +127,51 @@ def test_configuration_targets_python_312_and_real_version():
     assert match, "conf.py's version regex must still match bsm3/__init__.py"
 
 
-def test_public_api_names_documented_are_real():
-    """Every public name the API page promises must exist in the namespace."""
+def _literal_public_exports() -> set[str]:
+    """Read the literal ``mesh_motion.__all__`` without importing BSM3."""
+    module_path = REPOSITORY_ROOT / "bsm3" / "mesh_motion.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), module_path)
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    ]
+    assert len(assignments) == 1, "mesh_motion.py must define one literal __all__"
+    value = ast.literal_eval(assignments[0].value)
+    assert isinstance(value, (list, tuple))
+    assert all(isinstance(name, str) for name in value)
+    assert len(value) == len(set(value)), "mesh_motion.__all__ has duplicates"
+    return set(value)
+
+
+def test_public_api_inventory_exactly_matches_exports():
+    """Keep the explicit API inventory equal to the module's public exports."""
     api = (DOCS_SOURCE / "api.md").read_text(encoding="utf-8")
-    module = (REPOSITORY_ROOT / "bsm3" / "mesh_motion.py").read_text(
-        encoding="utf-8"
+    match = re.search(
+        r"<!-- BEGIN BSM3 PUBLIC EXPORTS -->\n(.*?)\n"
+        r"<!-- END BSM3 PUBLIC EXPORTS -->",
+        api,
+        re.DOTALL,
     )
-    exported = set(re.findall(r'^\s*"([A-Za-z_][A-Za-z0-9_]*)",', module, re.M))
-    assert exported, "could not read __all__ from bsm3/mesh_motion.py"
+    assert match, "api.md must contain the delimited public export inventory"
 
-    for name in exported:
-        assert name in api, f"{name} is exported but undocumented"
+    lines = [line.strip() for line in match.group(1).splitlines() if line.strip()]
+    documented = []
+    for line in lines:
+        item = re.fullmatch(r"- `mm\.([A-Za-z_][A-Za-z0-9_]*)`", line)
+        assert item, f"malformed public export inventory line: {line!r}"
+        documented.append(item.group(1))
+    assert len(documented) == len(set(documented)), "duplicate API inventory item"
 
-    # And the page must not promise names the namespace does not export.
-    promised = set(re.findall(r"`mm\.([A-Za-z_][A-Za-z0-9_]*)", api))
-    assert promised <= exported, promised - exported
+    assert set(documented) == _literal_public_exports()
 
 
 def test_installation_pins_the_validated_stack():
-    """Installation instructions must keep the revisions and the flags."""
+    """Installation must bootstrap the full stack before no-deps installs."""
     getting_started = (DOCS_SOURCE / "getting_started.md").read_text(
         encoding="utf-8"
     )
@@ -152,14 +180,54 @@ def test_installation_pins_the_validated_stack():
     for text in (getting_started, readme):
         assert CSDL_REVISION in text
         assert LFS_REVISION in text
-        # --no-deps protects the pinned CSDL revision from lsdo_function_spaces.
-        assert "--no-deps" in text
-        # BSM3 itself must never resolve or rebuild the surrounding stack.
-        assert "--no-deps --no-build-isolation -e ." in text
+        blocks = re.findall(r"```bash\n(.*?)```", text, re.DOTALL)
+        install_blocks = [
+            block for block in blocks if "requirements-ci.txt" in block
+        ]
+        assert len(install_blocks) == 1
+        install = install_blocks[0]
+        assert "conda create -n bsm3_py312_main python=3.12" in install
+        assert "conda activate bsm3_py312_main" in install
+        assert "python -m pip install -r requirements-ci.txt" in install
+        assert "lsdo_function_spaces @ git+" in install
+        assert "--no-deps" in install
+        assert "--no-deps --no-build-isolation -e ." in install
+        assert "CSDL_alpha.git@" not in install
+        assert install.index("requirements-ci.txt") < install.index(
+            "lsdo_function_spaces @ git+"
+        )
+        assert install.index("lsdo_function_spaces @ git+") < install.index(
+            "--no-deps --no-build-isolation -e ."
+        )
 
-    # Do not claim PyPI availability for BSM3 or either pinned dependency.
-    assert "pip install bsm3" not in getting_started.lower()
-    assert "pip install bsm3" not in readme.lower()
+    requirements = CI_REQUIREMENTS.read_text(encoding="utf-8")
+    assert CSDL_REVISION in requirements
+    # Official LFS 307ad3a is pure Python. The retired extension pins NumPy
+    # 1.26.4 and makes this NumPy-2.0 environment unresolvable from scratch.
+    assert "lsdo_b_splines_cython" not in requirements
+
+
+def test_documentation_avoids_rejected_behavioral_guarantees():
+    """Keep the four reviewed overclaims out of user-facing prose."""
+    normalized = {
+        path: " ".join(path.read_text(encoding="utf-8").split())
+        for path in _user_facing_documents()
+    }
+    for path, text in normalized.items():
+        assert "so the mesh stays valid" not in text, path
+        assert "back exactly on the deformed" not in text, path
+        assert "BSM3 never starts or stops a recorder" not in text, path
+
+    for name in ("examples.md", "api.md"):
+        text = normalized[DOCS_SOURCE / name]
+        assert not re.search(r"print_summary.{0,120}load stepping", text), name
+
+
+def test_readme_marks_the_api_call_shape_as_incomplete():
+    """Prevent the empty GeometryModel skeleton from posing as runnable code."""
+    text = " ".join(README.read_text(encoding="utf-8").split()).lower()
+    assert "call shape, not a standalone example" in text
+    assert "at least one component" in text
 
 
 def test_docs_requirements_are_pinned_and_runtime_free():

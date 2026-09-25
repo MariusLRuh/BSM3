@@ -42,10 +42,10 @@ triangle-only surface simply has no polygon modes for it to constrain.
 
 ## 2. Declare the geometry motion
 
-The recorder is created, started, and stopped **by the caller**. BSM3 never
-starts or stops a recorder and never owns global CSDL state, which is what lets
-mesh motion compose inside a larger graph. Open the `try` immediately so a
-failure in any later stage still stops the recorder.
+The recorder is created, started, and stopped **by the caller**. The public
+`GeometryModel` and `mm.run` interfaces do not create, start, or stop that
+recorder, which is what lets mesh motion compose inside a larger graph. Open
+the `try` immediately so a failure in any later stage still stops the recorder.
 
 ```python
 recorder = csdl.Recorder(inline=True)
@@ -149,8 +149,9 @@ finally:
 result.print_summary()
 ```
 
-`print_summary` reports mesh size, load stepping, fold and inversion counts,
-and elapsed time. The arrays are on the result object:
+`print_summary` reports vertex, cell, and n-gon-mode counts; elapsed time; fold
+and inversion counts; and, when available, degenerate-element and minimum
+scaled-Jacobian quality fields. The arrays are on the result object:
 `result.surface_coordinates` is the final reprojected surface as a CSDL
 variable, with `initial_surface_coordinates` and
 `preprojected_surface_coordinates` alongside it for comparison, plus the

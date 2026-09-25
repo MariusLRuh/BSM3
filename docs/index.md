@@ -2,8 +2,9 @@
 
 BSM3 performs **differentiable boundary-surface mesh motion**. Given a CAD
 outer mould line and a surface mesh that must follow it, BSM3 moves every mesh
-node so the mesh stays valid while the geometry deforms, and it does so through
-a CSDL graph so the whole map carries analytic derivatives.
+node as the geometry deforms, carries analytic derivatives through the CSDL
+graph, and reports mesh-quality and inversion diagnostics so validity is
+checked rather than guaranteed.
 
 The pipeline is:
 

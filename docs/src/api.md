@@ -11,6 +11,28 @@ import bsm3.mesh_motion as mm
 
 Everything below is re-exported from that module.
 
+## Public export inventory
+
+This list is the complete supported namespace. A structural test compares it
+exactly with `bsm3.mesh_motion.__all__`; semantic descriptions and signatures
+are still reviewed against the implementation.
+
+<!-- BEGIN BSM3 PUBLIC EXPORTS -->
+- `mm.DerivativeCheck`
+- `mm.DistanceWeighting`
+- `mm.DistortionPenalty`
+- `mm.GeometryModel`
+- `mm.InputFiles`
+- `mm.MeshMotion`
+- `mm.MeshMotionResult`
+- `mm.PolygonRegularization`
+- `mm.QualityChecks`
+- `mm.SurfaceMotion`
+- `mm.Visualization`
+- `mm.VolumeMotion`
+- `mm.run`
+<!-- END BSM3 PUBLIC EXPORTS -->
+
 ## `run`
 
 ```python
@@ -124,8 +146,9 @@ Returned by `run`. Differentiable outputs plus forward diagnostics.
 | `input_files`, `geometry`, `recorder` | The inputs that produced this result |
 
 The three inversion reports use the same metric, so any two may be compared
-directly. `print_summary()` writes a readable report of mesh size, load
-stepping, fold and inversion counts, and elapsed time.
+directly. `print_summary()` reports vertex, cell, and n-gon-mode counts;
+elapsed time; fold and inversion counts; and, when available,
+degenerate-element and minimum-scaled-Jacobian quality fields.
 
 ```{note}
 Points whose reprojection did not converge are still returned. The reports are

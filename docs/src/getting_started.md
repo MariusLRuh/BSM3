@@ -1,17 +1,21 @@
 # Installation
 
-BSM3 is not on PyPI, and neither are the two geometry dependencies it is
-validated against. Install it from a checkout, into an environment you control.
+Install BSM3 from a checkout into an environment you control. The validated
+setup uses exact Git revisions for CSDL_alpha and lsdo_function_spaces rather
+than relying on whichever releases a package registry currently provides.
 
-BSM3 deliberately declares **no mandatory pip dependencies**. It is designed to
-run inside an existing geometry or DAFoam environment whose MPI, PETSc, NumPy,
-SciPy, and solver versions are under an administrator's control, and a pip
-install must never silently change that stack.
+BSM3 deliberately declares **no mandatory pip dependencies**. Its own install
+therefore uses `--no-deps`, so it does not replace packages in an existing
+geometry or DAFoam environment whose MPI, PETSc, NumPy, SciPy, and solver
+versions are under an administrator's control. The dependency-bootstrap step
+below intentionally installs packages and belongs in a new core/developer
+environment, not an administrator-managed solver environment.
 
 ## Validated core stack
 
-The following combination is the one the test suite and the numerical
-acceptance runs were executed against.
+The following combination is the one the test suite and numerical acceptance
+runs used. This is the exact validated core/developer environment, not a claim
+about the smallest possible runtime dependency set.
 
 | Component | Validated version |
 | --- | --- |
@@ -23,11 +27,16 @@ acceptance runs were executed against.
 | lsdo_function_spaces | `307ad3aabfff31c6fb44ddf51bc0dcc41a60c420` |
 
 ```bash
-python -m pip install \
-  "csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git@73a9efd1033016a835779db10a9b9e81ed2254ce"
+conda create -n bsm3_py312_main python=3.12
+conda activate bsm3_py312_main
 
-# --no-deps is required: lsdo_function_spaces declares an unpinned CSDL
-# dependency that would otherwise replace the validated revision above.
+# Install the complete tested dependency set. requirements-ci.txt contains the
+# exact CSDL_alpha revision shown in the table as well as the tested numerical,
+# geometry, diagnostics, and development packages.
+python -m pip install -r requirements-ci.txt
+
+# Install official LFS without allowing its dependency resolver to replace the
+# validated versions installed in the preceding step.
 python -m pip install --no-deps \
   "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git@307ad3aabfff31c6fb44ddf51bc0dcc41a60c420"
 
@@ -36,17 +45,19 @@ python -m pip install --no-deps \
 python -m pip install --no-deps --no-build-isolation -e .
 ```
 
-Both flag choices are load-bearing:
+Both `--no-deps` choices are load-bearing:
 
-- `--no-deps` on `lsdo_function_spaces` pins CSDL to the validated revision.
+- `--no-deps` on `lsdo_function_spaces` preserves the complete validated stack
+  installed from `requirements-ci.txt`, including the CSDL revision.
 - `--no-deps --no-build-isolation` on BSM3 keeps pip from resolving or
   rebuilding anything in the surrounding environment.
 
 ## Developer extras
 
-The tests and diagnostics additionally use `pytest`, `gmsh`, `meshio`, and
-`pyvista`. Plotting is optional and imported lazily, so a headless environment
-that omits `pyvista` still runs the core pipeline and its tests.
+`requirements-ci.txt` includes the packages used by tests and diagnostics,
+including `pytest`, `meshio`, and PyVista. Interactive BSM3 visualization is
+optional, but PyVista is currently imported eagerly by the pinned LFS package,
+so it remains part of this validated environment even for headless runs.
 
 ## Optional solver environment
 

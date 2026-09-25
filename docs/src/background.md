@@ -7,9 +7,10 @@ This page explains what each pipeline stage does and why the settings exist.
 When a CAD outer mould line deforms, a surface mesh attached to it must follow.
 Moving only the boundary nodes and leaving the interior alone tangles the mesh;
 moving everything rigidly ignores the shape change. BSM3 propagates the motion
-through the mesh graph, then puts every node back exactly on the deformed
-geometry, and keeps the whole map differentiable so it can sit inside an
-optimization.
+through the mesh graph, then reprojects each moved node toward the deformed
+geometry while recording convergence diagnostics. The map remains
+differentiable so it can sit inside an optimization, but a non-converged
+projection is returned rather than silently treated as exact.
 
 ## Stages
 
@@ -42,10 +43,11 @@ Several settings shape that solve:
 
 ### Reprojection
 
-Every moved node is projected back onto the deformed outer mould line, so the
-mesh describes the actual geometry rather than an approximation of it. This
-uses a warm-started Newton solve with candidate ranking across patches and
-patch boundaries.
+Every moved node is evaluated by a projection onto the deformed outer mould
+line. This uses a warm-started Newton solve with candidate ranking across
+patches and patch boundaries. A point is still returned when that solve does
+not converge, so callers must inspect the convergence and quality diagnostics
+rather than assume exact coincidence with the geometry.
 
 ### Quality diagnostics
 

@@ -2,15 +2,28 @@
 
 BSM3 performs **differentiable boundary-surface mesh motion**. Given a CAD
 outer mould line and a surface mesh that must follow it, BSM3 moves every mesh
-node so the mesh stays valid while the geometry deforms, through a CSDL graph
-so the whole map carries analytic derivatives.
+node as the geometry deforms, carries analytic derivatives through the CSDL
+graph, and reports mesh-quality and inversion diagnostics so validity is a
+measured outcome rather than an assumption.
 
 It also provides tetrahedral volume-mesh motion and an optional CSDL/DAFoam
 coupling.
 
 ## Quickstart
 
-`bsm3.mesh_motion` is the intended entry point and is deliberately small.
+The complete tracked E175 example is the quickest executable starting point:
+
+```bash
+python examples/e175_surface_deformation.py
+```
+
+Its first uncached run can take several minutes. All high-level inputs are
+editable in the script's `main` function.
+
+`bsm3.mesh_motion` is the intended library entry point and is deliberately
+small. The following is the call shape, not a standalone example: at least one
+component and its deformed coefficients or built-in motion must be registered
+on `geometry` before `run` is called.
 
 ```python
 from pathlib import Path
@@ -23,10 +36,9 @@ recorder = csdl.Recorder(inline=True)
 recorder.start()
 try:
     geometry = mm.GeometryModel()
-    # Either bring your own deformed coefficients:
-    #     geometry.add_component(name=..., search_name=...,
-    #                            deformed_coefficients=...)
-    # or use the optional built-in helpers, as the E175 example does.
+    # Required before run: register at least one component, either with
+    # geometry.add_component(...) and external deformed coefficients or with
+    # the optional built-in helpers demonstrated by the E175 example.
 
     result = mm.run(
         inputs=mm.InputFiles(
@@ -44,7 +56,8 @@ finally:
 result.print_summary()
 ```
 
-The recorder is owned by the caller: BSM3 never starts or stops it.
+The caller owns the public mesh-motion recorder: `GeometryModel` and `mm.run`
+do not create, start, or stop it.
 
 A complete, runnable example is tracked at
 [`examples/e175_surface_deformation.py`](examples/e175_surface_deformation.py).
@@ -64,18 +77,23 @@ contract, the public API, background, and integration status.
 
 ## Installation
 
-BSM3 is not on PyPI, and neither are its two geometry dependencies. It
-deliberately installs no dependencies automatically, so a pip install cannot
-change an externally managed DAFoam, MPI, or PETSc stack.
+The validated setup installs BSM3 from a checkout and pins its geometry
+dependencies to exact Git revisions. BSM3 deliberately declares no automatic
+dependencies, so its own editable install cannot replace packages in an
+externally managed DAFoam, MPI, or PETSc stack.
 
 The validated stack is Python 3.12 with NumPy 2.0.2, SciPy 1.13.1, and JAX
 0.4.38, against these exact revisions:
 
 ```bash
-python -m pip install \
-  "csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git@73a9efd1033016a835779db10a9b9e81ed2254ce"
+conda create -n bsm3_py312_main python=3.12
+conda activate bsm3_py312_main
 
-# --no-deps keeps the validated CSDL revision above from being replaced.
+# Installs the exact tested dependency set, including CSDL_alpha at
+# 73a9efd1033016a835779db10a9b9e81ed2254ce.
+python -m pip install -r requirements-ci.txt
+
+# LFS is installed separately so it cannot replace the validated stack.
 python -m pip install --no-deps \
   "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git@307ad3aabfff31c6fb44ddf51bc0dcc41a60c420"
 
