@@ -1,193 +1,124 @@
-# Codex Turn 69 — M4.2: tracked VortexAD adapter and fuel-burn example
+# Claude Turn 70 — Plan GAMMA identity and the first Read the Docs alpha
 
-Claude accepted **M4.1 in Turn 68**. Codex resumes as implementer; Claude plans
-and reviews. Do not self-accept.
+M4.1 is accepted. Do **not** begin M4.2 yet. The user has promoted the GAMMA
+identity decision and an initial versioned Read the Docs release ahead of the
+VortexAD/fuel-burn implementation.
 
-Record `TURN69_BASE = e24ff5c` before editing. Preserve the user's dirty tree
-exactly: 8 pre-existing modified tracked files byte-for-byte (including the two
-unstaged edits in `visualize_wing_rotation_deformation.py`) and 393 untracked
-entries. Do not adopt, delete, format, or modify any of them.
+Turn 68's complete M4.2 prompt is preserved verbatim at:
 
-## Goal
-
-Replace the "VortexAD — deferred" section of `docs/src/integrations.md` with a
-real, supported, **tracked** integration: a differentiable panel-method adapter
-driven by the `mm.run` result, plus a fuel-burn objective, plus an optimization
-example. The point of the milestone is an end-to-end analytic derivative from
-geometry design variables through mesh motion and aerodynamics to a fuel-burn
-scalar.
-
-## Hard constraints
-
-1. **Do not install anything.** VortexAD is not in the validated environment
-   and this turn does not add it. Everything tracked must import and test
-   without VortexAD present.
-2. **Do not break the M2 clean-install contract.** `setup.py` keeps
-   `install_requires=[]`. VortexAD is documented as an optional extra in the
-   requirements files, never a base dependency, and never added to
-   `requirements-ci.txt`. M2 cost real effort to make installable; do not
-   regress it.
-3. **Do not run** DAFoam, OpenFOAM, real MPI, or VortexAD itself.
-4. **Do not resurrect the untracked prototypes.** They are reference only.
-5. **Do not rename the package.** `GAMMA` remains M3 guidance.
-6. **Do not start M3.** Release pruning stays separate and last.
-
-## Reference material — read, do not adopt
-
-Three untracked prototypes contain the physics worth reusing. They import
-`e175_mesh_motion_config`, `E175ModelFiles`, and `E175PipelineConfig`, none of
-which still exist, so they do not run:
-
-```text
-bsm3/core/boundary_surface_movement/e175_panel_opt.py
-bsm3/core/boundary_surface_movement/embraer_175_drag_build_up.py
-bsm3/core/boundary_surface_movement/embraer_175_gross_weight_estimation.py
+```bash
+git show 38cd0bf:docs/overhaul/CODEX_NEXT.md
 ```
 
-`e175_panel_opt.py` already uses the correct deferred-import shape —
-`from VortexAD import PanelMethod, TE_detection, find_cell_adjacency` inside a
-function — and already routes through a single-objective selector. Reuse the
-model, not the file. Leave all three untracked and unmodified.
+Do not rewrite or weaken that prompt. Queue it after the identity and docs
+publication milestones.
 
-## Literal implementation allowlist
+## Scope of this turn
 
-```text
-bsm3/core/boundary_surface_movement/panel_aerodynamics.py     (new)
-bsm3/core/boundary_surface_movement/fuel_burn.py              (new)
-bsm3/core/boundary_surface_movement/__init__.py
-bsm3/mesh_motion.py
-examples/e175_fuel_burn_optimization.py                       (new)
-tests/test_panel_aerodynamics.py                              (new)
-tests/test_fuel_burn.py                                       (new)
-docs/src/integrations.md
-docs/src/api.md
-docs/src/examples.md
-requirements.txt
-```
+This is a **planning and ruling turn only**. Inspect the repository and external
+name availability, update `PLAN.md` and `LOG.md`, and replace this file with one
+literal Codex implementation prompt. Do not rename files, imports, the GitHub
+repository, or the Read the Docs project. Do not create a tag, reserve a name,
+push, publish, install dependencies, or alter user-owned dirty files.
 
-Documentation commit, separately:
+## Proposed public identity
 
 ```text
-docs/overhaul/PLAN.md
-docs/overhaul/LOG.md
-docs/overhaul/MANIFEST.md
-docs/overhaul/CODEX_NEXT.md
+Display name:        GAMMA
+Expansion:           Geometry Adaptation for Multidisciplinary Modeling and Analysis
+Repository slug:     GAMMA-MDO
+Python distribution: gamma-mdo
+Python import:       gamma_mdo
+Read the Docs slug:  gamma-mdo
+Candidate first tag: v0.1.0a1
 ```
 
-Stop and report rather than widening this. In particular, do not touch
-`load_stepping.py`, `projection.py`, `mesh_motion_pipeline.py`,
-`mesh_motion_config.py`, `geometry_model.py`, `requirements-ci.txt`,
-`setup.py`, the workflow, or any curated asset.
+The display name and expansion are the leading proposal, not permission to
+assume every technical identifier. Bare `gamma` is already occupied on PyPI
+and is overloaded in this domain. Verify availability of every proposed
+qualified identifier from authoritative sources and distinguish "not found"
+from "reserved successfully"; this turn authorizes no reservation.
 
-## Part A — pinned external revisions
+## Required rulings
 
-Record the exact revisions this integration targets, in the same style the
-CSDL_alpha and lsdo_function_spaces pins already use: repository URL plus a
-full 40-character commit SHA, in `requirements.txt` under a clearly marked
-optional section, and in `MANIFEST.md`.
+### 1. Rename boundary
 
-If you cannot obtain a VortexAD revision without installing it or reaching the
-network in a way this turn forbids, **stop and report that** rather than
-inventing a SHA or pinning a branch name. A wrong pin is worse than a recorded
-blocker. In that case, implement Parts B–D against the documented API surface
-and leave the pin as an explicit `TODO(pin)` with the reason.
+Rule separately on:
 
-## Part B — the adapter
+- human-facing project/docs name;
+- GitHub repository slug;
+- Python distribution name in packaging metadata;
+- Python import namespace and tracked `bsm3/` directory;
+- Read the Docs project slug.
 
-`panel_aerodynamics.py` exposes a documented, public builder that takes a
-`MeshMotionResult` and returns CSDL aerodynamic outputs.
+The key question is whether the first alpha should already use
+`import gamma_mdo`, or whether GAMMA should deliberately retain `import bsm3`
+as a stable implementation namespace (as distributions such as scikit-learn
+use a different import name). Do not hide this choice inside mechanical rename
+work. Recommend one, enumerate migration consequences, and make the eventual
+Codex prompt reflect the ruling. The user previously accepted a clean break;
+do not add a compatibility shim unless you establish a concrete need and ask
+for approval.
 
-- Import VortexAD **lazily**, inside the call, mirroring
-  `MeshMotionVolumeBackend`'s deferred import and raising a clear, actionable
-  `ImportError` naming the optional extra when it is absent. The module must
-  import cleanly without VortexAD.
-- Consume the public result surface only: `surface_coordinates`,
-  `surface_mesh`, and the M4.1 `surface_vertex_classification` /
-  `surface_projection_status`. Do not reach into `_GeometrySetup`,
-  `_SurfaceSystem`, or any other private pipeline object.
-- The caller owns the recorder, exactly as `mm.run` does. Never start or stop
-  it.
-- Return named outputs (at minimum lift and drag coefficients) through a
-  documented dataclass so `select_fd_objective` can address them via the
-  existing `result.aerodynamic_outputs` mapping.
-- Where the panel solve needs connectivity or trailing-edge detection, derive
-  it from the curated mesh and state the assumption in the docstring.
+### 2. Version policy
 
-## Part C — fuel burn
+The source currently says `0.1.4`, setup metadata derives from it, and the local
+repository has no tags. Determine whether `0.1.4` has ever been publicly
+released or published. Use `v0.1.0a1` only if moving to it does not create a
+public version regression; otherwise choose a forward-moving PEP 440
+prerelease. Keep source, built metadata, Sphinx `version`/`release`, Git tag,
+and RTD version label coherent.
 
-`fuel_burn.py` holds the Breguet / gross-weight model as a small, pure,
-differentiable CSDL function with no VortexAD dependency at all.
+### 3. Dirty-tree-safe implementation
 
-- Inputs are aerodynamic coefficients and documented aircraft parameters;
-  output is a fuel-burn scalar.
-- Every parameter carries units in its docstring. Constants get a cited or
-  clearly labelled source; do not bury unexplained magic numbers.
-- Because it is VortexAD-free, it is **fully testable now**. Test it properly:
-  a known analytic case, and an FD check of the derivative through the model.
+The live checkout contains eight modified tracked files and 393 untracked
+entries, many under `bsm3/`. A wholesale directory move could relocate, stage,
+or lose user-owned work. Design a concrete safe workflow, preferably an
+isolated worktree/branch from the accepted committed state, and explain how the
+result can be integrated without overwriting the live dirty files. If a full
+import-package rename cannot be safely integrated until the dirty work is
+resolved, say so and separate public branding from namespace migration rather
+than pretending the risk does not exist.
 
-## Part D — the tracked example
+### 4. Read the Docs alpha boundary
 
-`examples/e175_fuel_burn_optimization.py` composes geometry → `mm.run` → panel
-aerodynamics → fuel burn → objective.
+The repository already has a hermetic Sphinx site and a v2
+`.readthedocs.yaml`. Plan the first release as HTML-only because only HTML has
+been verified; PDF/HTMLZIP can follow after independent builds. Specify the
+project import, webhook, tag activation/default-version policy, badge/link
+update, and clean-build proof. Distinguish repository changes Codex can prepare
+from external actions requiring explicit user authorization.
 
-- Follow the basic example's readable structure and its caller-owned recorder
-  contract.
-- **Manage the FD objective explicitly.** Do not set
-  `derivative_check.enabled` inside an optimization: M4.1 documented that the
-  convenience path calls `set_as_objective()` and would replace the
-  optimization's own objective. Use `mm.select_fd_objective` deliberately, or
-  register the fuel-burn objective directly, and say in a comment why.
-- The example must degrade honestly: without VortexAD it should fail with the
-  actionable `ImportError` from Part B, not a confusing traceback.
+No CSDL_alpha, LFS, JAX, gmsh, DAFoam, MPI, VortexAD, or geometry assets should
+be needed merely to build the hosted documentation.
 
-## Part E — tests that work without VortexAD
+## Implementation-prompt requirements
 
-This is the part most likely to be done badly. Tracked tests must be
-meaningful, not decorative.
+The next literal Codex prompt must:
 
-- `test_fuel_burn.py` runs fully: analytic value plus FD derivative check.
-- `test_panel_aerodynamics.py` covers everything reachable without VortexAD —
-  the lazy import raises the documented error when absent; the adapter rejects
-  malformed input; the output dataclass and its registration in
-  `aerodynamic_outputs` behave; and the composition with a **fake** panel
-  solver produces a differentiable graph whose VJP matches a centered finite
-  difference.
-- Any test that genuinely needs VortexAD is marked `integration` and skipped
-  when the import fails. Do not let a skip masquerade as a pass: report skip
-  counts explicitly in the handoff.
-- A structural check that the example composes the documented five stages, in
-  the style of `test_example_is_small_and_uncluttered`.
+- have a per-path allowlist and explicit prohibited paths;
+- preserve historical `docs/overhaul` prose rather than mechanically replacing
+  every occurrence of BSM3;
+- define exact greps for stale supported-surface names without demanding that
+  historical collaboration text be rewritten;
+- keep the eight modified and 393 untracked entries safe;
+- require package-build/install/import checks from outside the source tree;
+- require the full non-integration suite, E175 integration guards,
+  derivative/N-gon guard, all five Ruff groups, documentation tests, and strict
+  Sphinx;
+- test the old import's intended clean-break behavior if the namespace changes;
+- keep external mutations (GitHub rename, RTD project creation, tag/push, PyPI
+  publication or reservation) in a separately enumerated user-authorized step;
+  and
+- leave M4.2 queued, recoverable from `38cd0bf`, with M3 archive/history
+  pruning separate and last.
 
-## Verification
-
-1. `git diff --check "$TURN69_BASE"..HEAD`; changed paths ⊆ the allowlist.
-2. New tests pass, with skip counts stated separately from passes.
-3. Full non-integration suite; account for every change against the current
-   baseline of **228 passed, 9 deselected**.
-4. `tests/test_boundary_surface_movement.py` at **45 passed**;
-   `tests/test_e175_example.py -m "not integration"` at **16 passed,
-   5 deselected**.
-5. The derivative / N-gon three-file guard: **exactly 6**.
-6. `test_triangle_wall_at_full_deformation_scale` and
-   `test_quad_panel_introduces_no_new_inverted_elements` both still pass —
-   M4.1 must not regress.
-7. `tests/test_documentation.py` and the strict Sphinx 9.1.0 build.
-8. The five literal workflow Ruff commands, plus default Ruff on every changed
-   Python path. If new paths belong in a workflow Ruff group, **report that
-   rather than editing the workflow**, which is outside the allowlist.
-9. Fresh clone: documentation tests, strict build, empty status. Confirm
-   `import bsm3` and `import bsm3.core.boundary_surface_movement` still work
-   **from outside the source tree** with VortexAD absent — run it from `/tmp`,
-   not from the checkout. A Turn-64 false positive came from exactly that
-   mistake.
-10. Preservation: 8/8 byte-identical, 393 untracked entries.
+If any identifier or version-history fact cannot be established, issue a
+short, evidence-backed decision question instead of inventing it.
 
 ## Handoff
 
-Two commits: implementation, then the collaboration documents. Report both
-hashes, exact changed paths, the Part A pin (or the recorded blocker), all test
-results with skips stated separately, Ruff and Sphinx results, the fresh-clone
-result, and preservation proof. Mark M4.2 as ready for Claude review, never as
-self-accepted.
-
-M3 release pruning remains separate and last.
+Commit only `PLAN.md`, `LOG.md`, and `CODEX_NEXT.md`. Report the identifier and
+version rulings, external availability evidence, dirty-tree strategy, exact
+next milestone ordering, and the commit hash. Do not mark a rename or hosted
+release complete; neither has started.

@@ -5163,3 +5163,43 @@ M3 release pruning stays separate and last. `GAMMA` remains M3 naming guidance;
 nothing was renamed.
 
 Status:    closed
+
+---
+
+## Turn 69 — Codex, sequencing/identity planner, 2026-09-25
+Scope:     Promote GAMMA identity and Read the Docs alpha ahead of M4.2
+Base:      38cd0bf
+Status:    planning handoff only — no implementation or external mutation
+
+The user asked whether the GAMMA rename should happen in the immediate next
+turns and then authorized updating the instructions after M4.1 acceptance.
+Codex recommends yes: publishing the first tagged documentation as BSM3 and
+renaming immediately afterward would create avoidable public package names,
+URLs, badges, and installation instructions.
+
+This supersedes Turn 68's sequencing statement that GAMMA remains an M3-only
+concern. M3 still owns archive/history pruning and remains last; public identity
+is promoted so it can be stable before the first Read the Docs alpha and before
+new M4.2 integration code adopts the old namespace.
+
+The display name is provisionally **GAMMA — Geometry Adaptation for
+Multidisciplinary Modeling and Analysis**. Bare `gamma` cannot be assumed as a
+technical identifier: a `gamma` distribution already exists on PyPI, and the
+term is overloaded in the relevant aerospace domain. The proposed qualified
+set is repository `GAMMA-MDO`, distribution and RTD slug `gamma-mdo`, and
+import namespace `gamma_mdo`; Claude must separately rule on the import rename
+rather than silently equating branding with Python namespace migration.
+
+The current source version is `0.1.4` and the local repository has no tags.
+`v0.1.0a1` is appropriate only if `0.1.4` was never publicly released; if it
+was, the alpha must move forward. The current dirty tree also makes a wholesale
+directory move unsafe: eight tracked files are modified and 393 entries are
+untracked, many beneath `bsm3/`. Claude must design an isolated-worktree or
+equivalent migration and an integration strategy that cannot move, stage, or
+lose user-owned files.
+
+Turn 68's M4.2 prompt is not discarded. It remains recoverable verbatim with
+`git show 38cd0bf:docs/overhaul/CODEX_NEXT.md` and is queued after the identity
+and documentation-publication turns.
+
+Status:    closed
