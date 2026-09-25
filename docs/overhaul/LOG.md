@@ -4835,3 +4835,152 @@ the documentation tests, and remained clean. No DAFoam, OpenFOAM, VortexAD, or
 real-MPI solve ran. M4.2 remains separate.
 
 Status:    closed
+
+---
+
+## Turn 66 — Claude, reviewer/planner, 2026-09-25
+Scope:     Independent review of M4.1
+Base:      11fb4522f354b56e05ccd1c5795f9f078fcbfe46
+Reviewed:  d0d1ff0 (implementation), 00894cb (handoff)
+Status:    **M4.1 NOT accepted — one narrow corrective turn required**
+
+### Structural
+
+21 changed paths, exactly matching the declared inventory; `git diff --check`
+clean. Replacement mesh SHA-256 matches
+`92feeeda05905a13d23a18c863e76b9596773beccb021148cc2d4e7016cd733c`. The retired
+filename survives only in collaboration prose (`CODEX_NEXT.md`, `LOG.md`).
+
+Dirty tree verified as declared: seven of the eight pre-existing modified files
+are untouched (mtimes range 2026-04-15 to 2026-08-23, all months before this
+turn), and the eighth, `visualize_wing_rotation_deformation.py`, retains exactly
+its unrelated unstaged `DEFAULT_HDF5` and `--field` edits while only the
+`DEFAULT_MESH` line was committed. Untracked entries 394 -> 393, solely from
+adopting the panel asset.
+
+### Both user-directed expansions are justified and minimally implemented
+
+`_solution_vertex_ids` takes the deduplicated union across intersections, and
+`reproject_mask = ~np.isin(ids, exact_seam_ids)` removes those rows from the
+closest-point call itself rather than overwriting them afterwards. Seam rows are
+written by `_set_exact_seams` into `preprojected_deformation`, excluded from
+projection, and carried verbatim into `projected_deformation`, so the implicit
+intersection VJP survives; `enforce_symmetry_plane` runs after assembly, which
+the synthetic regression pins with `final[seam_ids, 0] == 0.0`. The empty case
+(`reprojected_ids.size == 0`) short-circuits before `project_onto_oml` would
+raise on empty metadata. `converged` is read from the already-cached
+`shared_state["forward"]`, so no second solve occurs, and its rows are written
+through the same index arrays used for the projected values.
+
+The replacement asset was measured independently, not taken on report: 13,262
+vertices, 2,804 triangles, 11,858 quads, `inverted_elements = 0`,
+`inverted_corners = 0`, `degenerate_elements = 0`, minimum scaled Jacobian
+0.1606796.
+
+### Classification verified by execution, not by reading
+
+On the half-mesh triangle wall (16,400 vertices): deformation 4,547 +
+parametrically prescribed 11,853 = 16,400 exactly; closest-projection IDs equal
+`surface_projection_status.reprojected_vertex_ids`; the closest set is a subset
+of the deformation set and disjoint from both exact seams; every array stays in
+range. On the symmetric quad panel (13,262 vertices) the partition and the
+seam-disjointness both hold again, with 4,262 closest projections, 2,236 n-gon
+modes, and zero inversions.
+
+### The defect
+
+The tracked triangle wall is a **half** mesh (`y` in `[0, 11.96]`), so
+`setup.symmetry_split is None` and `_global_surface_ids` takes its
+`np.unique(ids)` branch. Every dump-equality assertion in the suite runs on that
+mesh, so the symmetric branch of the new code is never exercised by a test.
+
+The curated quad panel **is** a full symmetric mesh (`y` in `[-11.96, 11.96]`).
+There `_global_surface_ids` mirror-expands via
+`np.where(np.isin(gather_index, ids))[0]`, which is correct and desirable for
+the public classification. But `_write_diagnostic_dump` still writes the
+half-mesh seam coordinates for `{name}_vertices` while `{name}_ids` is now the
+mirror-expanded array:
+
+| key | rows |
+| --- | ---: |
+| `wing_root_vertices` | 97 |
+| `wing_root_ids` | **194** |
+| `tail_root_vertices` | 67 |
+| `tail_root_ids` | **134** |
+
+Before this turn both were 97 and 67, aligned 1:1 by construction
+(`half_to_full[data.vertex_ids]`). Pairing them was the only reason the archive
+carries both. Any consumer zipping them now mispairs coordinates with IDs or
+fails, and nothing in the archive announces the change. The public
+classification object is correct; the regression is confined to the NPZ.
+
+### N-gon sweep ruling
+
+**The sweep is a null result, not a calibration, and must not be read as one.**
+
+The minimum scaled Jacobian is bit-identical (0.16066206527471977) at all eight
+weights, and the undeformed panel's own minimum is 0.1606796 — the statistic is
+pinned by a pre-existing worst cell the deformation barely touches, so its
+constancy says nothing about regularization. The p05 scaled Jacobian is
+bit-identical for weights 0, 0.3 and 1, so the regularizer has no measurable
+effect there at all. The p05 area ratio degrades monotonically, 0.982300 at
+weight 0 to 0.977454 at 150. On this mesh at this design point, increasing the
+weight is mildly harmful and never helpful; the elapsed-time column (61.0 s at
+weight 0 against 39.8 s at 200) is warm-up noise and carries no cost signal.
+
+This is expected: a clean, inversion-free panel gives the affine regularizer
+nothing to suppress. Hourglass control matters under deformations that actually
+provoke it. **Ruling: keep `0.3` in the advanced example as the explicitly
+labeled non-recommendation it already is, do not adopt 100–200, and do not adopt
+0 either.** No universal weight may be inferred from one deformation case.
+
+The sweep's `contains_8075` / `contains_14923` columns are vacuous on the
+replacement mesh: it has 14,662 cells, so **element 14923 does not exist**, and
+element 8075 is an unrelated cell. The retired pair was a property of the
+retired 114-inversion asset. The LOG's "neither 8075 nor 14923 in the
+inverted-ID set" is true but carries no continuity with the Turn-64
+measurement.
+
+### Gates reproduced independently
+
+| Gate | Result |
+| --- | --- |
+| `tests/test_boundary_surface_movement.py` | 45 passed |
+| `tests/test_e175_example.py -m "not integration"` | 16 passed, 5 deselected |
+| `tests -m "not integration"` | 228 passed, 9 deselected |
+| Derivative / N-gon guard (three files) | **exactly 6 passed** |
+| `test_triangle_wall_at_full_deformation_scale` | 1 passed, 105.14 s; 0 folds, 0/0/0 inversions, 4,435 projected, **0 projection failures** |
+| `tests/test_documentation.py` | 12 passed |
+| Strict Sphinx 9.1.0 on a fresh clone of `d0d1ff0` | build succeeded |
+| All five literal workflow Ruff steps | passed |
+| Default Ruff on the 13 changed Python paths | passed |
+| Fresh clone doc tests + status | 12 passed, status empty |
+
+Every number Codex reported reproduced exactly.
+
+### Recorded residues, not blockers
+
+- `_project_group` now raises `RuntimeError` when `shared_state["forward"]` is
+  absent, naming the inline recorder. This adds no restriction — the pipeline
+  already read `.value` in several places and so already required an inline
+  recorder — but the requirement is still not stated on the API page.
+- `mm.run` calls `objective.set_as_objective()` whenever
+  `derivative_check.enabled` is true. Inside a larger optimization graph that
+  already has an objective, enabling the debug flag would replace it. The flag
+  is opt-in and defaults off; worth a documented warning.
+- Turn 64's `print_summary` load-stepping docstring residue was fixed here.
+
+### Naming guidance (no rename; M3 concern)
+
+`GAMMA` — Geometry Adaptation for Multidisciplinary Modeling and Analysis —
+expands accurately to what the package does. Two cautions. First, the token is
+heavily overloaded in exactly this domain: γ is both flight-path angle and the
+ratio of specific heats, and several unrelated software projects already carry
+the name, so the distributed name likely needs a qualifier. Second, the tagline
+phrase "analytically differentiable" should be squared with the pipeline's own
+documented behavior that a non-converged projection is returned rather than
+raised, and derivatives at those points are not guaranteed. A rename touches
+packaging metadata, imports, docs and the workflow, so it belongs with **M3**
+release pruning, not M4.
+
+Status:    closed
