@@ -4029,3 +4029,167 @@ The literal allowlist, corrections, numerical gates, clone instructions, and
 stop rules are in `CODEX_NEXT.md`. M1.7 is not accepted in advance.
 
 Status:    closed
+
+---
+
+## Turn 58 — Claude, implementer, 2026-09-25
+Scope:     M1.7 — five accumulated API corrections and the final numerical acceptance run
+Base:      TURN58_BASE = 7b1bee9
+Commits:   338fde8 (six production paths + five test files), docs commit follows
+Status:    M1.7 and M1 ready for final Codex acceptance — NOT accepted by the implementer
+
+### Pre-edit R4 reference
+
+The reference was captured twice. The first run launched before any source
+edit; the authoritative one ran from a **pristine `git clone` checked out at
+`TURN58_BASE`** in `/tmp`, with the untracked R4 inputs copied in read-only.
+Both produced the identical `final_sha256` `15be1547…` and sum
+`882013.438439012`, which also establishes that the probe is deterministic.
+
+Volume motion off, mesh writing off, visualization off, setup cache forced to a
+fresh `/tmp` directory. No cache or output was written inside the repository:
+the untracked count stayed at 394 throughout, and no `_setup_cache_*` file
+appeared in the tree. Runtime 197.1 s, well inside the 15-minute limit.
+
+### Part A — the five findings
+
+**A1.** `GraphDistanceSummary(TypedDict)` documents the eight fields
+`summary()` actually returns, and `summary()` is annotated with it. The dead
+`"decay"` entry is gone: the only retained caller prints `distance.decay` from
+configuration, confirmed at `mesh_motion_pipeline.py`. The type is exported
+beside `GraphDistanceWeighting`. Weights, distances, and solver behavior are
+untouched.
+
+**A2.** `DerivativeComparison.best` is annotated
+`dict[tuple[str, str], tuple[float | None, float]]` on both the return and the
+local result. The selection algorithm is unchanged.
+
+**A3.** `E175DAFoamResult.mesh_motion` is `MeshMotionResult | None`, and the
+two stale notes calling the annotation non-optional are removed.
+
+**A4.** Both formerly dead `FlowConfig` fields are now real inputs.
+`nu_tilda_m2_per_s` is validated finite and non-negative and becomes the
+farfield `nuTilda0` primal BC with variable `"nuTilda"`, native-list patches,
+and a one-element value list. `primalBC["useWallFunction"]` comes from
+`bool(config.use_wall_functions)`. The contradictory `--no-wall-functions`
+inversion is replaced by one `--wall-functions` option using
+`argparse.BooleanOptionalAction` defaulting to
+`FlowConfig().use_wall_functions`, so parser and dataclass defaults now agree
+and both flag spellings work.
+
+**A5.** `plot_components` treats `colors=None` like the empty-string sentinel,
+so components keep their own colors instead of raising `TypeError` inside
+`_broadcast`. Scalar, per-component, and length-rule behavior are unchanged.
+
+### Part B — numerical acceptance
+
+**B1. R4 reproduced bit-for-bit.** Pristine `TURN58_BASE` clone versus the
+post-edit tree:
+
+| Check | Result |
+| --- | --- |
+| Shape | `(35190, 3)` both |
+| Max abs coordinate difference | **0.000e+00** |
+| `allclose(rtol=atol=1e-12)` | True |
+| `final` sha256 | identical, `15be1547…` |
+| `initial` / `preprojected` max difference | 0.000e+00 / 0.000e+00 |
+| Inverted + degenerate IDs, all three stages | identical, all empty |
+| Fold count / cell count / n-gon modes | 0 / 69,942 / 0, identical |
+| Quality scalars | 13 compared, worst difference **0.000e+00** |
+
+The five corrections did not move the mesh.
+
+**B2. Flagship and derivative gates.** `tests/test_e175_example.py`:
+**18 passed** in 592.87 s. The five named cases, rerun with diagnostics:
+
+| Case | Outcome |
+| --- | --- |
+| Real triangle wall | passed; inversions 0/0/0; zero folds |
+| Real quad panel | passed; inversions 114/114/114 — the baseline 114 preserved, none added |
+| External-coefficient analytic vs centered FD | passed; analytic `5.0436177894e-02`, FD identical, **relative error 4.196e-14** against the 1e-5 threshold, best step 1e-5, max displacement 0.3502 |
+| Whole-component free regions | passed; inversions 0/0/0 |
+| Full-scale triangle | passed; zero folds |
+
+Curated mixed-N-gon integration: **3 passed, 3 deselected**, retaining the
+40,706-face / 117,267-mode assembly. Derivative and N-gon gates: **exactly 6
+passed**.
+
+**B3. VortexAD — verified, not mutated.** Five read-only facts:
+
+1. Neither `VortexAD` nor `vortexad` is installed in `bsm3_py312_main`, and
+   pip lists no vortex package.
+2. Sibling `../VortexAD` is on `dev_new_derivs` at `c33828d` with three
+   modified solver files: `pfse_solver.py`, `unsteady_panel_solver.py`,
+   `unsteady_vlm_solver.py`.
+3. `PYTHONPATH=../VortexAD python -c "import VortexAD"` fails with
+   `ModuleNotFoundError: No module named 'vedo'`, raised from
+   `VortexAD/utils/plotting/plot_vlm.py`.
+4. The panel driver `e175_panel_opt.py` and every candidate panel mesh,
+   including `embraer_175_panel_quad_dominant_high_quality.msh`, are untracked.
+5. That driver imports `e175_mesh_motion_config` and
+   `e175_mesh_motion_pipeline`, **both removed**, and the types
+   `E175ModelFiles`, `E175PipelineConfig`, and `E175MeshMotionResult`, none of
+   which exists anywhere tracked. Installing `vedo` alone would therefore still
+   not make it a supported test.
+
+Nothing was installed, altered, or adopted. **Future task:** build a tracked
+adapter against a pinned clean VortexAD revision, driven by the generalized
+`mm.run` result and the curated quad mesh, rather than the untracked driver.
+
+**B4. Regressions, lint, clean clone.**
+
+| Suite | Result |
+| --- | --- |
+| Focused group 1 | **100 passed, 3 deselected** (97 baseline + 3 added) |
+| Focused group 2 | **109 passed** (102 baseline + 7 added) |
+| Clean clone, full `tests` | **202 passed, 1 skipped**, 617.83 s |
+
+The +3 and +7 are exactly the added unit tests. The single clone skip is the
+predicted local R4 check: *"local R4 assets are unavailable:
+e175_fluent_R4_aircraft_wall_tri.msh, …"*. The clone finished with empty
+`git status --porcelain` at `338fde8`.
+
+All five literal `actions.yml` Ruff commands pass.
+
+**Lint finding reported rather than glossed.** The default Ruff selection over
+my changed Python paths is **not** clean: four `F821` findings remain, one
+`create_geometry_from_variables` in `cfd_mesh_dafoam_analysis.py` and three
+`MPI` in `run_dafoam_gmsh.py`. All four are **pre-existing and identical at
+`TURN58_BASE`** — same files, same names, only line numbers shifted by my
+edits. Likewise `--select D` over those paths reports 136 findings, every one
+in a test file and byte-identical in count and distribution to the base; my
+added tests introduced none, and the production paths are clean under
+`--select D`. Neither set is covered by any workflow step, so CI is unaffected,
+but I am not claiming a clean result I did not get.
+
+### Turn-58 correction to the M1.8 handoff
+
+M1.8 reported that the excluded dirty research script
+`movement_test_embraer_175_hex_mesh.py` "should point at `wall_surface.npz`".
+That was incomplete. The script carries its own `_load_polygon_surface_pickle`
+that calls `pickle.load` and expects `points`/`connectivity` keys, so it needs
+a **reader** change as well as a path change: repointing `MESH_PATH` alone
+would hand an `.npz` archive to `pickle.load`. The fix is to read through
+`bsm3.preprocessing.import_mesh`. It remains a prohibited pre-existing dirty
+file and was not edited.
+
+### Preservation
+
+All eight pre-existing modified files are byte-identical to the `TURN58_BASE`
+snapshot. Untracked entries: 394 before and after, none removed or adopted.
+Committed changes vs base: 11 paths, all allowlisted.
+`git diff --check TURN58_BASE HEAD` is empty. The five static acceptance greps
+are all empty, and inspection confirms `GraphDistanceSummary` is exported and a
+`TypedDict`, `best` returns the optional step, and `mesh_motion` is optional.
+
+### Deviations
+
+- None affecting scope. Nothing outside the allowlist changed, no dependency or
+  environment was touched, and no stop condition was hit.
+- Reported above rather than absorbed: the four pre-existing `F821` findings
+  and the 136 pre-existing test-file `D` findings.
+
+M1.7 and M1 are **ready for final Codex acceptance** and are not accepted by
+the implementer.
+
+Status:    closed
