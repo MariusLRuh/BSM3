@@ -85,8 +85,31 @@ longer repeat the rejected claims. Preserve every other accepted correction.
 3. The slice-3 audit remains 17/17 modules, 167/167 definitions, 132 callables
    / 293 parameters at 0 missing and 0 extra, and 22 dataclasses / 148 fields
    at 0 missing and 0 extra.
-4. Run the same three regression commands from Turn 54; expected results remain
-   **82 passed / 3 deselected**, **89 passed**, and **6 passed**.
+4. Run exactly:
+
+```bash
+conda run -n bsm3_py312_main python -m pytest -q \
+  tests/test_function_set_projection_numpy.py \
+  tests/test_warm_start_retry_regression.py \
+  tests/test_preprocessing_plotting.py \
+  tests/test_curated_assets.py \
+  tests/test_boundary_surface_movement.py -m "not integration"
+
+conda run -n bsm3_py312_main python -m pytest -q \
+  tests/test_dafoam_csdl.py \
+  tests/test_geometry_volume_mpi.py \
+  tests/test_volume_mesh_motion.py \
+  tests/test_preprocessing_plotting.py \
+  tests/test_e175_driver_configuration.py
+
+conda run -n bsm3_py312_main python -m pytest -q \
+  tests/test_derivative_gate.py \
+  tests/test_ngon_affine_operator.py \
+  tests/test_ngon_affine_load_step.py
+```
+
+   Expected results remain **82 passed / 3 deselected**, **89 passed**, and
+   **6 passed**.
 5. `git diff --check 7777b0f HEAD` is empty, and the changed paths are a subset
    of the eight-path allowlist.
 
