@@ -4808,8 +4808,10 @@ Untracked entries are 394 -> 393 solely because the panel asset was adopted.
 ### N-gon calibration measurement
 
 Full deformation, clean panel, two load steps. Raw JSON is at
-`/tmp/bsm3_turn65_ngon_sweep.json`. Every row has zero inversions and neither
-8075 nor 14923 in the inverted-ID set.
+`/tmp/bsm3_turn65_ngon_sweep.json`. Every row has zero inversions. The recorded
+`contains_8075` / `contains_14923` fields do not continue the Turn-64 finding:
+the replacement mesh has only 14,662 cells, so 14923 does not exist and 8075
+is an unrelated cell.
 
 | weight | min scaled J | p05 scaled J | p05 area ratio | seconds |
 |---:|---:|---:|---:|---:|
@@ -4982,5 +4984,61 @@ documented behavior that a non-converged projection is returned rather than
 raised, and derivatives at those points are not guaranteed. A rename touches
 packaging metadata, imports, docs and the workflow, so it belongs with **M3**
 release pruning, not M4.
+
+Status:    closed
+
+---
+
+## Turn 67 — Codex, corrective implementer, 2026-09-25
+Scope:     Symmetric-mesh diagnostic-dump alignment only
+Base:      9930dbe
+Commit:    bc40560 (implementation); documentation handoff follows
+Status:    M4.1 correction ready for Claude review — NOT self-accepted
+
+The defect reproduced before editing: on the curated full symmetric panel,
+`wing_root_vertices` had 97 rows beside 194 `wing_root_ids`, and
+`tail_root_vertices` had 67 rows beside 134 IDs. The new integration assertion
+failed against the unfixed implementation at `(97, 3) != (194, 3)`.
+
+Option 1 from the corrective prompt was implemented, preserving the archive's
+existing row-pair contract. `_global_intersection_vertices` maps each
+complete-mesh intersection ID through `SymmetrySplit.gather_index`, selects the
+aligned retained-half coordinate, and applies that complete vertex's
+`mirror_sign`. On nonsymmetric inputs it orders the retained coordinates by
+the same global IDs. Consequently `{name}_vertices` and `{name}_ids` remain
+one-to-one in complete-mesh order on both paths. The corrected quad integration
+test passed and additionally checks every coordinate against
+`initial_vertices[vertex_ids]`, so equal lengths alone cannot satisfy it.
+
+The API page now states the inline-recorder requirement, warns that enabling
+the convenience FD check calls `set_as_objective()` and can replace an existing
+optimization objective, and documents the diagnostic archive's aligned global
+intersection arrays.
+
+**N-gon weight.** The sweep is a null result, not a calibration. The minimum
+scaled Jacobian is bit-identical (0.16066206527471977) at all eight weights and
+the undeformed panel's own minimum is 0.1606796, so the statistic is pinned by
+a pre-existing worst cell the deformation barely touches. The p05 scaled
+Jacobian is bit-identical at weights 0, 0.3 and 1. The p05 area ratio degrades
+monotonically from 0.982300 at weight 0 to 0.977454 at 150. Increasing the
+weight is mildly harmful here and never helpful; the elapsed-time column is
+warm-up noise. **Keep `0.3` as the explicitly labeled non-recommendation it
+already is. Do not adopt 100–200. Do not adopt 0.** No universal weight follows
+from one deformation case; a real calibration needs a deformation that
+provokes hourglassing.
+
+**Retired element IDs.** The sweep's `contains_8075` / `contains_14923` columns
+are vacuous on the replacement mesh: it has 14,662 cells, so element 14923 does
+not exist and element 8075 is an unrelated cell. The Turn-65 entry was
+corrected so it cannot be read as continuous with the Turn-64 measurement.
+
+Verification: the new symmetric regression failed before the implementation
+and then passed in 65.73 s; fast E175 **16 passed / 5 deselected**; all
+non-integration tests **228 passed / 9 deselected**; core **45 passed**;
+derivative/N-gon guard **exactly 6 passed**; full-scale triangle **1 passed in
+101.93 s** with zero folds, 0/0/0 inversions, 4,435 projections, and zero
+projection failures; documentation **12 passed**; strict Sphinx 9.1.0 and all
+five literal workflow Ruff groups passed. No DAFoam, OpenFOAM, VortexAD, or
+real-MPI run occurred.
 
 Status:    closed
