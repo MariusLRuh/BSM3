@@ -9,6 +9,43 @@ and inversion diagnostics so validity is checked rather than guaranteed.
 Install the `gamma-mdo` distribution and import its public Python namespace as
 `bsm3`.
 
+## E175 mesh deformation
+
+<div style="display: flex; flex-wrap: wrap; gap: 1rem;">
+  <figure style="flex: 1 1 18rem; margin: 0; text-align: center;">
+    <a href="https://github.com/MariusLRuh/GAMMA-MDO/releases/download/v0.2.0a1/e175_mesh_deformation_tri_full.gif">
+      <img
+        src="https://github.com/MariusLRuh/GAMMA-MDO/releases/download/v0.2.0a1/e175_mesh_deformation_tri_full.gif"
+        alt="Animation of the E175 triangular surface mesh deforming with its geometry"
+        width="1400"
+        height="640"
+        loading="lazy"
+        decoding="async"
+        style="width: 100%; height: auto;"
+      >
+    </a>
+    <figcaption>Triangular surface mesh</figcaption>
+  </figure>
+  <figure style="flex: 1 1 18rem; margin: 0; text-align: center;">
+    <a href="https://github.com/MariusLRuh/GAMMA-MDO/releases/download/v0.2.0a1/e175_mesh_deformation_quad_full.gif">
+      <img
+        src="https://github.com/MariusLRuh/GAMMA-MDO/releases/download/v0.2.0a1/e175_mesh_deformation_quad_full.gif"
+        alt="Animation of the E175 quad-dominant surface mesh deforming with its geometry"
+        width="1400"
+        height="640"
+        loading="lazy"
+        decoding="async"
+        style="width: 100%; height: auto;"
+      >
+    </a>
+    <figcaption>Quad-dominant surface mesh</figcaption>
+  </figure>
+</div>
+
+The animations are served from the
+[v0.2.0a1 release](https://github.com/MariusLRuh/GAMMA-MDO/releases/tag/v0.2.0a1),
+so they are not included in repository clones or package installations.
+
 The pipeline is:
 
 ```text
