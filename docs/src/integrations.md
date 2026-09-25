@@ -1,0 +1,93 @@
+# Integrations and troubleshooting
+
+This page states what is actually exercised and what is not.
+
+## Status
+
+### DAFoam and OpenFOAM — optional, not in the standard suite
+
+The aerodynamic coupling requires an **existing sourced solver environment**, an
+OpenFOAM installation, and a case directory you supply. DAFoam, `mpi4py`, and
+`petsc4py` are imported lazily, so importing BSM3 and running its test suite
+needs none of them.
+
+**No DAFoam or OpenFOAM solve runs in the standard CI suite.** The rank-0
+geometry-to-volume *construction* path is covered by tests that mock the
+downstream operation, which proves the API boundary holds. That is a
+construction guarantee, not evidence that a real DAFoam solve was executed.
+
+### Real MPI — optional, not in the standard suite
+
+The distributed coupling is designed around rank-0 execution with broadcast
+coordinates. The communication protocol, ownership contracts, and matrix-free
+VJP are tested with scripted single-process communicators and a structural
+communicator protocol that resolves without `mpi4py` installed. No real
+multi-rank MPI job runs in the standard suite.
+
+### VortexAD — deferred
+
+VortexAD is **not** a supported integration. It is not installed in the
+validated environment, and the existing untracked panel driver targets
+pre-generalization modules and types that no longer exist. Do not treat that
+driver as supported. The intended future work is a tracked adapter written
+against a pinned VortexAD revision, driven by the `mm.run` result and a curated
+mesh.
+
+### Mesh generation — separate
+
+Generating a surface or volume mesh is outside the surface-motion quickstart.
+BSM3 consumes meshes you already have.
+
+## Assets and file formats
+
+Surface meshes are read by suffix through `bsm3.preprocessing.import_mesh`:
+`.msh`, `.stl`, and `.npz`.
+
+The `.npz` polygon format is **safe**: it is loaded with `allow_pickle=False`
+and holds exactly three non-object arrays — `vertices`, a flattened
+`connectivity`, and `offsets` — so a malformed or hostile file cannot execute
+code. The curated mixed-N-gon wall asset uses this format.
+
+Pickle is deliberately **not** part of suffix dispatch. Two explicitly named
+entry points remain for trusted local files you produced yourself:
+
+- `bsm3.preprocessing.import_trusted_polygon_pickle(path)`
+- `bsm3.core.projections.warm_start_projections.load_function_set_from_trusted_pickle(path)`
+
+Both take a mandatory path, carry an execution warning, and are opt-in. Python
+pickle executes arbitrary code on load; never point either at an untrusted or
+remote file. No curated asset and no retained pipeline loads a pickle.
+
+## Troubleshooting
+
+**A path does not exist.** Geometry and mesh paths are local user inputs, not
+repository assets. Larger volume meshes and any private CFD case are untracked;
+tests that need them skip automatically. Check the path before assuming a
+pipeline failure.
+
+**The cache seems stale or the run is unexpectedly slow.** The first run with a
+given geometry and mesh populates `cache_directory`; later runs reuse it. Set
+`MeshMotion(rebuild_setup_cache=True)` to force a rebuild. Point the cache
+somewhere writable and outside your source checkout.
+
+**`RuntimeError` about the recorder, or derivatives that vanish.** BSM3 never
+starts or stops a recorder. Create it, start it, pass the *same* recorder to
+`mm.run`, and stop it in a `finally` block. Every design variable your
+coefficients depend on must belong to that recorder; a variable created under a
+different recorder is not part of the graph BSM3 evaluates.
+
+**Coefficient shape or patch-ID errors.** Component topology and coefficient
+layout must stay compatible with the STEP component found by `search_name`.
+These are validated after the component is imported and the canonical patch IDs
+are known, so a mismatch surfaces during the run rather than at the
+`add_component` call.
+
+**Plotting fails or is unavailable.** Visualization is optional and PyVista is
+imported lazily. A headless environment that omits it still runs the pipeline
+and its tests; leave `Visualization(enabled=False)`.
+
+**New inverted elements after a large deformation.** Compare the three
+inversion reports: an element inverted in the input mesh was not introduced by
+the solve. Reduce the deformation, raise `load_steps`, or check the
+quad-dominant panel specifically, which is more sliver-sensitive than the
+triangle wall.

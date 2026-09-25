@@ -1,64 +1,98 @@
-# Getting started
-This page provides instructions for installing your package 
-and running a minimal example.
+# Installation
 
-## Installation
+BSM3 is not on PyPI, and neither are the two geometry dependencies it is
+validated against. Install it from a checkout, into an environment you control.
 
-### Installation instructions for users
-For direct installation with all dependencies, run on the terminal or command line
-```sh
-$ pip install git+https://github.com/LSDOlab/lsdo_project_template.git
+BSM3 deliberately declares **no mandatory pip dependencies**. It is designed to
+run inside an existing geometry or DAFoam environment whose MPI, PETSc, NumPy,
+SciPy, and solver versions are under an administrator's control, and a pip
+install must never silently change that stack.
+
+## Validated core stack
+
+The following combination is the one the test suite and the numerical
+acceptance runs were executed against.
+
+| Component | Validated version |
+| --- | --- |
+| Python | 3.12 |
+| NumPy | 2.0.2 |
+| SciPy | 1.13.1 |
+| JAX / jaxlib | 0.4.38 |
+| CSDL_alpha | `73a9efd1033016a835779db10a9b9e81ed2254ce` |
+| lsdo_function_spaces | `307ad3aabfff31c6fb44ddf51bc0dcc41a60c420` |
+
+```bash
+python -m pip install \
+  "csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git@73a9efd1033016a835779db10a9b9e81ed2254ce"
+
+# --no-deps is required: lsdo_function_spaces declares an unpinned CSDL
+# dependency that would otherwise replace the validated revision above.
+python -m pip install --no-deps \
+  "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git@307ad3aabfff31c6fb44ddf51bc0dcc41a60c420"
+
+# Install BSM3 itself without resolving or building dependencies, so an
+# externally managed solver environment is left untouched.
+python -m pip install --no-deps --no-build-isolation -e .
 ```
-If you want users to install a specific branch, run
-```sh
-$ pip install git+https://github.com/LSDOlab/lsdo_project_template.git@branch
+
+Both flag choices are load-bearing:
+
+- `--no-deps` on `lsdo_function_spaces` pins CSDL to the validated revision.
+- `--no-deps --no-build-isolation` on BSM3 keeps pip from resolving or
+  rebuilding anything in the surrounding environment.
+
+## Developer extras
+
+The tests and diagnostics additionally use `pytest`, `gmsh`, `meshio`, and
+`pyvista`. Plotting is optional and imported lazily, so a headless environment
+that omits `pyvista` still runs the core pipeline and its tests.
+
+## Optional solver environment
+
+DAFoam, OpenFOAM, `mpi4py`, and `petsc4py` are **not** installed by the steps
+above and are not needed for surface mesh motion. They come from an existing
+sourced solver environment and are only required for the optional aerodynamic
+coupling. See [Integrations](integrations.md) for what is and is not exercised.
+
+## Inputs are local files
+
+A run needs a STEP geometry file and a surface mesh file. These are ordinary
+local paths that you supply:
+
+```python
+inputs = mm.InputFiles(
+    geometry_file=Path("/path/to/geometry.stp"),
+    surface_mesh_file=Path("/path/to/surface.msh"),
+    cache_directory=Path("/path/to/writable/cache"),
+)
 ```
 
-**Enabled by**: Copying the `setup.py` file, changing your repository name and version, 
-and adding all your dependencies into the list `install_requires`.
+`cache_directory` holds reusable setup data such as baseline projections and
+seam identification. The first run populates it; later runs with the same
+geometry and mesh are substantially faster. Point it somewhere writable and
+outside your source checkout.
 
-### Installation instructions for developers
-To install `lsdo_project_template`, first clone the repository and install using pip.
-On the terminal or command line, run
-```sh
-$ git clone https://github.com/LSDOlab/lsdo_project_template.git
-$ pip install -e ./lsdo_project_template
+### Which example assets ship with the repository
+
+These are tracked and are enough to run the E175 example:
+
+- `bsm3/core/boundary_surface_movement/embraer_175_no_winglets.stp`
+- `.../fluent_R1_tet_euler_volume_mesh/e175_fluent_R1_aircraft_wall_tri.msh`
+- `.../embraer_175_quad_dominant_symmetric_no_winglets.msh`
+- `.../wall_surface.npz`
+
+Larger volume meshes, refinement-4 walls, and any private CFD case are **not**
+tracked. Tests that need them skip automatically when they are absent.
+
+## Documentation is not yet hosted
+
+This site builds from the repository. Build it locally with:
+
+```bash
+python -m pip install -r docs/requirements.txt
+python -m sphinx -W --keep-going -b html docs /tmp/bsm3-docs-html
 ```
-**Enabled by**: Copying the setup.py file, and changing your repository name and version.
 
-## Setting up Documentation
-
-If you are not interested in using this repository as a template but only want to use the documentation template, 
-just copy the `/docs` directory and the `.readthedocs.yaml` file into your package root.
-However, make sure you have all the dependencies mentioned in the `setup.py` file installed before you build your
-documentation.
-
-### Writing
-Start by modifying the documentation pages by editing `.md` files in the `/src` directory.
-Customize/add/remove pages from the template according to your package's requirements.
-
-For automatically generated API references, add docstrings to your modules, classes, functions, etc., and
-then edit the list of directories containing files with docstrings intended for automatic API generation. 
-This can be done by editing the line `autoapi_dirs = ["../../lsdo_project_template/core"]` 
-in `conf.py` in the `/src` directory.
-
-Add Python files for examples and Jupyter notebooks for tutorials into the main project repository. 
-Filenames for examples should start with'ex_'.
-Add your examples and tutorials to the toctrees in `examples.md` and `tutorials.md` respectively.
-
-### Building
-Once you have all the source code written for your documentation, on the terminal/command line, run `make html`.
-This will build all the html pages locally and you can verify if the documentation was built as intended by
-opening the `docs/_build/html/welcome.html` on your browser.
-
-### Hosting
-On your *Read the Docs* account, **import** your project **manually** from github repository, and link the `/docs` directory.
-Make sure to edit `requirements.txt` with dependencies for *Read the Docs* to build the documentation exactly
-as in your local build.
-Optionally, edit the `.readthedocs.yml` in the project root directory for building with specific operating systems or versions of Python.
-After you commit and push, *Read the Docs* will build your package on its servers and once its complete,
-you will see your documentation online.
-The default website address will be generated based on your *Read the Docs* project name as `https://<proj_name>.readthedocs.io/`.
-You can also customize the URL on *Read the Docs*, if needed.
-
-## Setting up Testing
+There is no published Read the Docs deployment yet; `.readthedocs.yaml` is
+configured and ready for one.

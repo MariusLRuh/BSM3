@@ -1,0 +1,11 @@
+# Documentation-only build dependencies.
+#
+# These are NOT runtime dependencies of BSM3. The site renders hand-written
+# Markdown and never imports the package, so the validated geometry stack
+# (CSDL_alpha, lsdo_function_spaces, JAX, gmsh) is deliberately absent here.
+#
+# Verified on Python 3.12 in a disposable virtual environment.
+sphinx==9.1.0
+myst-parser==5.1.0
+sphinx-rtd-theme==3.1.0
+sphinx-copybutton==0.5.2
