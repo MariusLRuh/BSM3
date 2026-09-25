@@ -1,4 +1,4 @@
-"""Sphinx configuration for the BSM3 documentation site.
+"""Sphinx configuration for the GAMMA documentation site.
 
 The build is deliberately hermetic: it renders hand-written Markdown only. It
 does not import :mod:`bsm3`, execute the E175 example, or reach for DAFoam,
@@ -13,9 +13,9 @@ from pathlib import Path
 
 # -- Project information -----------------------------------------------------
 
-project = "BSM3"
-author = "BSM3 contributors"
-copyright = "2026, BSM3 contributors"
+project = "GAMMA"
+author = "GAMMA contributors"
+copyright = "2026, GAMMA contributors"
 
 
 def _read_version() -> str:
@@ -57,7 +57,7 @@ nitpicky = False
 # -- Options for HTML output -------------------------------------------------
 
 html_theme = "sphinx_rtd_theme"
-html_title = f"BSM3 {version}"
+html_title = f"GAMMA {version}"
 html_theme_options = {
     "collapse_navigation": False,
     "navigation_depth": 3,

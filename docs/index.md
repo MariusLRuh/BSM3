@@ -1,10 +1,13 @@
-# BSM3
+# GAMMA
 
-BSM3 performs **differentiable boundary-surface mesh motion**. Given a CAD
-outer mould line and a surface mesh that must follow it, BSM3 moves every mesh
-node as the geometry deforms, carries analytic derivatives through the CSDL
-graph, and reports mesh-quality and inversion diagnostics so validity is
-checked rather than guaranteed.
+**GAMMA — Geometry-Aware Mesh Movement Analysis** performs differentiable
+boundary-surface mesh motion. Given a CAD outer mould line and a surface mesh
+that must follow it, GAMMA moves every mesh node as the geometry deforms,
+carries analytic derivatives through the CSDL graph, and reports mesh-quality
+and inversion diagnostics so validity is checked rather than guaranteed.
+
+Install the `gamma-mdo` distribution and import its public Python namespace as
+`bsm3`.
 
 The pipeline is:
 

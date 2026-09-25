@@ -1,6 +1,6 @@
-"""Setuptools configuration for BSM3.
+"""Setuptools configuration for GAMMA.
 
-BSM3 is normally installed into externally managed multidisciplinary-analysis
+GAMMA is normally installed into externally managed multidisciplinary-analysis
 environments. In particular, DAFoam supplies a tightly coupled MPI/PETSc/Python
 stack that pip must not replace. Consequently this package deliberately has no
 automatic ``install_requires`` dependencies. See ``requirements.txt`` and
@@ -20,16 +20,16 @@ def get_version() -> str:
         if line.startswith("__version__"):
             delimiter = '"' if '"' in line else "'"
             return line.split(delimiter)[1]
-    raise RuntimeError("Unable to find the BSM3 version string.")
+    raise RuntimeError("Unable to find the GAMMA version string.")
 
 
 setup(
-    name="bsm3",
+    name="gamma-mdo",
     version=get_version(),
     author="Marius Ruh",
     license="LGPLv3+",
-    url="https://github.com/MariusLRuh/BSM3",
-    description="Differentiable geometry and CFD mesh-motion tools",
+    url="https://github.com/MariusLRuh/GAMMA-MDO",
+    description="Geometry-aware mesh movement analysis",
     long_description=(REPOSITORY_ROOT / "README.md").read_text(),
     long_description_content_type="text/markdown",
     packages=find_packages(),
@@ -44,7 +44,7 @@ setup(
     },
     python_requires=">=3.9",
     platforms=["any"],
-    # Deliberately empty: do not let installing BSM3 modify a DAFoam stack.
+    # Deliberately empty: do not let installing GAMMA modify a DAFoam stack.
     install_requires=[],
     classifiers=[
         "Programming Language :: Python",

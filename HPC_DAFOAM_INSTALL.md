@@ -1,6 +1,6 @@
-# Installing BSM3 beside DAFoam on TSCC
+# Installing GAMMA beside DAFoam on TSCC
 
-BSM3 must be installed from the same sourced environment used to run DAFoam.
+GAMMA must be installed from the same sourced environment used to run DAFoam.
 It deliberately declares no automatic pip dependencies so that installing it
 cannot replace the MPI, PETSc, NumPy, SciPy, or DAFoam packages selected by the
 cluster environment.
@@ -9,8 +9,8 @@ cluster environment.
 
 ```bash
 source /path/to/DAFoam/loadDAFoam.sh
-git clone --branch dev https://github.com/MariusLRuh/BSM3.git
-cd BSM3
+git clone --branch dev https://github.com/MariusLRuh/GAMMA-MDO.git
+cd GAMMA-MDO
 python -m pip install --no-deps --no-build-isolation -e .
 ```
 
@@ -39,7 +39,7 @@ import scipy
 import csdl_alpha
 import lsdo_function_spaces
 import gmsh
-print("DAFoam/BSM3 prerequisite imports passed")
+print("DAFoam/GAMMA prerequisite imports passed")
 PY
 ```
 

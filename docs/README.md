@@ -1,6 +1,6 @@
-# BSM3 documentation source
+# GAMMA documentation source
 
-This directory holds the Sphinx source for the BSM3 documentation site.
+This directory holds the Sphinx source for the GAMMA documentation site.
 
 The build is hermetic: it renders hand-written Markdown, does not import
 `bsm3`, and never executes the E175 example or requires DAFoam, OpenFOAM,

@@ -1,4 +1,4 @@
-# BSM3 intentionally has no pip-managed mandatory dependencies.
+# GAMMA intentionally has no pip-managed mandatory dependencies.
 #
 # It is designed to run inside an existing geometry/DAFoam environment, whose
 # MPI, PETSc, NumPy, SciPy, CSDL, and DAFoam versions must remain under the

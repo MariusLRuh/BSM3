@@ -112,7 +112,7 @@ def test_configuration_targets_python_312_and_real_version():
 
     conf = CONF.read_text(encoding="utf-8")
     assert "lsdo_project_template" not in conf
-    assert 'project = "BSM3"' in conf
+    assert 'project = "GAMMA"' in conf
     # The version is read from source rather than imported, so the docs build
     # needs none of the geometry stack.
     assert "import bsm3" not in conf
@@ -128,7 +128,7 @@ def test_configuration_targets_python_312_and_real_version():
 
 
 def _literal_public_exports() -> set[str]:
-    """Read the literal ``mesh_motion.__all__`` without importing BSM3."""
+    """Read the literal ``mesh_motion.__all__`` without importing ``bsm3``."""
     module_path = REPOSITORY_ROOT / "bsm3" / "mesh_motion.py"
     tree = ast.parse(module_path.read_text(encoding="utf-8"), module_path)
     assignments = [
@@ -152,8 +152,8 @@ def test_public_api_inventory_exactly_matches_exports():
     """Keep the explicit API inventory equal to the module's public exports."""
     api = (DOCS_SOURCE / "api.md").read_text(encoding="utf-8")
     match = re.search(
-        r"<!-- BEGIN BSM3 PUBLIC EXPORTS -->\n(.*?)\n"
-        r"<!-- END BSM3 PUBLIC EXPORTS -->",
+        r"<!-- BEGIN GAMMA PUBLIC EXPORTS -->\n(.*?)\n"
+        r"<!-- END GAMMA PUBLIC EXPORTS -->",
         api,
         re.DOTALL,
     )
@@ -216,7 +216,7 @@ def test_documentation_avoids_rejected_behavioral_guarantees():
     for path, text in normalized.items():
         assert "so the mesh stays valid" not in text, path
         assert "back exactly on the deformed" not in text, path
-        assert "BSM3 never starts or stops a recorder" not in text, path
+        assert "GAMMA never starts or stops a recorder" not in text, path
 
     for name in ("examples.md", "api.md"):
         text = normalized[DOCS_SOURCE / name]

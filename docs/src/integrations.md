@@ -8,7 +8,7 @@ This page states what is actually exercised and what is not.
 
 The aerodynamic coupling requires an **existing sourced solver environment**, an
 OpenFOAM installation, and a case directory you supply. DAFoam, `mpi4py`, and
-`petsc4py` are imported lazily, so importing BSM3 and running its test suite
+`petsc4py` are imported lazily, so importing GAMMA and running its test suite
 needs none of them.
 
 **No DAFoam or OpenFOAM solve runs in the standard CI suite.** The rank-0
@@ -36,7 +36,7 @@ mesh.
 ### Mesh generation — separate
 
 Generating a surface or volume mesh is outside the surface-motion quickstart.
-BSM3 consumes meshes you already have.
+GAMMA consumes meshes you already have.
 
 ## Assets and file formats
 
@@ -75,7 +75,7 @@ somewhere writable and outside your source checkout.
 caller's recorder. Create it, start it, pass the *same* recorder to `mm.run`,
 and stop it in a `finally` block. Every design variable your coefficients
 depend on must belong to that recorder; a variable created under a different
-recorder is not part of the graph BSM3 evaluates.
+recorder is not part of the graph GAMMA evaluates.
 
 **Coefficient shape or patch-ID errors.** Component topology and coefficient
 layout must stay compatible with the STEP component found by `search_name`.
@@ -83,7 +83,7 @@ These are validated after the component is imported and the canonical patch IDs
 are known, so a mismatch surfaces during the run rather than at the
 `add_component` call.
 
-**A headless run should not open a plot.** Interactive BSM3 visualization is
+**A headless run should not open a plot.** Interactive GAMMA visualization is
 optional; leave `Visualization(enabled=False)`. PyVista is nevertheless part
 of the validated environment because the pinned LFS package currently imports
 it eagerly, even when no interactive window is requested.

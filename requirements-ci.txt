@@ -17,7 +17,7 @@ pytest-timeout==2.4.0
 ruff==0.9.10
 
 # CSDL_alpha now tracks official upstream main rather than the HgXe fork.
-# This commit provides the CustomExplicitOperationBeta API BSM3 depends on.
+# This commit provides the CustomExplicitOperationBeta API GAMMA depends on.
 csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git@73a9efd1033016a835779db10a9b9e81ed2254ce
 
 # lsdo_function_spaces is installed separately with --no-deps in CI so its

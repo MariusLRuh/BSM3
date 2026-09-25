@@ -1,19 +1,19 @@
 # External parameterization
 
-BSM3 does not require you to use its geometry helpers. The general contract is:
+GAMMA does not require you to use its geometry helpers. The general contract is:
 
 ```text
 external CSDL/LFS parameterization
     -> deformed coefficients
     -> GeometryModel.add_component(...)
-    -> BSM3 projection, surface motion, quality, and optional volume chain
+    -> GAMMA projection, surface motion, quality, and optional volume chain
 ```
 
 `GeometryModel` is a **declaration and binding envelope, not a
 parameterization**. `add_component` is the general entry point and the
 universal boundary: you supply deformed component coefficients produced by any
 differentiable CSDL/LFS-compatible parameterization, owned entirely outside
-BSM3, and BSM3 places no constraint on how they were built.
+GAMMA, and GAMMA places no constraint on how they were built.
 
 `add_lifting_surface` and `add_body` are **optional conveniences** oriented at
 the E175 example. They build their own private records rather than calling
@@ -97,7 +97,7 @@ Three conditions must hold. They are the current limits of the contract:
    A layout mismatch therefore surfaces during the run, not during declaration.
 3. **Every dependent variable must belong to the caller-owned recorder** that
    you pass to `bsm3.mesh_motion.run`. A variable created under a different
-   recorder is not part of the graph BSM3 evaluates.
+   recorder is not part of the graph GAMMA evaluates.
 
 ## Restricting motion
 

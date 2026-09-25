@@ -1,10 +1,14 @@
-# BSM3
+# GAMMA
 
-BSM3 performs **differentiable boundary-surface mesh motion**. Given a CAD
-outer mould line and a surface mesh that must follow it, BSM3 moves every mesh
-node as the geometry deforms, carries analytic derivatives through the CSDL
-graph, and reports mesh-quality and inversion diagnostics so validity is a
-measured outcome rather than an assumption.
+**GAMMA — Geometry-Aware Mesh Movement Analysis** performs differentiable
+boundary-surface mesh motion. Given a CAD outer mould line and a surface mesh
+that must follow it, GAMMA moves every mesh node as the geometry deforms,
+carries analytic derivatives through the CSDL graph, and reports mesh-quality
+and inversion diagnostics so validity is a measured outcome rather than an
+assumption.
+
+The installable distribution is `gamma-mdo`; the Python import namespace
+remains `bsm3`.
 
 It also provides tetrahedral volume-mesh motion and an optional CSDL/DAFoam
 coupling.
@@ -77,8 +81,8 @@ contract, the public API, background, and integration status.
 
 ## Installation
 
-The validated setup installs BSM3 from a checkout and pins its geometry
-dependencies to exact Git revisions. BSM3 deliberately declares no automatic
+The validated setup installs GAMMA from a checkout and pins its geometry
+dependencies to exact Git revisions. GAMMA deliberately declares no automatic
 dependencies, so its own editable install cannot replace packages in an
 externally managed DAFoam, MPI, or PETSc stack.
 
@@ -117,4 +121,4 @@ the standard test suite.
 
 ## License
 
-BSM3 is licensed under the GNU Lesser General Public License v3.0 or later.
+GAMMA is licensed under the GNU Lesser General Public License v3.0 or later.

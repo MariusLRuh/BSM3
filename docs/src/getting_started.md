@@ -1,10 +1,10 @@
 # Installation
 
-Install BSM3 from a checkout into an environment you control. The validated
+Install GAMMA from a checkout into an environment you control. The validated
 setup uses exact Git revisions for CSDL_alpha and lsdo_function_spaces rather
 than relying on whichever releases a package registry currently provides.
 
-BSM3 deliberately declares **no mandatory pip dependencies**. Its own install
+GAMMA deliberately declares **no mandatory pip dependencies**. Its own install
 therefore uses `--no-deps`, so it does not replace packages in an existing
 geometry or DAFoam environment whose MPI, PETSc, NumPy, SciPy, and solver
 versions are under an administrator's control. The dependency-bootstrap step
@@ -40,7 +40,7 @@ python -m pip install -r requirements-ci.txt
 python -m pip install --no-deps \
   "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git@307ad3aabfff31c6fb44ddf51bc0dcc41a60c420"
 
-# Install BSM3 itself without resolving or building dependencies, so an
+# Install GAMMA itself without resolving or building dependencies, so an
 # externally managed solver environment is left untouched.
 python -m pip install --no-deps --no-build-isolation -e .
 ```
@@ -49,13 +49,13 @@ Both `--no-deps` choices are load-bearing:
 
 - `--no-deps` on `lsdo_function_spaces` preserves the complete validated stack
   installed from `requirements-ci.txt`, including the CSDL revision.
-- `--no-deps --no-build-isolation` on BSM3 keeps pip from resolving or
+- `--no-deps --no-build-isolation` on GAMMA keeps pip from resolving or
   rebuilding anything in the surrounding environment.
 
 ## Developer extras
 
 `requirements-ci.txt` includes the packages used by tests and diagnostics,
-including `pytest`, `meshio`, and PyVista. Interactive BSM3 visualization is
+including `pytest`, `meshio`, and PyVista. Interactive GAMMA visualization is
 optional, but PyVista is currently imported eagerly by the pinned LFS package,
 so it remains part of this validated environment even for headless runs.
 

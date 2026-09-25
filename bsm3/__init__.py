@@ -24,7 +24,7 @@ are :mod:`bsm3.core.projections.function_set_closest_distance_custom_op` for
 optional dependency raised, rather than silently omitting the name.
 """
 
-__version__ = '0.1.4'
+__version__ = "0.2.0a1"
 
 from . import component_parameters, core, plotting, preprocessing
 

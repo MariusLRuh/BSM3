@@ -6,7 +6,7 @@ This page explains what each pipeline stage does and why the settings exist.
 
 When a CAD outer mould line deforms, a surface mesh attached to it must follow.
 Moving only the boundary nodes and leaving the interior alone tangles the mesh;
-moving everything rigidly ignores the shape change. BSM3 propagates the motion
+moving everything rigidly ignores the shape change. GAMMA propagates the motion
 through the mesh graph, then combines closest-point projection, exact
 intersection coordinates, and fixed-parametric reevaluation on the deformed
 geometry while recording convergence diagnostics. The map remains

@@ -1,7 +1,7 @@
 # Read the Docs configuration.
 # https://docs.readthedocs.io/en/stable/config-file/v2.html
 #
-# The BSM3 documentation build is hermetic: it renders hand-written Markdown
+# The GAMMA documentation build is hermetic: it renders hand-written Markdown
 # and never imports the package, so it installs only docs/requirements.txt.
 # The validated geometry stack (CSDL_alpha, lsdo_function_spaces, JAX, gmsh)
 # is deliberately NOT installed here. If a future revision adds autodoc, that
@@ -14,16 +14,16 @@ version: 2
 build:
   os: ubuntu-22.04
   tools:
-    # Matches the validated BSM3 stack.
+    # Matches the validated GAMMA stack.
     python: "3.12"
 
 sphinx:
   configuration: docs/conf.py
   fail_on_warning: true
 
-formats:
-  - pdf
-  - htmlzip
+# HTML is the only validated format for the first alpha release. PDF and
+# HTMLZIP remain disabled until their toolchains are tested independently.
+formats: []
 
 python:
   install:

@@ -17,7 +17,7 @@ This list is the complete supported namespace. A structural test compares it
 exactly with `bsm3.mesh_motion.__all__`; semantic descriptions and signatures
 are still reviewed against the implementation.
 
-<!-- BEGIN BSM3 PUBLIC EXPORTS -->
+<!-- BEGIN GAMMA PUBLIC EXPORTS -->
 - `mm.DerivativeCheck`
 - `mm.DistanceWeighting`
 - `mm.DistortionPenalty`
@@ -35,7 +35,7 @@ are still reviewed against the implementation.
 - `mm.run`
 - `mm.run_fd_sweep`
 - `mm.select_fd_objective`
-<!-- END BSM3 PUBLIC EXPORTS -->
+<!-- END GAMMA PUBLIC EXPORTS -->
 
 ## `run`
 
