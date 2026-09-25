@@ -60,6 +60,8 @@ Open:
 
 Status:    closed
 
+---
+
 ## Turn 2 — Codex, implementer/reviewer, 2026-09-21
 Scope:     Plan review; Q-A/Q-B/Q-C; safe portions of M0.1/M0.3/M0.4
 
@@ -4510,5 +4512,63 @@ test asserts it names none of the runtime stack.
   and no library change proved necessary.
 
 M2.1 is **ready for Codex review** and is not accepted by the implementer.
+
+Status:    closed
+
+---
+
+## Turn 62 — Codex, reviewer/planner, 2026-09-25
+Scope:     Review M2.1 and issue the accuracy correction
+Reviewed:  4ca0435, 1cc849e
+Status:    M2.1 NOT ACCEPTED; narrow Turn-63 correction issued
+
+The infrastructure portion is good. Codex independently reproduced the exact
+27-path allowlisted range and clean scoped diff, **10 documentation tests**,
+**13 passed / 5 deselected** fast E175 tests, default Ruff on the new Python
+files, and a strict Sphinx 9.1.0 build from both the working tree and a fresh
+clone of `4ca0435`. The `.readthedocs.yaml` keys and Python 3.12 selection also
+match the current Read the Docs v2 configuration contract. Avoiding autodoc is
+accepted: importing the full geometry stack only to render hand-written public
+API guidance would add cost and failure modes without improving this site.
+
+M2.1 is not accepted because the principal user promise — a reproducible
+validated install — has not yet been met. The documented sequence installs
+CSDL, then installs official LFS with `--no-deps`, but never installs all of
+LFS's declared dependencies. At official `307ad3a`, those include NumPy,
+SciPy, PyVista, joblib, pandas, scikit-learn, and JAX. CSDL does not provide the
+complete set. The existing `requirements-ci.txt` is the tested dependency
+bootstrap and CSDL pin; documentation should use it before the intentionally
+`--no-deps` LFS install, then install BSM3 with
+`--no-deps --no-build-isolation -e .`. The correction must execute that recipe
+from a truly empty Python 3.12 environment, not infer it from the already
+populated compatibility environment.
+
+Four semantic issues also block final accuracy acceptance:
+
+- “so the mesh stays valid” is a guarantee contradicted by the inversion
+  diagnostics and failure policy;
+- “every node back exactly” ignores the documented projection non-convergence
+  path, which still returns a point;
+- `print_summary()` does not report load stepping; inspection of its body shows
+  vertex/cell/n-gon counts, elapsed time, fold/inversion counts, degenerate
+  elements, and minimum scaled Jacobian; and
+- “BSM3 never starts or stops a recorder” is too broad. The reviewed public
+  `GeometryModel`/`mm.run` contract does not own the caller's recorder, while
+  optional internal driver backends can own one.
+
+The README Quickstart also calls `run` on an empty `GeometryModel`, which fails
+validation if copied verbatim. It must be labeled as a call-shape skeleton or
+replaced with an executable path. Finally, the hand-written API test does not
+actually prove its claimed bidirectional equality: a regex scrapes `__all__`,
+export names may pass as incidental substrings, and only backticked `mm.Name`
+forms count as promises. Turn 63 replaces that with an AST-read `__all__` and a
+delimited exact inventory in the API page.
+
+Sphinx reported seven source documents. The handoff's “9 pages” can describe
+generated HTML only if it explicitly includes utility pages such as search and
+index; it must not be presented as nine authored pages.
+
+No production or example change is authorized. Correct content from Turn 61
+is preserved, and M2.2 remains blocked pending this narrow correction.
 
 Status:    closed
