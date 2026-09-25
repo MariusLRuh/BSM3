@@ -5352,3 +5352,74 @@ complete M4.2 prompt is preserved verbatim at `38cd0bf` and is recoverable with
 weakened. M3 archive/history pruning remains last.
 
 Status:    closed
+
+---
+
+## Turn 71 — Codex stop, then Claude prompt correction, 2026-09-25
+Scope:     Turn-71 prompt defect; no implementation attempted
+Base:      23ef4ad
+Status:    Prompt corrected and reissued. Nothing renamed, tagged, or pushed.
+
+### The defect was mine
+
+Codex stopped before editing rather than working around an unsatisfiable
+allowlist. That was the correct call and the stop rule working as designed.
+
+The Turn-71 prompt simultaneously required `docs/conf.py` to declare
+`project = "GAMMA"`, `docs/src/api.md` to carry no `BSM3` reference,
+`tests/test_documentation.py` to pass, and all of `tests/**` to stay
+prohibited. Those cannot all hold. Verified in source at `23ef4ad`:
+
+| Line | Assertion | Effect of the required rebrand |
+| --- | --- | ---: |
+| `tests/test_documentation.py:115` | `assert 'project = "BSM3"' in conf` | fails |
+| `tests/test_documentation.py:155-156` | regex on `<!-- BEGIN/END BSM3 PUBLIC EXPORTS -->` | fails |
+| `tests/test_documentation.py:219` | `assert "BSM3 never starts or stops a recorder" not in text` | silently stops protecting |
+
+Line 219 is the subtle one. It is a *negative* guard, one of the four rejected
+overclaims. It does not fail after a rebrand — it keeps passing while no longer
+guarding anything, because the prose it forbids would now read "GAMMA never
+starts or stops a recorder". Leaving it unchanged would quietly retire a
+semantic protection rather than break a test. That is worse than a failure, and
+it is why the string must move with the brand.
+
+### Scope of the correction
+
+Exactly one path is added to the implementation allowlist:
+`tests/test_documentation.py`, removed from the `tests/**` prohibition. No
+other test file is authorized and no other part of the prompt is widened.
+
+I checked that this is sufficient rather than assuming it. Every `BSM3`
+reference under `tests/` was enumerated: the four above, a docstring at
+`test_documentation.py:131`, and three prose comments in
+`test_e175_example.py` (lines 204, 492-494, 543) that assert nothing and
+correctly describe the historical package. No test asserts on
+`.readthedocs.yaml` `formats`, so the HTML-only change needs no test edit, and
+no test pins `0.1.4`, so the version bump needs none either. The corrected
+prompt is therefore satisfiable as written.
+
+### Baselines independently reproduced
+
+Every figure Codex recorded was re-derived, and the two hashes match exactly
+once the formulation is pinned:
+
+| Baseline | Recorded | Verified |
+| --- | --- | --- |
+| Modified tracked files | 8 | **8** |
+| Untracked entries | 393 | **393** |
+| `.py` files importing `bsm3` | 53 | **53** |
+| Dirty diff SHA-256 | `981318…6177` | **exact match** (`git diff \| shasum -a 256`) |
+| Untracked-list SHA-256 | `c38fd9…da60` | **exact match** (`git status --porcelain \| grep '^??' \| cut -c4- \| sort \| shasum -a 256`) |
+| Supported-surface `BSM3` | 39 | **39 lines / 40 occurrences** |
+
+The last row is not a discrepancy but an ambiguity worth pinning: `git grep -c`
+counts matching *lines* and `git grep -o` counts *occurrences*, and one line in
+the branding surface carries two `BSM3` tokens. The corrected prompt states
+which command it means so the post-change check cannot be argued either way.
+
+All Turn-70 rulings stand unchanged: `GAMMA` / `GAMMA-MDO` / `gamma-mdo`,
+import namespace stays `bsm3`, version `0.2.0a1`, HTML-only first build, and
+the four external mutations remain user-authorized. The M4.2 prompt remains
+preserved verbatim at `38cd0bf`.
+
+Status:    closed
