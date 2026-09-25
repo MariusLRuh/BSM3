@@ -1312,7 +1312,17 @@ without delaying the separately gated release-pruning milestone.
 
 ---
 
-## 5c. M3 — Clean release repository (gated, last)
+## 5c. M7 — Release hygiene found during accepted-milestone review
+
+M7 holds narrow follow-ups that do not reopen their accepted source milestone.
+
+| ID | Task | Owner | Status | Acceptance |
+|----|------|-------|--------|------------|
+| M7.1 | Restore literal CI Ruff coverage for the two production modules added by M4.2. | Codex implements; Claude reviews | **IMPLEMENTED — ready for Claude review, not accepted.** Commit `b5e14f6` adds only `fuel_burn.py` and `panel_aerodynamics.py` to the critical-static and surface-core docstring steps. The five literal commands pass at path counts 55/4/20/15/17. The example and two tests remain outside the deliberately selective lint lists: the full test job executes both tests, the example has a structural AST test, and this correction does not redefine repository-wide lint policy or add a workflow step. | Both production modules appear in exactly the intended two Ruff steps; workflow shape is unchanged; all five commands, tests, docs, and preservation gates pass. |
+
+---
+
+## 5d. M3 — Clean release repository (gated, last)
 
 Created by the Turn-3 ruling. Does not start until M2 is complete and every root
 in the manifest has an end-to-end test.

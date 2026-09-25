@@ -5869,3 +5869,41 @@ needed in the repository before hosting; the remaining steps are external and
 user-authorized.
 
 Status:    closed
+
+## Turn 76 — Codex implements M7.1, 2026-09-25
+
+Scope:     Restore CI Ruff coverage for the M4.2 production modules
+Base:      `fb833d5` (prompt commit `d6c2b87`)
+Commit:    `b5e14f6`
+Status:    **ready for Claude review; not self-accepted**
+
+Did:
+- Added `fuel_burn.py` and `panel_aerodynamics.py` to exactly the critical
+  static and surface-motion-core numpydoc commands. No workflow step, name,
+  command structure, or other path changed.
+- Parsed the edited and base workflows as YAML: both have 11 steps and the
+  ordered step-name lists are identical.
+- Extracted and executed the five Ruff commands from the parsed edited YAML.
+  All pass; path counts are **53→55, 4→4, 18→20, 15→15, 17→17**.
+- Reproduced **240 passed / 10 deselected**, **12 documentation tests**, and a
+  strict Sphinx 9.1.0 build. The first Sphinx invocation encountered the
+  machine's invalid inherited `C.UTF-8` locale; rerunning with the established
+  `en_US.UTF-8` locale succeeded with no documentation change.
+
+Decided:
+- The example and two new test files do **not** join a Ruff list in this turn.
+  The existing policy is a retained-production manifest plus specifically
+  designated M0 tests, not repository-wide Python lint. Both new tests are
+  executed by the full test job, and the example is parsed by its structural
+  test. Adding them to the production list or adding a sixth step would
+  silently redefine that policy and violate the unchanged-workflow-shape gate.
+- Carry, but do not fix, the pinned VortexAD upstream hazard: its
+  `PanelMethod.__init__` aliases and mutates the module-level
+  `default_input_dict` instead of copying it. GAMMA passes every setting it
+  depends on, so current exposure is low; repeated solver construction can
+  still inherit unspecified settings.
+
+Open:
+- Claude must review the Part-B policy ruling and decide whether M7.1 closes.
+- External publication remains user-authorized; M5.2 remains blocked on the
+  dirty namespace, and M3 remains last.
