@@ -24,14 +24,30 @@ VJP are tested with scripted single-process communicators and a structural
 communicator protocol that resolves without `mpi4py` installed. No real
 multi-rank MPI job runs in the standard suite.
 
-### VortexAD — deferred
+### VortexAD — optional tracked adapter
 
-VortexAD is **not** a supported integration. It is not installed in the
-validated environment, and the existing untracked panel driver targets
-pre-generalization modules and types that no longer exist. Do not treat that
-driver as supported. The intended future work is a tracked adapter written
-against a pinned VortexAD revision, driven by the `mm.run` result and a curated
-mesh.
+GAMMA provides `mm.build_panel_aerodynamics`, a differentiable adapter from the
+public `mm.run` result to VortexAD's steady panel method. It targets official
+VortexAD `main` at commit
+`8c5bc86fda5fa1e359fecde24c6c6e8527c773b5`. Install that optional dependency
+explicitly after validating it against your environment:
+
+```bash
+python -m pip install --no-deps \
+  "VortexAD @ git+https://github.com/LSDOlab/VortexAD.git@8c5bc86fda5fa1e359fecde24c6c6e8527c773b5"
+```
+
+VortexAD is not a base dependency and is not installed by the standard test or
+documentation environments. The standard suite exercises the adapter and its
+analytic derivative with a fake panel solver implementing the pinned API; a
+real VortexAD import check is an integration test and skips when the optional
+package is absent. No real panel solve is claimed as a standard-CI result.
+
+The adapter accepts triangle/quad connectivity, derives adjacency and trailing
+edges from the undeformed curated mesh, rejects non-converged OML projections
+by default, and registers `CL`, `CDi`, `L`, and `Di` in
+`MeshMotionResult.aerodynamic_outputs`. The caller owns the active recorder;
+the adapter never starts or stops it.
 
 ### Mesh generation — separate
 

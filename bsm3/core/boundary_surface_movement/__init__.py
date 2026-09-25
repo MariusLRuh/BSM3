@@ -41,6 +41,7 @@ from .free_region import (
     ComponentFreeRegion,
     select_free_vertices,
 )
+from .fuel_burn import FuelBurnParameters, compute_fuel_burn
 from .geometry import (
     classify_patch_sides,
     component_patch_ids,
@@ -119,6 +120,11 @@ from .ngon_affine import (
     NgonAffineConfig,
     NgonAffineSystem,
 )
+from .panel_aerodynamics import (
+    PanelAerodynamicOutputs,
+    PanelCondition,
+    build_panel_aerodynamics,
+)
 from .projection import (
     VertexBatch,
     combine_vertices,
@@ -196,6 +202,7 @@ __all__ = [
     "DerivativeCheck",
     "GeometryModel",
     "GeometryVolumeBackend",
+    "FuelBurnParameters",
     "GraphDistanceSummary",
     "GraphDistanceWeighting",
     "GraphVolumeSystem",
@@ -218,6 +225,8 @@ __all__ = [
     "NgonAffineConfig",
     "NgonAffineSystem",
     "PolygonRegularization",
+    "PanelAerodynamicOutputs",
+    "PanelCondition",
     "PYDAFoamBackend",
     "MeshMotion",
     "RBFMotionSolver",
@@ -239,6 +248,7 @@ __all__ = [
     "assemble_graph_volume_system",
     "add_csdl_inputs_to_da_options",
     "build_graph_distance_weighting",
+    "build_panel_aerodynamics",
     "run_mesh_motion",
     "build_local_volume_coordinate_map",
     "check_element_inversion",
@@ -246,6 +256,7 @@ __all__ = [
     "classify_patch_sides",
     "combine_vertices",
     "compare_mesh_quality",
+    "compute_fuel_burn",
     "component_patch_ids",
     "deform_geometry",
     "evaluate_mesh_quality",

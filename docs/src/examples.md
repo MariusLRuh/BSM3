@@ -185,3 +185,30 @@ The advanced example prints the new public classifications:
 Every array uses the complete input mesh's zero-based index space. This also
 makes custom visualization direct: use `result.surface_coordinates.value` for
 the final coordinates and color rows selected by the classification arrays.
+
+## Fuel-burn optimization with VortexAD
+
+`examples/e175_fuel_burn_optimization.py` is the tracked advanced composition:
+
+```text
+geometry design variables
+    -> GAMMA surface motion and reprojection
+    -> VortexAD lift and induced drag
+    -> total drag with an explicit parasite contribution
+    -> Breguet cruise fuel burn
+    -> lift constraint and fuel-burn objective
+```
+
+Run it after installing the exact optional VortexAD revision documented under
+[Integrations](integrations.md):
+
+```bash
+python examples/e175_fuel_burn_optimization.py
+```
+
+The script keeps `MeshMotion.derivative_check` disabled because that debug
+convenience would register its own objective. It registers fuel burn directly
+and optionally calls the public FD sweep for the complete analytic graph. Its
+mission and parasite-drag values are clearly labelled illustrative rather than
+validated E175 performance data; replace them with sourced analysis inputs for
+an actual design study.

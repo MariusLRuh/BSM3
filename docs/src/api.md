@@ -21,10 +21,13 @@ are still reviewed against the implementation.
 - `mm.DerivativeCheck`
 - `mm.DistanceWeighting`
 - `mm.DistortionPenalty`
+- `mm.FuelBurnParameters`
 - `mm.GeometryModel`
 - `mm.InputFiles`
 - `mm.MeshMotion`
 - `mm.MeshMotionResult`
+- `mm.PanelAerodynamicOutputs`
+- `mm.PanelCondition`
 - `mm.PolygonRegularization`
 - `mm.QualityChecks`
 - `mm.SurfaceMotion`
@@ -32,6 +35,8 @@ are still reviewed against the implementation.
 - `mm.SurfaceVertexClassification`
 - `mm.Visualization`
 - `mm.VolumeMotion`
+- `mm.build_panel_aerodynamics`
+- `mm.compute_fuel_burn`
 - `mm.run`
 - `mm.run_fd_sweep`
 - `mm.select_fd_objective`
@@ -195,3 +200,26 @@ degenerate-element and minimum-scaled-Jacobian quality fields.
 Points whose reprojection did not converge are still returned. The reports are
 the evidence of solve quality; they are diagnostics, not guarantees.
 ```
+
+## Panel aerodynamics and fuel burn
+
+`build_panel_aerodynamics(result, condition)` appends the optional pinned
+VortexAD steady panel method to the caller's active CSDL graph. It consumes
+only the public `MeshMotionResult` surface and returns
+`PanelAerodynamicOutputs` with `lift_coefficient`,
+`induced_drag_coefficient`, `lift_newton`, and `induced_drag_newton`. The same
+variables are registered in `result.aerodynamic_outputs` as `CL`, `CDi`, `L`,
+and `Di`, so the existing FD selector can address them.
+
+`PanelCondition(reference_area_m2, reference_chord_m, ...)` holds the
+freestream, reference geometry, trailing-edge threshold, excluded root edges,
+and projection-convergence policy. Connectivity and trailing edges are derived
+from the undeformed triangle/quad mesh; the differentiable final coordinates
+are passed to the solve. VortexAD is imported only when the builder is called.
+
+`compute_fuel_burn(lift_coefficient, drag_coefficient, parameters)` evaluates
+the classical Breguet jet range relation as a pure CSDL graph.
+`FuelBurnParameters` requires the mission range, thrust-specific fuel
+consumption, cruise speed, and initial aircraft weight, with units documented
+on every field. The drag input is total aircraft drag; callers must add any
+parasite or other contributions not supplied by the panel method.
