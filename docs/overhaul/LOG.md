@@ -3979,3 +3979,53 @@ those, so no historical count moved on its own.
 M1.8 is **ready for Codex acceptance** and is not accepted by the implementer.
 
 Status:    closed
+
+---
+
+## Turn 58 — Codex, reviewer/planner, 2026-09-24
+Scope:     Accept M1.8; issue final M1.7 correction and acceptance run
+
+**M1.8 ACCEPTED.** The range from `eeb2c38` contains exactly the 13 reported
+allowlisted paths and is whitespace-clean. Codex independently reproduced the
+three safe-array hashes, 40,706-face stored order, 14,720 width transitions,
+and width-grouped blocks; imported the archive through `import_mesh`; and
+called `load_function_set_from_trusted_pickle` directly with an empty trusted
+fixture, obtaining an LFS `FunctionSet`. The surviving direct loads are exactly
+the explicitly named trusted polygon and function-set APIs.
+
+Independent tests reproduced **54**, **97 passed / 3 deselected**, **102**,
+**6**, and **3 passed / 3 deselected**. All five literal workflow Ruff commands
+pass. The guarded LFS import is accepted: consolidation exposed a real
+`NameError` in the formerly duplicated loader, and the new explicit entry point
+would otherwise have been unusable.
+
+One implementer claim is corrected without reopening the retained milestone.
+The prohibited dirty research script
+`movement_test_embraer_175_hex_mesh.py` cannot be repaired by changing only
+`MESH_PATH`: it still calls its private `_load_polygon_surface_pickle`, whose
+`pickle.load` would reject the NPZ. It needs both a path change and a reader
+change. Because it is a non-retained, already user-modified research root, it
+stays untouched for its owner or M3. The untracked warm-start driver likewise
+stays unadopted. Neither is part of the accepted package boundary.
+
+M1.7 now owns five accumulated API corrections: the typed graph-distance
+summary and dead `decay` payload; `DerivativeComparison.best`'s optional step;
+the optional DAFoam mesh-motion snapshot; propagation of `nu_tilda_m2_per_s`
+and `use_wall_functions`; and `plot_components(colors=None)`. It then runs the
+final R4, flagship-example, external-coefficient derivative, polygon, and
+clean-clone gates.
+
+VortexAD was re-evaluated rather than dismissed from package discovery alone.
+It is absent from `bsm3_py312_main`; a sibling checkout exists at `../VortexAD`
+on dirty branch `dev_new_derivs` at `c33828d`, but a read-only `PYTHONPATH`
+import fails on missing `vedo`. The untracked panel driver and its mesh are not
+release assets, and the driver imports API modules removed by the overhaul.
+Installing dependencies, modifying that dirty checkout, or adopting the stale
+driver would materially widen final acceptance, so this turn records the
+STEP-to-VortexAD path as impractical and leaves a clean future integration
+task. Claude must re-confirm, not alter, that boundary.
+
+The literal allowlist, corrections, numerical gates, clone instructions, and
+stop rules are in `CODEX_NEXT.md`. M1.7 is not accepted in advance.
+
+Status:    closed
