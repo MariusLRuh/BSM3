@@ -268,6 +268,7 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
     :class:`FunctionSetProjectionOperation`, so it must run against the same
     coefficients.
     """
+
     def __init__(
         self,
         model: FunctionSetProjectionModel,
@@ -366,6 +367,7 @@ class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBe
     distance measure. ``evaluate`` declares the graph inputs, output, and
     derivatives; ``compute`` performs the calculation.
     """
+
     def __init__(
         self,
         model: FunctionSetProjectionModel,
@@ -489,6 +491,19 @@ if __name__ == "__main__":
     query_points = interior_surface_points + np.array([0.0, 0.0, 0.12])
 
     def run_mode_verification(return_parametric: bool) -> None:
+        """Print a forward and derivative check for one projection output mode.
+
+        Parameters
+        ----------
+        return_parametric
+            Verify the parametric output when ``True``, otherwise the physical
+            projected points.
+
+        Returns
+        -------
+        None
+            Results are printed.
+        """
         mode_name = "parametric" if return_parametric else "physical"
         output_shape = (query_points.shape[0], 3)
         weights = np.linspace(0.25, 1.25, np.prod(output_shape), dtype=float).reshape(output_shape)

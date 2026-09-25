@@ -109,7 +109,6 @@ def quad_quality_gates(preset: str = "conservative", **overrides) -> QuadQuality
     candidates. Loosening these gates increases the candidate pool; tightening
     them decreases it.
     """
-
     try:
         gates = _QUAD_QUALITY_GATE_PRESETS[preset.lower()]
     except KeyError as exc:
@@ -135,7 +134,6 @@ def _convert_triangles_to_quads(
     quality_gates: QuadQualityGates,
 ) -> MeshData:
     """Merge eligible triangle pairs into quad cells without moving vertices."""
-
     triangles = np.asarray(mesh.cell_blocks.get("triangle", np.empty((0, 3), dtype=np.int64)), dtype=np.int64)
     if triangles.size == 0 or max_num_quads == 0:
         return mesh
@@ -207,7 +205,6 @@ def _triangle_pair_quad_candidates(
     quality_gates: QuadQualityGates,
 ) -> list[tuple[float, int, int, np.ndarray]]:
     """Build quality-scored quad candidates from adjacent triangle pairs."""
-
     edge_to_triangles: dict[tuple[int, int], list[int]] = {}
     for triangle_index, triangle in enumerate(triangles):
         for local_index in range(3):
@@ -307,7 +304,6 @@ def _apply_premerge_edge_flips(
     quality_gates: QuadQualityGates,
 ) -> tuple[np.ndarray, int]:
     """Conservatively flip triangle edges when doing so improves quadability."""
-
     updated_triangles = np.asarray(triangles, dtype=np.int64).copy()
     if updated_triangles.shape[0] < 2:
         return updated_triangles, 0

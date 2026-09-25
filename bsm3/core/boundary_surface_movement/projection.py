@@ -94,7 +94,6 @@ def project_onto_oml(
         If the selected call form is incomplete or metadata does not cover all
         supplied vertices.
     """
-
     if mesh_vertices is not None:
         if deformed_mesh_vertices is not None:
             raise ValueError(
@@ -271,7 +270,6 @@ def reevaluate_vertices(
     VertexBatch
         Reevaluated CSDL coordinates paired with their global IDs.
     """
-
     mesh_data = _as_mesh_data(mesh)
     coefficient_map = dict(component_coefficients or {})
     groups = []
@@ -328,7 +326,6 @@ def combine_vertices(
     ValueError
         If batches overlap or leave any global vertex uncovered.
     """
-
     num_vertices = max(
         oml_projected_vertices.num_mesh_vertices,
         reevaluated_mesh_vertices.num_mesh_vertices,

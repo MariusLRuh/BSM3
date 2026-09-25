@@ -84,7 +84,6 @@ class MeshMotionField(Protocol):
         csdl.Variable
             Preprojected coordinates in query-row order.
         """
-
         ...
 
 
@@ -117,7 +116,6 @@ class MeshMotionSolver(Protocol):
         MeshMotionField
             Trained preprojection field.
         """
-
         ...
 
 
@@ -147,6 +145,16 @@ class ComponentReevaluation:
     parametric_coordinates: np.ndarray
 
     def __post_init__(self):
+        """Normalize the vertex ids and parametric coordinates and check alignment.
+
+        Reshapes ``vertex_ids`` to ``(n,)`` and ``parametric_coordinates`` to
+        ``(n, 3)``, storing both back on the instance.
+
+        Raises
+        ------
+        ValueError
+            If the two do not align.
+        """
         ids = np.asarray(self.vertex_ids, dtype=np.int64).reshape(-1)
         coordinates = np.asarray(
             self.parametric_coordinates, dtype=float
@@ -226,7 +234,6 @@ class RBFMotionSolver:
         MeshMotionField
             RBF displacement surrogate satisfying the common field protocol.
         """
-
         # ``DisplacementSurrogate`` already satisfies the MeshMotionField
         # contract (``evaluate(vertices=..., vertex_ids=...)``).
         return self._interpolator.train(
@@ -458,7 +465,6 @@ class ElasticityMotionSolver:
         ``free_rows`` index into the supplied ``free_ids`` (which may be the full
         free set or the y-symmetry subset).
         """
-
         component_by_id = {id(component): component for component in self.components}
         rows_by_component: dict[int, list[int]] = {}
         for local_row, vertex in enumerate(free_ids):
@@ -525,7 +531,6 @@ class ElasticityMotionSolver:
         query-side free block; with a stationary query component both terms
         vanish and this reduces to the plain seam displacement.
         """
-
         from bsm3.preprocessing import project_mesh_onto_components
 
         reference: dict[int, tuple[np.ndarray, np.ndarray]] = {}
@@ -621,7 +626,6 @@ class ElasticityMotionSolver:
         GraphLoadStepState
             Absolute free references, prescribed deviations, and exact seams.
         """
-
         driving_by_id, query_component_coeffs, solutions = self._solve_geometry(
             component_coeffs=component_coeffs,
             query_component_coeffs=query_component_coeffs,
@@ -683,7 +687,6 @@ class ElasticityMotionSolver:
             Field combining graph displacements, exact reevaluations, and seam
             overrides.
         """
-
         driving_by_id, query_component_coeffs, solutions = self._solve_geometry(
             component_coeffs=component_coeffs,
             query_component_coeffs=query_component_coeffs,
@@ -736,7 +739,6 @@ class ElasticityMotionSolver:
         query_component_coeffs: Mapping[object, object],
     ) -> csdl.Variable:
         """Owner-component rigid displacement at each free vertex (the reference)."""
-
         num_free = int(self.free_ids.size)
         reference = csdl.Variable(value=np.zeros((num_free, 3), dtype=float))
         for group in self._free_reference_groups:
@@ -771,7 +773,6 @@ class ElasticityMotionSolver:
         full seam displacement.  ``seam_index`` / ``num_prescribed`` select the
         target system (full free set, or the y-symmetry subset).
         """
-
         deviation = csdl.Variable(value=np.zeros((num_prescribed, 3), dtype=float))
         for solution_index, (
             prescribed_rows,
@@ -821,7 +822,6 @@ class ElasticityMotionSolver:
         query_component_coeffs: Mapping[object, object],
     ) -> csdl.Variable:
         """Per-block ``rhs = -L_fp w_p`` over one system's free set."""
-
         rhs = csdl.Variable(value=np.zeros((num_free, 3), dtype=float))
         for group in free_reference_groups:
             block_deviation = self._assemble_block_deviation(
@@ -852,7 +852,6 @@ class ElasticityMotionSolver:
         factorization (plane pinned to 0), then scatters back into the full free
         rows with the plane rows left at zero.
         """
-
         rhs_xz = self._build_deviation_rhs(
             system=self.system,
             free_reference_groups=self._free_reference_groups,
@@ -983,7 +982,6 @@ class ElasticityMotionField:
         ValueError
             If IDs do not align with query rows or reevaluation metadata.
         """
-
         query_points = np.asarray(
             getattr(vertices, "value", vertices), dtype=float
         ).reshape((-1, 3))
@@ -1084,7 +1082,6 @@ def _resolve_driving_coefficients(parameters, component_coeffs):
 
 def _resolve_component_coefficients(component, driving_by_id, query_component_coeffs):
     """Deformed coefficients for a component (driving, then query, then base)."""
-
     if id(component) in driving_by_id:
         return driving_by_id[id(component)]
     coefficients = _component_mapping_get(query_component_coeffs, component, None)

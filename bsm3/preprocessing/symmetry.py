@@ -44,7 +44,6 @@ def detect_symmetry(mesh, *, axis: int = 1, tol: float = 1e-6) -> bool:
     True when every off-plane vertex has a mirror partner within ``tol`` and no
     cell straddles the plane (a clean node seam on the plane).
     """
-
     mesh_data = _as_mesh_data(mesh)
     vertices = np.asarray(mesh_data.vertices, dtype=float)
     if vertices.shape[0] == 0:
@@ -67,7 +66,6 @@ def split_symmetric_mesh(
     mesh, *, axis: int = 1, tol: float = 1e-6, keep_side: str = "auto"
 ) -> SymmetrySplit:
     """Split a mirror-symmetric mesh into a half plus reconstruction maps."""
-
     mesh_data = _as_mesh_data(mesh)
     vertices = np.asarray(mesh_data.vertices, dtype=float)
     num_full = vertices.shape[0]
@@ -153,7 +151,6 @@ def reconstruct_full_from_half(half_values, split: SymmetrySplit):
     the kept half; the result is a CSDL ``(n_full, 3)`` variable in the original
     full-mesh vertex order.
     """
-
     import scipy.sparse as sp
 
     import csdl_alpha as csdl
@@ -179,7 +176,6 @@ def _has_mirror_partners(vertices: np.ndarray, *, axis: int, tol: float) -> bool
 
 def _mirror_partner_index(vertices: np.ndarray, *, axis: int, tol: float) -> np.ndarray:
     """Index of each vertex's mirror image across ``coord[axis]=0`` (-1 if none)."""
-
     from scipy.spatial import cKDTree
 
     tree = cKDTree(vertices)
@@ -225,7 +221,6 @@ def create_symmetric_mesh(
     the plane, the side with more cells is kept and mirrored. If the input is
     already a half mesh, that half is mirrored.
     """
-
     mesh_data = _as_mesh_data(mesh)
     if num_quads is not None and num_quads < 0:
         raise ValueError("num_quads must be non-negative or None.")
@@ -266,7 +261,6 @@ def _normalize_quad_quality_gates(
 
 def _extract_symmetry_half_mesh(mesh: MeshData, *, tol: float) -> MeshData:
     """Select the source half mesh that will be mirrored."""
-
     side = _select_symmetry_side(mesh, tol=tol)
     selected_blocks: dict[str, np.ndarray] = {}
     y_coordinates = mesh.vertices[:, 1]
@@ -362,7 +356,6 @@ def _reindex_mesh_data(
 
 def _mirror_mesh_data_across_xz_plane(mesh: MeshData, *, tol: float) -> MeshData:
     """Mirror vertices and cells across ``y=0`` while preserving orientation."""
-
     vertices = np.asarray(mesh.vertices, dtype=float)
     mirror_map = np.arange(vertices.shape[0], dtype=np.int64)
     mirrored_vertices = [vertices.copy()]

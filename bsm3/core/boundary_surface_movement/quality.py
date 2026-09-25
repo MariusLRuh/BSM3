@@ -36,7 +36,6 @@ class ElementInversionReport:
         int
             Size of ``inverted_element_ids``.
         """
-
         return int(self.inverted_element_ids.size)
 
     @property
@@ -48,10 +47,19 @@ class ElementInversionReport:
         bool
             ``True`` when at least one element has a reversed corner.
         """
-
         return bool(self.num_inverted)
 
     def __bool__(self) -> bool:
+        """Report whether the report is clean, so it reads as a pass/fail flag.
+
+        Note the inversion of sense against :attr:`has_inversions`: a report
+        with inversions is falsey.
+
+        Returns
+        -------
+        bool
+            ``True`` when no element is inverted.
+        """
         return not self.has_inversions
 
 
@@ -114,7 +122,6 @@ def check_element_inversion(*, mesh, final_mesh_vertices) -> ElementInversionRep
     ElementInversionReport
         Inverted and degenerate element IDs in stable cell order.
     """
-
     mesh_data = _as_mesh_data(mesh)
     baseline = np.asarray(mesh_data.vertices, dtype=float)
     deformed = np.asarray(
@@ -158,7 +165,6 @@ def evaluate_mesh_quality(*, mesh, vertices=None) -> MeshQualityReport:
     MeshQualityReport
         Aggregate angle, aspect-ratio, Jacobian, area, and inversion metrics.
     """
-
     mesh_data = _as_mesh_data(mesh)
     baseline = np.asarray(mesh_data.vertices, dtype=float)
     points = (
@@ -247,7 +253,6 @@ def compare_mesh_quality(*, mesh, deformed_vertices) -> tuple[MeshQualityReport,
     tuple[MeshQualityReport, MeshQualityReport]
         Baseline report followed by the deformed report.
     """
-
     return (
         evaluate_mesh_quality(mesh=mesh),
         evaluate_mesh_quality(mesh=mesh, vertices=deformed_vertices),
@@ -303,7 +308,6 @@ def _signed_corner_scaled_jacobians(points, reference_unit_normal):
     the value is ``n0 dot (a_i cross b_i) / (|a_i| |b_i|)``, where ``n0`` is
     the baseline element unit normal.
     """
-
     previous = points - np.roll(points, 1, axis=0)
     following = np.roll(points, -1, axis=0) - points
     denominator = np.linalg.norm(previous, axis=1) * np.linalg.norm(following, axis=1)

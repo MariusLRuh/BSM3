@@ -34,11 +34,12 @@ DEFAULT_FUN_SET_PATH = Path(__file__).with_name("refitted_fun_set.pkl")
 # ----------------------------
 
 def _structured_tri_faces(Nu: int, Nv: int, vertex_offset: int) -> np.ndarray:
-    """
-    Returns faces in PyVista "faces" format: a flat array of [3, i0, i1, i2, 3, ...]
-    for a Nu x Nv structured grid (two triangles per quad cell).
+    """Build triangle faces for a structured grid in PyVista "faces" format.
 
-    Vertex indexing: idx(j,k) = vertex_offset + j*Nv + k
+    The result is a flat array of ``[3, i0, i1, i2, 3, ...]`` for an ``Nu`` by
+    ``Nv`` grid, with two triangles per quad cell.
+
+    Vertex indexing: ``idx(j, k) = vertex_offset + j * Nv + k``.
     """
     if Nu < 2 or Nv < 2:
         raise ValueError("Need Nu>=2 and Nv>=2 to form triangles.")
@@ -148,9 +149,9 @@ def build_sampled_patches_mesh(
 # ----------------------------
 
 def _faces_to_tris(mesh: pv.PolyData) -> np.ndarray:
-    """
-    Returns triangle vertex indices as (T,3) int64 array.
-    Assumes mesh is pure triangles.
+    """Return triangle vertex indices as a ``(T, 3)`` int64 array.
+
+    Assumes the mesh is pure triangles.
     """
     f = np.asarray(mesh.faces, dtype=np.int64)
     f = f.reshape(-1, 4)
@@ -162,11 +163,12 @@ def _faces_to_tris(mesh: pv.PolyData) -> np.ndarray:
 def _barycentric_coords_batch(
     p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray, eps: float = 1e-14
 ) -> np.ndarray:
-    """
-    Vectorized barycentric coordinates for many points:
-      p,a,b,c are (N,3). Returns w as (N,3) with rows [w0,w1,w2].
+    """Compute barycentric coordinates for many points at once.
 
-    Robust fallback for degenerate triangles: pick nearest vertex weights.
+    ``p``, ``a``, ``b``, and ``c`` are ``(N, 3)``; the result ``w`` is
+    ``(N, 3)`` with rows ``[w0, w1, w2]``.
+
+    Degenerate triangles fall back to the nearest-vertex weights.
     """
     v0 = b - a
     v1 = c - a
@@ -333,6 +335,7 @@ class NeighborEdgeMap:
         along-edge parameter must be flipped when crossing. The along-edge
         parameter is ``v`` for a ``u`` edge and ``u`` for a ``v`` edge.
     """
+
     neighbor_patch: int
     neighbor_edge: EdgeName
     reverse_along_edge: bool = False
@@ -515,7 +518,6 @@ def sample_bounding_box_faces(bbox_min, bbox_max, num_samples_per_face=10):
         Sampled points. Face samples are drawn with :func:`numpy.random.uniform`,
         so results vary between calls unless the global seed is fixed.
     """
-
     x_min_face = np.random.uniform(bbox_min[1], bbox_max[1], num_samples_per_face)
     y_min_face = np.random.uniform(bbox_min[2], bbox_max[2], num_samples_per_face)
     z_min_face = np.random.uniform(bbox_min[0], bbox_max[0], num_samples_per_face)
@@ -671,7 +673,6 @@ def load_function_set(pickle_path) -> lfs.FunctionSet:
     lsdo_function_spaces.FunctionSet
         Function set keyed by integer patch ID.
     """
-
     with open(pickle_path, "rb") as f:
         wing_fun_set_data = pickle.load(f)
 

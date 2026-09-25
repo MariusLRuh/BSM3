@@ -51,6 +51,7 @@ class OrthogonalityNewtonParams:
     det_eps, diag_eps
         Floors guarding the 2x2 solve and its diagonal against singularity.
     """
+
     max_iter: int = 40
     tol_res: float = 1e-9
     tol_step: float = 1e-9
@@ -95,6 +96,7 @@ class SurfaceProjectionResult:
         routes it into the retry path. ``None`` for candidates that lie on a
         boundary by construction.
     """
+
     uv: np.ndarray
     projected_points: np.ndarray
     residual: np.ndarray

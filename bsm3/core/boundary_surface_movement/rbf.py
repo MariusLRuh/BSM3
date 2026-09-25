@@ -118,14 +118,19 @@ class DisplacementInterpolationParameters:
         Radial basis function name, validated at construction against the
         supported kernels.
     fit_mode
-        ``"exact_interpolation"`` reproduces the observations at the training
-        points; ``"normalized_smoothing"`` trades exactness for smoothness.
+        ``"exact_interpolation"`` solves the interpolation system, but the
+        ridge term is added to it, so the fit is exact only when
+        ``regularization`` is zero and is softened for any nonzero value
+        (including the default). ``"normalized_smoothing"`` instead forms a
+        normalized kernel average and currently requires the Gaussian kernel,
+        raising :exc:`ValueError` for any other.
     rbf_kernel_scale
         Explicit kernel length scale. ``None`` derives one from the training
         geometry.
     regularization
-        Ridge term added to the RBF system, trading exactness for
-        conditioning.
+        Ridge term added to the diagonal of the training kernel matrix in the
+        ``"exact_interpolation"`` path, trading exactness for conditioning.
+        Only ``0.0`` leaves that fit genuinely interpolating.
     num_interpolation_vertices
         Number of mesh vertices selected as RBF centers.
     interpolation_vertex_selection_method
@@ -170,10 +175,17 @@ class DisplacementInterpolationParameters:
     Raises
     ------
     ValueError
-        At construction, if ``intersection_params`` is empty, the kernel,
-        ``fit_mode``, or selection method is unrecognized, a ratio falls
-        outside ``[0, 1]``, ``sigma_phi`` is not positive, or
-        ``seam_support_sigma_factor`` is negative.
+        At construction, if ``intersection_params`` is empty; ``rbf_kernel``,
+        ``fit_mode``, or ``interpolation_vertex_selection_method`` is
+        unrecognized; ``num_interpolation_vertices`` or
+        ``smoothing_iterations`` is negative; ``seam_neighbor_blend_radius`` or
+        ``seam_neighbor_component_blend`` cannot be resolved against the number
+        of intersections; ``seam_neighbor_support_cutoff`` or
+        ``smoothing_relaxation`` falls outside ``[0, 1]``; ``sigma_phi`` is not
+        positive; ``seam_support_sigma`` is supplied and not positive;
+        ``seam_support_sigma_factor`` or ``setup_weight_alpha`` is negative; or
+        ``component_displacement_data`` supplies ``distances`` for some but not
+        all components.
     """
 
     intersection_params: Sequence[IntersectionParameters]
@@ -207,13 +219,23 @@ class DisplacementInterpolationParameters:
     def __post_init__(self):
         """Freeze the sequence fields and validate the configuration.
 
+        ``intersection_params`` and ``component_displacement_data`` are stored
+        back as tuples.
+
         Raises
         ------
         ValueError
-            If ``intersection_params`` is empty, the kernel, ``fit_mode``, or
-            selection method is unrecognized, a ratio falls outside ``[0, 1]``,
-            ``sigma_phi`` is not positive, or ``seam_support_sigma_factor`` is
-            negative.
+            If ``intersection_params`` is empty; ``rbf_kernel``, ``fit_mode``,
+            or ``interpolation_vertex_selection_method`` is unrecognized;
+            ``num_interpolation_vertices`` or ``smoothing_iterations`` is
+            negative; the per-intersection seam radii or component blends
+            cannot be resolved against the number of intersections;
+            ``seam_neighbor_support_cutoff`` or ``smoothing_relaxation`` falls
+            outside ``[0, 1]``; ``sigma_phi`` is not positive;
+            ``seam_support_sigma`` is supplied and not positive;
+            ``seam_support_sigma_factor`` or ``setup_weight_alpha`` is
+            negative; or ``distances`` is supplied for some but not all
+            entries of ``component_displacement_data``.
         """
         object.__setattr__(self, "intersection_params", tuple(self.intersection_params))
         object.__setattr__(
@@ -626,7 +648,9 @@ class DisplacementSurrogate:
         Returns
         -------
         csdl_alpha.Variable
-            Displacements of shape ``(n, 3)``, aligned with ``vertices``.
+            **Deformed positions** of shape ``(n, 3)``, aligned with
+            ``vertices``: the query points plus the interpolated displacement,
+            not the displacement alone.
         """
         query_points = np.asarray(getattr(vertices, "value", vertices), dtype=float).reshape((-1, 3))
         query_variable = (

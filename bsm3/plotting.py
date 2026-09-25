@@ -48,9 +48,12 @@ def plot_components(
         :exc:`TypeError`.
     colors
         A single color applied to every component, or one color per component.
-        The empty string and ``None`` mean "leave the component's own color
-        alone". A per-component sequence whose length does not match
-        ``components`` raises :exc:`ValueError`.
+        The empty string means "leave the component's own color alone". A
+        per-component sequence whose length does not match ``components``
+        raises :exc:`ValueError`. ``None`` is **not** accepted and currently
+        raises :exc:`TypeError` whenever at least one component is given,
+        because it reaches the broadcast helper before the per-component check;
+        pass ``""`` instead.
     show
         When ``True``, render the accumulated elements in a blocking window
         before returning them.
@@ -257,12 +260,15 @@ def highlight_mesh_nodes(
         Either an ``(n, 3)`` array of point coordinates, used directly, or node
         indices into ``mesh``. Indices may be zero- or one-based.
     node_color
-        A single color for every node, or one color per node. ``None`` or an
-        empty value falls back to ``node_colore`` and then to ``"red"``.
+        A single color for every node, or one color per node. Exactly ``None``
+        defers to ``node_colore``; any value that is then still empty, whether
+        ``None``, ``""``, or an empty sequence, becomes ``"red"``.
     node_colore
         Misspelled legacy alias for ``node_color``, retained for backward
-        compatibility. It is consulted only when ``node_color`` is ``None``.
-        Prefer ``node_color`` in new code.
+        compatibility. It is consulted **only** when ``node_color`` is exactly
+        ``None``; an explicitly empty ``node_color`` such as ``""`` bypasses
+        the alias and falls through to ``"red"``. Prefer ``node_color`` in new
+        code.
     plotting_elements
         Existing elements to append to; ``None`` starts a new list.
     show

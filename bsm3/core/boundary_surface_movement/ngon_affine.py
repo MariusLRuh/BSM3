@@ -40,6 +40,13 @@ class NgonAffineConfig:
     geometry_tolerance: float = 1e-11
 
     def __post_init__(self):
+        """Validate the regularization strength and geometry tolerance.
+
+        Raises
+        ------
+        ValueError
+            If either value is non-finite or negative.
+        """
         strength = float(self.lambda_ngon)
         tolerance = float(self.geometry_tolerance)
         if not np.isfinite(strength) or strength < 0.0:
@@ -89,7 +96,6 @@ class NgonAffineSystem:
         scipy.sparse.csc_matrix
             Symmetric block matrix over free then prescribed vertices.
         """
-
         return sp.bmat(
             [
                 [self.free_matrix, self.coupling],
@@ -139,7 +145,6 @@ class NgonAffineAssembler:
         ValueError
             If partitions or an active polygon chart are invalid.
         """
-
         mesh_data = _as_mesh_data(mesh)
         points = np.asarray(mesh_data.vertices, dtype=float).reshape((-1, 3))
         free_ids, prescribed_ids = _validate_partition(free_ids, prescribed_ids)
@@ -305,7 +310,6 @@ class CurrentGraphNgonAffineModel:
         numpy.ndarray or tuple
             Free increment, optionally followed by reusable solve state.
         """
-
         points, incremental, current_free, total_prescribed = self._validate_inputs(
             current_vertices,
             incremental_prescribed,
@@ -353,7 +357,6 @@ class CurrentGraphNgonAffineModel:
         tuple[numpy.ndarray, ...]
             Cotangents for all four differentiable inputs.
         """
-
         points, incremental, current_free, total_prescribed = self._validate_inputs(
             current_vertices,
             incremental_prescribed,
@@ -508,7 +511,6 @@ class CurrentGraphNgonAffineSolveOperation(
         csdl.Variable
             Solved free increment.
         """
-
         self.declare_input("current_vertices", current_vertices)
         self.declare_input("incremental_prescribed", incremental_prescribed)
         self.declare_input("current_free_correction", current_free_correction)
@@ -531,7 +533,6 @@ class CurrentGraphNgonAffineSolveOperation(
         outputs
             Mutable outputs receiving ``free_increment``.
         """
-
         outputs["free_increment"] = self.model.solve(
             inputs["current_vertices"],
             inputs["incremental_prescribed"],
@@ -570,7 +571,6 @@ class CurrentGraphNgonAffineSolveVJP(
         dict[str, csdl.Variable]
             Input cotangent variables keyed by forward input name.
         """
-
         for name in (
             "current_vertices",
             "incremental_prescribed",
@@ -605,7 +605,6 @@ class CurrentGraphNgonAffineSolveVJP(
         outputs
             Mutable outputs receiving all input cotangents.
         """
-
         derivatives = self.model.compute_vjp(
             inputs["current_vertices"],
             inputs["incremental_prescribed"],
@@ -645,7 +644,6 @@ def _affine_residual_projector(polygon, *, tolerance):
     ValueError
         If the polygon has fewer than four vertices or a degenerate chart.
     """
-
     points = np.asarray(polygon, dtype=float).reshape((-1, 3))
     if points.shape[0] < 4:
         raise ValueError("An affine-residual polygon must have at least four vertices.")

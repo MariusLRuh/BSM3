@@ -93,6 +93,8 @@ class FlowConfig:
         Freestream static temperature in kelvin.
     nu_tilda_m2_per_s
         Spalart-Allmaras working variable in square metres per second.
+        Carried by the configuration and exposed on the CLI, but **not
+        currently consumed** by :func:`build_da_options`.
     reference_area_m2
         Reference area in square metres, normalizing the force coefficients.
     gas_constant_j_per_kg_k
@@ -101,7 +103,12 @@ class FlowConfig:
         Axis label, ``"y"`` or ``"z"``, spanning the lift direction together
         with the flow direction.
     use_wall_functions
-        Use wall functions instead of resolving the near-wall layer.
+        Intended to select wall functions instead of resolving the near-wall
+        layer. It is **not currently consumed** by :func:`build_da_options`,
+        which hardcodes ``primalBC/useWallFunction`` to ``False``. The CLI also
+        derives it from ``--no-wall-functions``, so the parser's effective
+        default is ``True`` and does not match this dataclass default of
+        ``False``.
     primal_min_res_tol
         Residual the steady primal must reach. Must be positive.
     primal_min_iterations
@@ -245,7 +252,10 @@ def csv_names(value: str) -> list[str]:
 
 
 def run_command(command: list[str], cwd: Path) -> None:
-    """Run a command on rank zero with output streamed to the terminal.
+    """Run a command with its output streamed to the terminal.
+
+    There is **no rank check here**: the caller decides where this runs, and
+    under MPI every rank that reaches it will launch the command.
 
     Parameters
     ----------
@@ -387,6 +397,12 @@ def set_control_dict_max_iterations(
     -------
     None
         The file is modified as a side effect.
+
+    Raises
+    ------
+    ValueError
+        If ``maximum_iterations`` is below one, or the ``endTime`` entry could
+        not be located and rewritten exactly once.
     """
     if maximum_iterations < 1:
         raise ValueError("maximum_iterations must be at least one")
@@ -606,7 +622,8 @@ def set_openfoam_patch_types(boundary_file: Path, patch_types: dict[str, str]) -
     Raises
     ------
     KeyError
-        If any named patch has no block in the file.
+        Propagated from :func:`find_patch_block` if a named patch has no block
+        in the file.
     """
     lines = boundary_file.read_text(encoding="utf-8").splitlines(keepends=True)
     type_pattern = re.compile(r"^(\s*)type\s+[^;]+;")
@@ -692,13 +709,18 @@ def convert_and_check_mesh(
     Raises
     ------
     RuntimeError
-        If ``gmshToFoam`` or ``checkMesh`` is not on ``PATH``, or conversion
-        did not yield a usable mesh.
+        If ``gmshToFoam`` or ``checkMesh`` is not on ``PATH``, or the Gmsh
+        conversion did not produce a 2.2 ASCII mesh.
     FileExistsError
-        If a ``polyMesh`` exists, overwriting was permitted, but its backup
-        path is already taken.
+        If an existing ``polyMesh`` must be moved aside but its timestamped
+        backup path is already taken.
+    FileNotFoundError
+        If ``gmshToFoam`` completed without creating the boundary file.
+    KeyError
+        Propagated from the patch-type assignment if an expected patch is
+        absent from the converted boundary file.
     subprocess.CalledProcessError
-        If an external command fails.
+        If an external command exits nonzero.
     """
     gmsh_to_foam = shutil.which("gmshToFoam")
     if gmsh_to_foam is None:
@@ -1059,8 +1081,9 @@ def run_dafoam(
     Returns
     -------
     dict
-        Result payload with the evaluated ``CD`` and ``CL`` values and the
-        accompanying run metadata.
+        The mapping DAFoam's ``evalFunctions`` fills in, holding one entry per
+        evaluated function such as ``CD`` and ``CL``. It carries no additional
+        run metadata.
 
     Raises
     ------

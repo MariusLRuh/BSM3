@@ -63,7 +63,6 @@ def project_mesh_onto_components(
     its own warm-start mesh.  The result also provides the distance matrix
     needed for deterministic component ownership.
     """
-
     vertices = _as_numpy_vertices(mesh_vertices)
     selection_token = np.arange(vertices.shape[0], dtype=np.int64).tobytes()
     output = []
@@ -100,7 +99,6 @@ def project_mesh_onto_geometry(
     coordinates are constants in the CSDL graph and are later used for exact
     reevaluation of vertices outside deformation regions.
     """
-
     vertices = _as_numpy_vertices(mesh_vertices)
     result = _project_component_to_vertices(
         geometry,
@@ -126,7 +124,6 @@ def identify_vertices_by_components(
     in ``components`` that is tied for the minimum distance.  Exact
     intersection handling later supersedes this ownership choice.
     """
-
     mesh_data = _as_mesh_data(mesh)
     vertices = np.asarray(mesh_data.vertices, dtype=float)
     component_list = list(components)
@@ -165,7 +162,6 @@ def identify_deformation_vertices(
     span uses the largest transverse (y/z) extent, while length uses the
     largest overall extent.
     """
-
     if (span_fraction is None) == (length_fraction is None):
         raise ValueError("Provide exactly one of span_fraction or length_fraction.")
     fraction = float(span_fraction if span_fraction is not None else length_fraction)
@@ -223,7 +219,6 @@ def get_projection_metadata(
     patches (e.g. one surface side); combined with ``para_coords=None`` this
     lets a node slide between those patches but never leave the subset.
     """
-
     del vertices, mesh  # Included for a readable call site and future checks.
     ids = np.asarray(vertex_ids, dtype=np.int64).reshape(-1)
     component_patches = tuple(sorted(int(key) for key in component.functions))
@@ -281,7 +276,6 @@ def identify_reevaluated_vertices(
     names: Sequence[str] | None = None,
 ) -> tuple[VertexEvaluationMetadata, ...]:
     """Return component-grouped metadata for all non-deformation vertices."""
-
     mesh_data = _as_mesh_data(mesh)
     excluded = np.asarray(vertex_ids, dtype=np.int64).reshape(-1)
     keep_mask = np.ones(mesh_data.vertices.shape[0], dtype=bool)

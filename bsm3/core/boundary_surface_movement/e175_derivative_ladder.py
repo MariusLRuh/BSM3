@@ -437,8 +437,10 @@ def level3_dafoam_volume_vjp(comm, seed_index: int = 0) -> dict[str, Any]:
     is the flow solver alone: the direction is supplied in coordinate space, so
     the mesh-motion Jacobian is not exercised.
 
-    The direction is shared verbatim with Level 6, so the two probe identical
-    geometry. Requires a configured DAFoam case directory.
+    The direction comes from the same helper Level 6 uses. Level 6 takes no
+    seed argument and so always uses ``seed_index=0``; the two levels therefore
+    probe identical geometry only when this level is run at its default seed.
+    Requires a configured DAFoam case directory.
 
     Parameters
     ----------
@@ -716,8 +718,10 @@ def level6_primal_only_deformation(comm) -> dict[str, Any]:
     """Solve a single deformed primal (no adjoint) to isolate the primal.
 
     This localizes whether a deformed mesh converges the primal to the requested
-    tolerance, independent of the adjoint. It reuses Level 3's baseline
-    coordinates and smooth direction so the two levels probe identical geometry.
+    tolerance, independent of the adjoint. It builds its baseline coordinates
+    and smooth direction with the same helper Level 3 uses, at the default
+    ``seed_index=0``; this level exposes no seed argument, so the two match
+    only when Level 3 is also run at its default seed.
 
     Controls (environment variables, set through the batch script):
 

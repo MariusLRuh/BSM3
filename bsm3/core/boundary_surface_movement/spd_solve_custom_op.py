@@ -45,7 +45,6 @@ def factorize_spd(matrix) -> "SPDFactor":
     ValueError
         If ``matrix`` is not square.
     """
-
     return SPDFactor(matrix)
 
 
@@ -84,7 +83,6 @@ class SPDFactor:
             If ``rhs`` is not one- or two-dimensional or has the wrong row
             count.
         """
-
         rhs_array = np.asarray(rhs, dtype=float)
         if rhs_array.ndim == 1:
             return np.asarray(self._solve_2d(rhs_array.reshape(-1, 1)), dtype=float).reshape(-1)
@@ -146,7 +144,6 @@ class SPDSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
         csdl.Variable
             Solution variable with the same shape as ``rhs``.
         """
-
         self.declare_input("rhs", rhs)
         u_f = self.create_output("u_f", rhs.shape)
         self.declare_vjp_function(
@@ -166,7 +163,6 @@ class SPDSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
         outputs
             Mutable custom-operation outputs receiving ``u_f``.
         """
-
         outputs["u_f"] = self.factor.solve(np.asarray(inputs["rhs"], dtype=float))
 
 
@@ -201,7 +197,6 @@ class SPDSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
         dict[str, csdl.Variable]
             Cotangent variable for ``rhs``.
         """
-
         rhs = inputs["rhs"]
         d_u_f = d_outputs[self.output_name]
 
@@ -220,7 +215,6 @@ class SPDSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
         outputs
             Mutable outputs receiving the right-hand-side cotangent.
         """
-
         outputs["d_rhs"] = self.factor.solve(np.asarray(inputs["d_u_f"], dtype=float))
 
 

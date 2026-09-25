@@ -228,9 +228,12 @@ def run_deformation_test():
     Starts its own inline recorder, builds the geometry model, runs the
     mesh-motion pipeline, and stops the recorder. When the configured
     derivative check is enabled, an objective is selected before the recorder
-    stops and the finite-difference sweep runs afterwards. Writing deformed
-    meshes and opening visualization windows are side effects of the configured
-    settings, not of this function.
+    stops and the finite-difference sweep runs afterwards. Calling this function
+    therefore has conditional side effects: with the configured settings it
+    writes deformed meshes to the output directory, opens visualization
+    windows, and runs the finite-difference sweep. Which of those occur is
+    governed by the module-level configuration, but they are side effects of
+    this call.
 
     Returns
     -------

@@ -92,15 +92,18 @@ class GaussianWeighting(WeightingFunction):
     """Truncated Gaussian weight on a unit-radius support.
 
     Evaluates ``exp(-sharpness * d**2)`` inside the support and returns exactly
-    zero at and beyond unit distance. The truncation means the weight is
-    discontinuous at ``d == 1`` unless ``sharpness`` is large enough for the
-    Gaussian to have decayed to a negligible value there.
+    zero at and beyond unit distance. The truncation leaves a genuine jump of
+    ``exp(-sharpness)`` at ``d == 1``, which is nonzero for **every** finite
+    ``sharpness``: raising ``sharpness`` shrinks the jump until it is
+    numerically negligible but never removes it. Unlike the other weights in
+    this module, this one is therefore not continuous at the support boundary.
 
     Attributes
     ----------
     sharpness
         Coefficient of the squared normalized distance in the exponent. Larger
-        values decay faster and leave a smaller jump at the truncation radius.
+        values decay faster and shrink, without eliminating, the jump at the
+        truncation radius.
     """
 
     sharpness: float = 4.0

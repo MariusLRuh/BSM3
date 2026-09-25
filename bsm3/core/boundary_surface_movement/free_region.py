@@ -56,6 +56,14 @@ class AxisRange:
     mode: str = "extent"
 
     def __post_init__(self):
+        """Validate the mode and the bound ordering.
+
+        Raises
+        ------
+        ValueError
+            If ``mode`` is neither ``"extent"`` nor ``"abs"``, or the bounds
+            are inconsistent.
+        """
         if self.mode not in ("extent", "abs"):
             raise ValueError("AxisRange.mode must be 'extent' or 'abs'.")
         if (
@@ -80,7 +88,6 @@ class AxisRange:
         numpy.ndarray
             Boolean mask aligned with ``coordinate``.
         """
-
         coordinate = np.asarray(coordinate, dtype=float).reshape(-1)
         reference = np.asarray(reference, dtype=float).reshape(-1)
         if self.mode == "extent":
@@ -143,7 +150,6 @@ class ComponentFreeRegion:
         numpy.ndarray
             Boolean free-vertex mask.
         """
-
         vertices = np.asarray(vertices, dtype=float).reshape((-1, 3))
         reference = (
             vertices
@@ -194,7 +200,6 @@ def select_free_vertices(
     KeyError
         If a region's component is absent from ``component_vertex_ids``.
     """
-
     mesh_vertices = np.asarray(mesh_vertices, dtype=float).reshape((-1, 3))
     excluded = set(int(vertex) for vertex in np.asarray(exclude_ids, dtype=np.int64).reshape(-1))
 

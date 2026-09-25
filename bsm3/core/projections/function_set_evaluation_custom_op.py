@@ -97,6 +97,7 @@ class EvaluationPatchInfo:
         Opaque B-spline space cache reused across calls to build basis
         stencils for this patch. Built once per patch at construction.
     """
+
     patch_id: int
     degrees: tuple[int, ...]
     knot_vectors: tuple[np.ndarray, ...]
@@ -119,6 +120,7 @@ class FunctionSetEvaluationModel:
     Both methods run eagerly in NumPy; the CSDL wrappers below hold a reference
     to this object.
     """
+
     def __init__(
         self,
         function_set,
@@ -318,6 +320,7 @@ class FunctionSetEvaluationVJP(csdl.experimental.CustomExplicitOperationBeta):
     Produces cotangents for both the coefficients and the parametric
     coordinates.
     """
+
     def __init__(self, model: FunctionSetEvaluationModel):
         super().__init__()
         self.model = model
@@ -395,6 +398,7 @@ class FunctionSetEvaluationOperation(csdl.experimental.CustomExplicitOperationBe
     ``compute`` performs the eager calculation through
     :meth:`FunctionSetEvaluationModel.evaluate`.
     """
+
     def __init__(self, model: FunctionSetEvaluationModel):
         super().__init__()
         self.model = model

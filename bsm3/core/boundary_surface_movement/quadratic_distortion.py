@@ -51,6 +51,16 @@ class DistortionModeCoefficients:
     normal: float = 0.5
 
     def __post_init__(self):
+        """Validate and normalize each distortion coefficient.
+
+        Every coefficient is converted to ``float`` and stored back on the
+        frozen instance.
+
+        Raises
+        ------
+        ValueError
+            If any coefficient is non-finite or negative.
+        """
         for name in ("area", "deviatoric", "shear", "rotation", "normal"):
             value = float(getattr(self, name))
             if not np.isfinite(value) or value < 0.0:
@@ -83,6 +93,18 @@ class QuadraticDistortionConfig:
     geometry_tolerance: float = 1e-10
 
     def __post_init__(self):
+        """Validate the distortion strength, mode, and tolerances.
+
+        The mode is lowercased and stripped before checking, and the
+        normalized values are stored back on the frozen instance.
+
+        Raises
+        ------
+        ValueError
+            If ``lambda_dist`` is non-finite or negative, ``mode`` is not
+            ``"full_gradient"`` or ``"strain_distortion"``, or a tolerance is
+            outside its permitted range.
+        """
         strength = float(self.lambda_dist)
         if not np.isfinite(strength) or strength < 0.0:
             raise ValueError("lambda_dist must be finite and nonnegative.")
@@ -204,7 +226,6 @@ class QuadraticDistortionSystem:
         int
             Number of free vertex IDs.
         """
-
         return int(self.free_ids.size)
 
     @property
@@ -216,7 +237,6 @@ class QuadraticDistortionSystem:
         int
             Number of prescribed vertex IDs.
         """
-
         return int(self.prescribed_ids.size)
 
     def full_matrix(self) -> sp.csc_matrix:
@@ -227,7 +247,6 @@ class QuadraticDistortionSystem:
         scipy.sparse.csc_matrix
             Symmetric block matrix in free-then-prescribed node-major order.
         """
-
         return sp.bmat(
             [
                 [self.free_matrix, self.coupling],
@@ -280,7 +299,6 @@ class QuadraticDistortionAssembler:
         ValueError
             If partitions or active polygon geometry are invalid.
         """
-
         mesh_data = _as_mesh_data(mesh)
         points = np.asarray(mesh_data.vertices, dtype=float).reshape((-1, 3))
         free_ids, prescribed_ids = _validate_partition(free_ids, prescribed_ids)
@@ -591,7 +609,6 @@ class CurrentGraphDistortionModel:
         numpy.ndarray or tuple
             Free increment, optionally followed by reusable solve state.
         """
-
         (
             points,
             incremental,
@@ -670,7 +687,6 @@ class CurrentGraphDistortionModel:
         tuple[numpy.ndarray, ...]
             Cotangents for all four differentiable inputs.
         """
-
         points = np.asarray(current_vertices, dtype=float).reshape((-1, 3))
         (
             output,
@@ -865,7 +881,6 @@ class CurrentGraphDistortionSolveOperation(
         csdl.Variable
             Solved free increment.
         """
-
         self.declare_input("current_vertices", current_vertices)
         self.declare_input("incremental_prescribed", incremental_prescribed)
         self.declare_input("current_free_correction", current_free_correction)
@@ -891,7 +906,6 @@ class CurrentGraphDistortionSolveOperation(
         outputs
             Mutable outputs receiving ``free_increment``.
         """
-
         outputs["free_increment"] = self.model.solve(
             inputs["current_vertices"],
             inputs["incremental_prescribed"],
@@ -930,7 +944,6 @@ class CurrentGraphDistortionSolveVJP(
         dict[str, csdl.Variable]
             Input cotangent variables keyed by forward input name.
         """
-
         for name in (
             "current_vertices",
             "incremental_prescribed",
@@ -967,7 +980,6 @@ class CurrentGraphDistortionSolveVJP(
         outputs
             Mutable outputs receiving all input cotangents.
         """
-
         derivatives = self.model.compute_vjp(
             inputs["current_vertices"],
             inputs["incremental_prescribed"],
@@ -1084,7 +1096,6 @@ def _segments_intersect(a, b, c, d, tolerance):
         float
             Signed scalar cross product.
         """
-
         return float(left[0] * right[1] - left[1] * right[0])
 
     ab = b - a
@@ -1195,7 +1206,6 @@ def _point_in_triangle(point, a, b, c, *, tolerance):
         float
             Twice the signed triangle area.
         """
-
         left = second - first
         right = third - first
         return float(left[0] * right[1] - left[1] * right[0])

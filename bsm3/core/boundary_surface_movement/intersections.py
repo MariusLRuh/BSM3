@@ -84,6 +84,16 @@ class IntersectionParameters:
     name: str = "component_intersection"
 
     def __post_init__(self):
+        """Normalize the parametric coordinates and check the vertex ids align.
+
+        Reshapes ``parametric_coords`` to ``(n, 3)`` and stores it back on the
+        frozen instance.
+
+        Raises
+        ------
+        ValueError
+            If ``vertex_ids`` is given and does not align with the coordinates.
+        """
         coordinates = np.asarray(self.parametric_coords, dtype=float).reshape((-1, 3))
         object.__setattr__(self, "parametric_coords", coordinates)
         if self.vertex_ids is not None:
@@ -158,7 +168,6 @@ def solve_intersection(
     ValueError
         If no driving component is configured.
     """
-
     driving_component = parameters.driving_component
     if driving_component is None:
         raise ValueError(
@@ -298,7 +307,6 @@ def _solve_baseline_intersection(
     parametric coordinate is bisected over ``[0, 1]`` while the query
     component's normal-mode SDF provides the residual sign.
     """
-
     driving_coefficients = stack_component_coefficients_numpy(
         parameters.driving_component
     )
@@ -321,7 +329,6 @@ def _solve_baseline_intersection(
         numpy.ndarray
             Signed-distance residual for each seam row.
         """
-
         coordinates[:, solve_column] = state
         points = evaluation_model.evaluate(driving_coefficients, coordinates)
         distances, _ = sdf_model.project(query_coefficients, points)

@@ -32,7 +32,6 @@ def component_patch_ids(component) -> tuple[int, ...]:
     TypeError
         If ``component`` does not expose any functions.
     """
-
     functions = getattr(component, "functions", None)
     if functions is None or not functions:
         raise TypeError("component must expose a non-empty .functions mapping.")
@@ -78,7 +77,6 @@ def classify_patch_sides(
         Patch IDs mapped to ``+1`` (upper), ``-1`` (lower), or ``0`` (cap or
         degenerate patch).
     """
-
     axis = _validate_axis(axis, "axis")
     span_axis = _validate_axis(span_axis, "span_axis")
 
@@ -132,7 +130,6 @@ def stack_component_coefficients(component) -> csdl.Variable:
     csdl.Variable
         Two-dimensional coefficient array with patches concatenated by row.
     """
-
     blocks = []
     for patch_id in component_patch_ids(component):
         coefficients = component.functions[patch_id].coefficients
@@ -155,7 +152,6 @@ def stack_component_coefficients_numpy(component) -> np.ndarray:
     numpy.ndarray
         Two-dimensional numeric coefficient array.
     """
-
     blocks = []
     for patch_id in component_patch_ids(component):
         value = np.asarray(component.functions[patch_id].coefficients.value, dtype=float)
@@ -195,7 +191,6 @@ def deform_geometry(
         If the component is not three-dimensional or a scaling control is
         invalid.
     """
-
     if not isinstance(parameters, ComponentParameters):
         raise TypeError(
             "parameters must be ComponentParameters, WingParameters, or a "
@@ -300,7 +295,6 @@ def _apply_planform_scaling(
 
 def _apply_diameter_scaling(centered_points, parameters: FuselageParameters):
     """Scale the cross-section axes of a body about the pivot."""
-
     if parameters.diameter_scale is None:
         return centered_points
     axes = {

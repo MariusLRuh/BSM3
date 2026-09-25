@@ -71,6 +71,7 @@ class NeighborEdgeMap:
         ``True`` when the two edges run in opposite parametric directions, so a
         coordinate must be flipped when crossing.
     """
+
     neighbor_patch: int
     neighbor_edge: EdgeName
     reverse_along_edge: bool = False
@@ -103,6 +104,7 @@ class WarmStartCandidateProjectionResult:
     edge_map
         Patch-edge adjacency used during the search.
     """
+
     patch_id: np.ndarray
     uv: np.ndarray
     projected_points: np.ndarray
@@ -551,8 +553,10 @@ def _compute_geometric_near_edges(
     gap_atol: float,
     cell_factor: float,
 ) -> List[List[EdgeName]]:
-    """Decide, per warm-start seed, which patch edges are close enough that the
-    neighbouring patch across them could hold the true closest point.
+    """Decide which patch edges each warm-start seed lies near.
+
+    An edge qualifies when the neighbouring patch across it could hold the true
+    closest point.
 
     Unlike the parametric ``_which_edge`` band (``u <= eps_edge``), the test is
     *physical* and grid-independent: an edge is "near" when the seed's physical
@@ -766,8 +770,9 @@ def _build_local_retry_candidate_specs(
     uv_step: float,
     scale_factors: Sequence[float] = (1.0, 4.0, 16.0),
 ) -> List[_CandidateSpec]:
-    """Re-seed the same patch Newton around the current guess at *several*
-    length scales, not just one sampling cell.
+    """Re-seed the same-patch Newton at several length scales.
+
+    The stencil spans *several* scales rather than a single sampling cell.
 
     The old builder probed a single ``±uv_step`` stencil (~one cell) and even
     re-ran the identical seed via a ``[0, 0]`` offset. That cannot rescue a point

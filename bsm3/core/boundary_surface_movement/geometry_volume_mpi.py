@@ -626,8 +626,11 @@ def verify_replicated_values(
     name
         Label for the array, used in the error message only.
     absolute_tolerance
-        Largest absolute difference accepted. The default of ``0.0`` demands
-        bit-for-bit agreement.
+        Largest absolute difference accepted. The default of ``0.0`` demands a
+        zero numeric difference between finite values, which is not the same as
+        bit-for-bit identity: ``+0.0`` and ``-0.0`` compare equal. The check
+        uses the largest absolute difference, and because a comparison against
+        ``NaN`` is false, an array containing ``NaN`` is **not** rejected here.
 
     Returns
     -------
@@ -695,7 +698,9 @@ def verify_seed_ownership(
         Label for the seed, used in the error message only.
     absolute_tolerance
         Largest absolute deviation accepted, whether from the rank-0 reference
-        or from zero. The default of ``0.0`` demands exactness.
+        or from zero. The default of ``0.0`` demands a zero numeric difference
+        between finite values rather than bit-for-bit identity, and neither
+        this check nor the replicated one rejects a seed containing ``NaN``.
 
     Returns
     -------

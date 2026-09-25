@@ -128,6 +128,7 @@ class PatchInfo:
     edge_vertex_indices
         Mesh vertex indices along each named parametric boundary edge.
     """
+
     patch_id: int
     degrees: Tuple[int, ...]
     knot_vectors: Tuple[np.ndarray, ...]
@@ -400,6 +401,7 @@ class FunctionSetProjectionModel:
         One of ``"distance"``, ``"squared_distance"``, or
         ``"regularized_distance"``.
     """
+
     def __init__(
         self,
         function_set,
@@ -1718,6 +1720,7 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
     forward state cached in ``shared_state``, so it must run against the same
     coefficients.
     """
+
     def __init__(self, model: FunctionSetProjectionModel, shared_state: Dict[str, object]):
         super().__init__()
         self.model = model
@@ -1802,6 +1805,7 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
     cached forward state. It is only as reliable as that state: points that
     did not converge carry no guarantee.
     """
+
     def __init__(self, model: FunctionSetProjectionModel, shared_state: Dict[str, object]):
         super().__init__()
         self.model = model
@@ -1896,6 +1900,7 @@ class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperat
     :meth:`FunctionSetProjectionModel.project` and caches the forward state in
     ``shared_state`` for the reverse passes.
     """
+
     def __init__(self, model: FunctionSetProjectionModel):
         super().__init__()
         self.model = model
@@ -2058,6 +2063,22 @@ if __name__ == "__main__":
     query_points = interior_surface_points + np.array([0.0, 0.0, 0.15])
 
     def run_mode_verification(output_mode: str, regularization_epsilon: float = 1e-8) -> None:
+        """Print a forward and derivative check for one output mode.
+
+        Parameters
+        ----------
+        output_mode
+            Measure to verify, one of the model's supported ``output_mode``
+            values.
+        regularization_epsilon
+            Smoothing used by the regularized-distance mode; ignored by the
+            other modes.
+
+        Returns
+        -------
+        None
+            Results are printed.
+        """
         print("")
         print(f"Output mode: {output_mode}")
 

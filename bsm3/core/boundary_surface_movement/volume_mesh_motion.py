@@ -549,32 +549,40 @@ class ElasticVolumeSystem:
 class VolumeQualityReport:
     """Fast topology-fixed tetrahedral deformation quality.
 
-    Every metric compares the deformed cells against the baseline ones with the
-    topology held fixed. Percentile fields are the low tail: ``p001`` is the
-    0.1st percentile and ``p01`` the 1st, so they show how many cells sit near
-    the worst value rather than only the single extreme.
+    The topology is held fixed. Percentile fields describe the **lower tail of
+    the metric values**: ``p001`` is the 0.1st-percentile value and ``p01`` the
+    1st-percentile value. They say how bad the metric gets at those quantiles,
+    not how many cells sit near the worst value.
 
     Attributes
     ----------
     num_tetrahedra
         Number of tetrahedra tested, counting each decomposed pyramid cell.
     inverted_tetrahedra
-        How many of those have a non-positive signed volume, so the cell
-        folded.
+        How many have a non-positive **relative** Jacobian, meaning the cell's
+        orientation reversed with respect to its own baseline. This is not the
+        same as a non-positive raw signed volume: a cell whose baseline
+        determinant is already negative counts as inverted only if the
+        deformed one no longer shares that sign.
     minimum_relative_jacobian
-        Smallest deformed-to-baseline signed Jacobian ratio. One means
-        undeformed; a value at or below zero means inversion.
+        Smallest deformed-to-baseline signed determinant ratio. One means
+        undeformed; at or below zero means orientation reversal.
     relative_jacobian_p001, relative_jacobian_p01
-        The 0.1st and 1st percentiles of that ratio.
+        The 0.1st- and 1st-percentile values of that ratio.
     minimum_volume_ratio
-        Smallest deformed-to-baseline cell volume ratio.
+        Smallest ratio of deformed to baseline cell volume, taken from absolute
+        determinants and so insensitive to orientation.
     volume_ratio_p001, volume_ratio_p01
-        The 0.1st and 1st percentiles of that ratio.
+        The 0.1st- and 1st-percentile values of that ratio.
     minimum_mean_ratio
-        Smallest mean-ratio shape metric, which measures distortion rather than
-        size: one is a similarity of the baseline cell and zero is degenerate.
+        Smallest mean-ratio shape metric. It is an **absolute** measure of the
+        current cell's shape, computed from the deformed cell's own edges and
+        volume: a regular tetrahedron scores one and a degenerate cell zero. It
+        does not compare against the baseline shape, so a baseline cell that is
+        already sliver-like scores low even when undeformed. The sign follows
+        the deformed determinant, so an inverted cell scores negative.
     mean_ratio_p001, mean_ratio_p01
-        The 0.1st and 1st percentiles of that metric.
+        The 0.1st- and 1st-percentile values of that metric.
     """
 
     num_tetrahedra: int
@@ -1552,7 +1560,8 @@ def evaluate_volume_quality(
     """Evaluate signed-Jacobian, volume-ratio and mean-ratio metrics.
 
     When ``pyramids`` is given, each pyramid is tested under both base splits,
-    so ``inverted_tetrahedra`` counts every decomposed cell that folded.
+    so ``inverted_tetrahedra`` counts every decomposed cell whose orientation
+    reversed relative to its baseline.
 
     Parameters
     ----------

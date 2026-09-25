@@ -71,7 +71,6 @@ class AssembledSystem:
         int
             Number of free-system rows.
         """
-
         return int(self.free_ids.size)
 
     @property
@@ -83,7 +82,6 @@ class AssembledSystem:
         int
             Number of prescribed-system columns.
         """
-
         return int(self.prescribed_ids.size)
 
 
@@ -120,7 +118,6 @@ class StiffnessAssembler(Protocol):
         AssembledSystem
             Factored free-free block and free-prescribed coupling.
         """
-
         ...
 
 
@@ -208,7 +205,6 @@ class GraphLaplacianAssembler:
             If partitions overlap, contain duplicates, or leave a graph
             neighbor unclassified.
         """
-
         mesh_data = _as_mesh_data(mesh)
         points = np.asarray(mesh_data.vertices, dtype=float).reshape((-1, 3))
 
@@ -333,7 +329,6 @@ def graph_neighbors(
     numpy.ndarray
         Sorted unique neighboring vertex IDs outside ``vertex_ids``.
     """
-
     mesh_data = _as_mesh_data(mesh)
     if quad_bracing_mode is not None:
         _validate_quad_bracing_mode(quad_bracing_mode)
@@ -394,7 +389,6 @@ def element_neighbors(mesh, vertex_ids: np.ndarray) -> np.ndarray:
     numpy.ndarray
         Sorted unique co-element vertex IDs outside ``vertex_ids``.
     """
-
     mesh_data = _as_mesh_data(mesh)
     source = set(
         int(vertex)
@@ -429,7 +423,6 @@ def _edge_weights(
     ``quad_diagonal_weight = lambda``, quads additionally contribute the
     selected auxiliary bracing operator.
     """
-
     uniform = stiffening_exponent == 0.0
     physical_weights: dict[tuple[int, int], float] = {}
     diagonal_weights: dict[tuple[int, int], float] = {}
@@ -509,7 +502,6 @@ def _quad_brace_pairs(
     of weight ``2 * weight`` to a free center node.  Eliminating that center
     exactly gives all six corner pairs weight ``weight / 2``.
     """
-
     _validate_quad_bracing_mode(mode)
     vertices = tuple(int(vertex) for vertex in np.asarray(cell).reshape(-1))
     if len(vertices) != 4 or weight == 0.0:

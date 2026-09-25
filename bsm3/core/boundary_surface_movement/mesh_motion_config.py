@@ -40,6 +40,11 @@ class InputFiles:
     cache_directory: Path | None = None
 
     def __post_init__(self):
+        """Normalize the configured paths.
+
+        Each supplied path is expanded and resolved and stored back on the
+        instance; ``None`` entries are left as-is.
+        """
         for name in (
             "geometry_file",
             "surface_mesh_file",
@@ -93,6 +98,15 @@ class DistanceWeighting:
     seed_intersections: tuple[str, ...] | None = None
 
     def __post_init__(self):
+        """Validate the graph-distance weighting parameters.
+
+        Raises
+        ------
+        ValueError
+            If ``beta`` is negative, ``length_scale`` is not positive, ``cap``
+            is below one, ``decay`` is not ``"exp"`` or ``"rational"``, or the
+            seed-intersection names are malformed.
+        """
         if self.beta < 0.0 or self.length_scale <= 0.0 or self.cap < 1.0:
             raise ValueError("Invalid graph-distance weighting parameters.")
         if self.decay not in ("exp", "rational"):
@@ -146,6 +160,13 @@ class DistortionPenalty:
     normal: float = 0.5
 
     def __post_init__(self):
+        """Validate the distortion regularization weight.
+
+        Raises
+        ------
+        ValueError
+            If ``weight`` is negative.
+        """
         if self.weight < 0.0:
             raise ValueError("Distortion regularization weight cannot be negative.")
 
@@ -169,6 +190,13 @@ class PolygonRegularization:
     weight: float = 0.0
 
     def __post_init__(self):
+        """Validate the n-gon affine regularization weight.
+
+        Raises
+        ------
+        ValueError
+            If ``weight`` is non-finite or negative.
+        """
         value = float(self.weight)
         if not np.isfinite(value) or value < 0.0:
             raise ValueError(
@@ -219,6 +247,14 @@ class SurfaceMotion:
     )
 
     def __post_init__(self):
+        """Validate the surface-motion settings.
+
+        Raises
+        ------
+        ValueError
+            If ``load_steps`` is below one, or the quad-diagonal weight is
+            non-finite or negative.
+        """
         if self.load_steps < 1:
             raise ValueError("Surface load_steps must be positive.")
         if (
@@ -287,6 +323,16 @@ class VolumeMotion:
     write_meshes: bool = False
 
     def __post_init__(self):
+        """Validate the volume-motion settings and normalize the output path.
+
+        Raises
+        ------
+        ValueError
+            If ``mode`` is not one of ``"off"``, ``"graph"``, ``"elasticity"``,
+            or ``"both"``; if ``load_mode`` is not ``"final"`` or
+            ``"synchronized"``; or if another volume setting is outside its
+            permitted range.
+        """
         if self.mode not in ("off", "graph", "elasticity", "both"):
             raise ValueError("Invalid volume motion mode.")
         if self.load_mode not in ("final", "synchronized"):
@@ -317,7 +363,6 @@ class VolumeMotion:
         tuple[str, ...]
             Zero, one, or both of ``"graph"`` and ``"elasticity"``.
         """
-
         return {
             "off": (),
             "graph": ("graph",),
@@ -456,6 +501,14 @@ class MeshMotion:
     diagnostic_dump: Path | None = None
 
     def __post_init__(self):
+        """Validate the pipeline tolerances, resolutions, and modes.
+
+        Raises
+        ------
+        ValueError
+            If the symmetry-plane tolerance is negative, a resolution is below
+            one, or another pipeline setting is outside its permitted range.
+        """
         if self.symmetry_plane_tolerance < 0.0:
             raise ValueError("Symmetry-plane tolerance cannot be negative.")
         if self.setup_projection_resolution < 1:

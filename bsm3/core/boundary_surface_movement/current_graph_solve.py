@@ -134,7 +134,6 @@ class CurrentGraphModel:
             int or None
                 Stable edge ID, or ``None`` for a zero-length topological edge.
             """
-
             if vertex_a == vertex_b:
                 return None
             key = (
@@ -277,7 +276,6 @@ class CurrentGraphModel:
         numpy.ndarray or tuple
             Free values, optionally followed by the reusable solve state.
         """
-
         points, prescribed = self._validate_inputs(
             current_vertices, prescribed_values
         )
@@ -310,7 +308,6 @@ class CurrentGraphModel:
         tuple[numpy.ndarray, numpy.ndarray]
             Cotangents for current coordinates and prescribed values.
         """
-
         points, prescribed = self._validate_inputs(
             current_vertices, prescribed_values
         )
@@ -450,7 +447,6 @@ class CurrentGraphModel:
         ValueError
             If the coordinate array does not contain the complete mesh.
         """
-
         points = np.asarray(current_vertices, dtype=float).reshape((-1, 3))
         if points.shape[0] != self.num_vertices:
             raise ValueError("current_vertices must contain the complete mesh.")
@@ -538,7 +534,6 @@ class CurrentGraphSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
         csdl.Variable
             Solved free values.
         """
-
         self.declare_input("current_vertices", current_vertices)
         self.declare_input("prescribed_values", prescribed_values)
         free_values = self.create_output(
@@ -558,7 +553,6 @@ class CurrentGraphSolveOperation(csdl.experimental.CustomExplicitOperationBeta):
         outputs
             Mutable outputs receiving the free solution.
         """
-
         outputs["free_values"] = self.model.solve(
             inputs["current_vertices"],
             inputs["prescribed_values"],
@@ -593,7 +587,6 @@ class CurrentGraphSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
         dict[str, csdl.Variable]
             Cotangent variables for coordinates and prescribed values.
         """
-
         current_vertices = inputs["current_vertices"]
         prescribed_values = inputs["prescribed_values"]
         d_free_values = d_outputs["free_values"]
@@ -621,7 +614,6 @@ class CurrentGraphSolveVJP(csdl.experimental.CustomExplicitOperationBeta):
         outputs
             Mutable outputs receiving input cotangents.
         """
-
         d_current, d_prescribed = self.model.compute_vjp(
             inputs["current_vertices"],
             inputs["prescribed_values"],

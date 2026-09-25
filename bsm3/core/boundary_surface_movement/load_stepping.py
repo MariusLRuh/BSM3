@@ -106,7 +106,6 @@ def linear_load_fractions(num_steps: int) -> tuple[float, ...]:
     ValueError
         If ``num_steps`` is not a positive integer.
     """
-
     count = int(num_steps)
     if count < 1 or count != num_steps:
         raise ValueError("num_steps must be a positive integer.")
@@ -184,7 +183,6 @@ def run_graph_load_steps(
     ValueError
         If continuation data, partitions, or regularizer choices are invalid.
     """
-
     if not isinstance(motion, ElasticityMotionSolver):
         raise TypeError("motion must be an ElasticityMotionSolver.")
     if not isinstance(motion.assembler, GraphLaplacianAssembler):
@@ -661,7 +659,6 @@ def _stack_columns(values):
 
 def _stack_block_rows(values, groups):
     """Place each component's free correction in its own 3-column block."""
-
     blocks = []
     for group in groups:
         block = csdl.Variable(value=np.zeros(values.shape, dtype=float))
@@ -675,7 +672,6 @@ def _stack_block_rows(values, groups):
 
 def _stack_scalar_block_rows(values, groups):
     """Place each component's scalar correction in its own column."""
-
     blocks = []
     for group in groups:
         block = csdl.Variable(value=np.zeros(values.shape, dtype=float))

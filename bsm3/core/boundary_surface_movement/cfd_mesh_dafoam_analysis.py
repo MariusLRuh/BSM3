@@ -408,7 +408,9 @@ class E175DAFoamResult:
     ----------
     mesh_motion
         Full mesh-motion result, including surface and volume coordinates and
-        the quality diagnostics.
+        the quality diagnostics. In the rank-0 execution path this is ``None``
+        on non-root ranks, which hold no geometry backend, even though the
+        annotation is not currently optional.
     flow_outputs
         Every aerodynamic function DAFoam produced, keyed by function name.
     cl
@@ -712,7 +714,9 @@ def build_cfd_analysis_rank0(
     backend
         Live DAFoam backend, distributed across all ranks.
     comm
-        MPI communicator; resolved, so ``None`` yields a serial communicator.
+        MPI communicator. It is passed through ``resolve_comm``, so ``None``
+        selects ``MPI.COMM_WORLD`` when ``mpi4py`` is importable and a
+        single-rank ``SerialComm`` only when it is not.
     geometry_values
         Baseline design-variable values, replicated on every rank.
     debug
@@ -726,9 +730,11 @@ def build_cfd_analysis_rank0(
     Returns
     -------
     E175DAFoamResult
-        The mesh-motion result together with every aerodynamic output and the
-        ``CL`` and ``CD`` variables. On non-root ranks the mesh-motion result
-        comes from the rank-0 backend and may be absent.
+        Every aerodynamic output together with the ``CL`` and ``CD`` variables.
+        Its ``mesh_motion`` field is populated from the rank-0 geometry backend
+        and is therefore ``None`` on every non-root rank, which builds no
+        backend. The field's annotation does not yet express that; see the
+        carry-in recorded for M1.7.
 
     Raises
     ------

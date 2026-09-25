@@ -36,7 +36,6 @@ def identify_symmetry_plane_vertices(
     ValueError
         If ``axis`` or ``tolerance`` is invalid.
     """
-
     points = np.asarray(
         getattr(vertices, "value", vertices),
         dtype=float,
@@ -84,7 +83,6 @@ def enforce_symmetry_plane(
     ValueError
         If shapes, indices, the axis, or the coordinate are invalid.
     """
-
     values = (
         mesh_vertices
         if hasattr(mesh_vertices, "value")

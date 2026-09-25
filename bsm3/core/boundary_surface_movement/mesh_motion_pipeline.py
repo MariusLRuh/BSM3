@@ -40,12 +40,15 @@ def _load_polygon_surface_pickle(path):
 
 
 def _cfd_mesh_from_pickle(path):
-    """Build a MeshData from the polygonal CFD surface pickle *without*
-    triangulating.  The mesh is hex-dominant; fan-triangulating an n-gon invents
+    """Build a MeshData from the polygonal CFD surface pickle.
+
+    The faces are kept as polygons *without* triangulating.  The mesh is
+    hex-dominant; fan-triangulating an n-gon invents
     sliver cells that report spurious inversions and hands the elastic solve the
     wrong (diagonal) edges.  Instead group faces by vertex count into uniform
     blocks (``triangle``/``quad``/``polygonN``): the elasticity assembler and the
-    quality/inversion check both iterate ``cell_blocks`` and are n-gon general."""
+    quality/inversion check both iterate ``cell_blocks`` and are n-gon general.
+    """
     from bsm3.preprocessing import MeshData
     points, connectivity = _load_polygon_surface_pickle(path)
     sizes = np.array([face.size for face in connectivity], dtype=np.int64)
@@ -66,8 +69,11 @@ def _cfd_mesh_from_pickle(path):
 
 
 def _cfd_surface_cells(mesh):
-    """Same cell ordering the quality report uses (tri, quad, then polygonN), so
-    inverted-element ids from ``check_element_inversion`` map to the right cell."""
+    """Return the cells in the ordering the quality report uses.
+
+    The order is triangles, then quads, then each ``polygonN`` block, so
+    inverted-element ids from ``check_element_inversion`` map to the right cell.
+    """
     ordered = ["triangle", "quad"] + [
         t for t in mesh.cell_blocks if t not in ("triangle", "quad")
     ]
@@ -82,8 +88,10 @@ def _cfd_surface_cells(mesh):
 
 
 def _polygon_normals(vertices, connectivity):
-    """Area-weighted (Newell) normal per polygon; used for a fold check that is
-    meaningful on the original polygonal cells rather than the fan triangles.
+    """Compute the area-weighted (Newell) normal of every polygon.
+
+    Used for a fold check that is meaningful on the original polygonal cells
+    rather than on fan triangles.
 
     Vectorized over all directed edges of all polygons (scatter-add by polygon
     id) so it is O(total-edges) in NumPy rather than a Python loop per cell.
@@ -121,8 +129,11 @@ def _surface_has_ngons(connectivity) -> bool:
 
 
 def _count_polygon_folds(initial_vertices, final_vertices, connectivity):
-    """A polygon has folded if its area-weighted normal flipped direction from
-    the undeformed to the deformed mesh (dot < 0)."""
+    """Count polygons whose area-weighted normal flipped direction.
+
+    A polygon has folded when the dot product of its undeformed and deformed
+    area-weighted normals is negative.
+    """
     n0 = _polygon_normals(initial_vertices, connectivity)
     n1 = _polygon_normals(final_vertices, connectivity)
     dots = np.einsum("ij,ij->i", n0, n1)
@@ -130,12 +141,15 @@ def _count_polygon_folds(initial_vertices, final_vertices, connectivity):
 
 
 def _setup_code_signature(extra_params):
-    """Fingerprint of the code + parameters that determine the cached setup
-    (baseline projection ownership + seams).  Hashing the *contents* of every
+    """Fingerprint the code and parameters that determine the cached setup.
+
+    The setup covers baseline projection ownership and seams.  Hashing the
+    *contents* of every
     module the setup depends on means the cache is invalidated whenever any of
     that logic changes -- otherwise a cache written by an older/broken code
     version is silently reused and produces garbage (folded mesh) from a benign
-    deformation, which is impossible to diagnose from the run alone."""
+    deformation, which is impossible to diagnose from the run alone.
+    """
     import hashlib
     import importlib
 
@@ -502,7 +516,6 @@ def _resolve_model_paths(
     config: MeshMotion,
 ) -> dict[str, Any]:
     """Resolve and validate all paths before expensive geometry setup."""
-
     geometry_file = input_files.geometry_file.resolve()
     mesh_file = input_files.surface_mesh_file.resolve()
     volume_mesh_file = (
@@ -577,7 +590,6 @@ def _setup_geometry_and_mesh(
     config: MeshMotion,
 ) -> _GeometrySetup:
     """Import geometry/meshes and cache baseline ownership and intersections."""
-
     started_at = time.perf_counter()
     paths = _resolve_model_paths(input_files, config)
     component_specs = tuple(geometry._component_records)
@@ -834,7 +846,6 @@ def _parameterize_geometry(
     config: MeshMotion,
 ) -> _DeformationSetup:
     """Evaluate driver-supplied component deformations at every load step."""
-
     load_fractions = tuple(
         bsm3.core.boundary_surface_movement.linear_load_fractions(
             config.surface.load_steps
@@ -871,7 +882,6 @@ def _build_intersections_and_graph(
     config: MeshMotion,
 ) -> _SurfaceSystem:
     """Build exact intersection constraints and the graph-Laplacian system."""
-
     projection_options = {
         "warm_start_nu": config.projection_warm_start_resolution,
         "warm_start_nv": config.projection_warm_start_resolution,
@@ -1020,7 +1030,6 @@ def _lifting_surface_metadata(
     mode: str,
 ) -> list[Any]:
     """Create projection metadata for a lifting-surface component."""
-
     if projection_ids.size == 0:
         return []
     if mode == "parent":
@@ -1077,7 +1086,6 @@ def _reproject_and_reevaluate(
     config: MeshMotion,
 ) -> _SurfaceResult:
     """Solve load steps, reproject selected nodes, and reevaluate the rest."""
-
     projection_metadata = []
     for spec in geometry._component_records:
         component = setup.components[spec.name]
@@ -1207,7 +1215,6 @@ def _run_volume_handoff(
     config: MeshMotion,
 ) -> tuple[dict[str, csdl.Variable], dict | None]:
     """Extend the surface displacement into the optional volume mesh."""
-
     if setup.volume_mesh is None:
         return {}, None
     if config.surface.load_steps == 1:
@@ -1243,7 +1250,6 @@ def _write_diagnostic_dump(
     dump_path: Path,
 ) -> None:
     """Write generic component/intersection diagnostics to an NPZ archive."""
-
     if setup.symmetry_split is None:
         ids_to_full = lambda ids: np.asarray(ids, dtype=np.int64)
         parametric = setup.initial_parametric_coordinates
@@ -1293,7 +1299,6 @@ def _evaluate_surface_diagnostics(
     config: MeshMotion,
 ) -> _SurfaceDiagnostics:
     """Evaluate and report surface quality without changing pipeline values."""
-
     preprojected = surface_result.preprojected_mesh_vertices
     final = surface_result.final_mesh_vertices
     # Three states, one metric: the untouched input mesh, the deformed surface
@@ -1578,7 +1583,6 @@ def select_fd_objective(
     ValueError
         If ``objective_name`` is not available in ``result``.
     """
-
     if objective_name == "surface_coordinates":
         objective = csdl.sum(result.surface_coordinates)
     elif objective_name.startswith("volume_"):
@@ -1627,7 +1631,6 @@ def run_fd_sweep(
         Relative errors keyed first by design-variable name and then by step
         size.
     """
-
     simulator = csdl.experimental.JaxSimulator(recorder=recorder, gpu=False)
     sweep: dict[str, dict[float, float]] = {}
     for step in step_sizes:

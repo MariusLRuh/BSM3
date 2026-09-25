@@ -70,7 +70,6 @@ def create_components(
         A single component function set when one component is requested, or a
         tuple of component function sets when multiple components are requested.
     """
-
     if keys is None and search_names is None:
         raise ValueError("Provide at least one of keys or search_names.")
 
@@ -108,7 +107,6 @@ def create_components(
 
 def available_components(geometry) -> list[dict[str, object]]:
     """Return component-level labels and keys inferred from geometry surfaces."""
-
     return _available_components(_geometry_functions(geometry))
 
 

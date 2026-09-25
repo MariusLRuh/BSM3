@@ -48,8 +48,12 @@ class ComponentParameters:
 class WingParameters(ComponentParameters):
     """Planform and rigid-body parameters for a lifting surface.
 
-    ``area`` and ``aspect_ratio`` are absolute target values.  Supplying both
-    scales the span and chord while preserving the requested planform values:
+    ``area`` and ``aspect_ratio`` are absolute target values.  When both are
+    ``None`` the planform scaling is skipped entirely and only the rigid-body
+    transform applies.  Supplying just one leaves the other at its resolved
+    reference value, so that quantity is held rather than left free.  Supplying
+    both scales the span and chord while preserving the requested planform
+    values:
 
     ``span_scale = sqrt(area_ratio * aspect_ratio_ratio)``
 
@@ -57,7 +61,7 @@ class WingParameters(ComponentParameters):
 
     Thickness is unchanged.  A uniform incidence change is represented by
     ``rotation_y_degrees``.  If ``spanwise_scaling_root`` is supplied, span
-    scaling is anchored at that absolute distance from the symmetry plane and
+    scaling is anchored at that distance from the pivot's spanwise station and
     applied only outboard of it; the target tip span is unchanged.
 
     Inherits the rigid-body fields of :class:`ComponentParameters`.
@@ -65,23 +69,33 @@ class WingParameters(ComponentParameters):
     Attributes
     ----------
     area
-        Absolute target planform area. ``None`` leaves area unconstrained.
+        Absolute target planform area. ``None`` holds the resolved
+        ``reference_area``; if ``aspect_ratio`` is also ``None`` the scaling is
+        skipped.
     aspect_ratio
-        Absolute target aspect ratio. ``None`` leaves it unconstrained.
+        Absolute target aspect ratio. ``None`` holds the resolved
+        ``reference_aspect_ratio``; if ``area`` is also ``None`` the scaling is
+        skipped.
     reference_area
         Area of the undeformed planform, forming the denominator of
-        ``area_ratio``. Required for ``area`` to have meaning.
+        ``area_ratio``. ``None`` infers it from the component's control-point
+        extents as chord extent times span extent.
     reference_aspect_ratio
         Aspect ratio of the undeformed planform, forming the denominator of
-        ``aspect_ratio_ratio``.
+        ``aspect_ratio_ratio``. ``None`` infers it from the same extents as
+        span extent squared over the inferred area.
     chord_axis
         Index of the global axis along which chord is measured and scaled.
     span_axis
         Index of the global axis along which span is measured and scaled.
     spanwise_scaling_root
-        Absolute distance from the symmetry plane at which span scaling is
-        anchored; only stations outboard of it move. ``None`` scales the whole
-        span from the symmetry plane.
+        Distance **from the pivot's spanwise station** at which span scaling is
+        anchored; only stations farther outboard than it move, and the tip span
+        target is preserved. It is measured about the pivot, which coincides
+        with the symmetry plane only when the pivot's spanwise coordinate is
+        zero. ``None`` scales the whole span uniformly. Must be non-negative
+        and strictly inboard of the tip, or the deformation raises
+        :exc:`ValueError`.
     """
 
     area: Any | None = None
@@ -98,9 +112,13 @@ class TailParameters(ComponentParameters):
     """Rigid-body parameters for a tail surface.
 
     Carries no fields of its own; it inherits the translation, rotation, and
-    ``pivot`` fields of :class:`ComponentParameters` unchanged. The separate
-    type exists so a tail can be declared and dispatched distinctly from a
-    wing, which additionally supports planform targets.
+    ``pivot`` fields of :class:`ComponentParameters` unchanged.
+
+    The separate type expresses intent, letting a tail be declared distinctly
+    from a wing, but it currently has **no distinct dispatch**: the deformation
+    path special-cases only :class:`WingParameters` and
+    :class:`FuselageParameters`, so a tail is transformed by the generic
+    :class:`ComponentParameters` route and behaves identically to one.
     """
 
 

@@ -77,6 +77,14 @@ class GraphDistanceWeighting:
     seed_ids: np.ndarray | None = None
 
     def __post_init__(self):
+        """Validate the decay parameters.
+
+        Raises
+        ------
+        ValueError
+            If ``beta`` is negative, ``length`` is not positive, or another
+            decay setting is outside its permitted range.
+        """
         if float(self.beta) < 0.0:
             raise ValueError("beta must be non-negative.")
         if float(self.length) <= 0.0:
@@ -203,7 +211,6 @@ def compute_multisource_geodesic_distance(
     ValueError
         If seed IDs, restricted IDs, or the edge-length floor are invalid.
     """
-
     mesh_data = _as_mesh_data(mesh)
     points = np.asarray(mesh_data.vertices, dtype=float).reshape((-1, 3))
     num_vertices = points.shape[0]
@@ -307,7 +314,6 @@ def build_graph_distance_weighting(
     GraphDistanceWeighting
         Immutable distances and multiplier configuration.
     """
-
     distance = compute_multisource_geodesic_distance(
         mesh,
         seed_ids,

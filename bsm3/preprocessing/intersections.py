@@ -84,7 +84,6 @@ def identify_intersection_vertices(
     this avoids projecting mirrored duplicates while still returning original
     zero-based vertex IDs from the full mesh.
     """
-
     component_list = _normalize_components(components)
     _require_driving_component(component_list, driving_component)
     tolerance = _validate_intersection_tolerance(intersection_tolerance)
@@ -286,7 +285,6 @@ def _project_with_function_set_projection_model(
 
 def _repo_projection_model_api():
     """Return BSM3's NumPy projection model API, never an LFS projection class."""
-
     try:
         import bsm3
 
