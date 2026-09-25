@@ -23,7 +23,6 @@ directly or from a CSDL custom operation's ``compute``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -36,7 +35,6 @@ from .orthogonality_projection_numpy import (
     project_points_orthogonality_newton_numpy,
 )
 from .warm_start_projections import (
-    DEFAULT_FUN_SET_PATH,
     build_sampled_patches_mesh,
     warm_start_from_triangulation,
 )
@@ -126,47 +124,6 @@ class _CandidateSpec:
     fixed_axis: int
     fixed_value: float
     kind: str
-
-
-def load_function_set_from_pickle(pickle_path: Path = DEFAULT_FUN_SET_PATH):
-    """Load a function set from a local pickle.
-
-    .. warning::
-       Python pickle executes arbitrary code on load. Use this only with a
-       trusted local file that you produced yourself. Never load a pickle from an
-       untrusted or remote source.
-
-    Parameters
-    ----------
-    pickle_path
-        Path to the pickled function set.
-
-    Returns
-    -------
-    object
-        The unpickled function set.
-    """
-    if lfs is None:
-        raise ImportError("lsdo_function_spaces is required to load a FunctionSet from pickle.")
-
-    import pickle
-
-    with open(pickle_path, "rb") as handle:
-        function_data = pickle.load(handle)
-
-    functions = {}
-    for key, fun_data in function_data.items():
-        space = lfs.BSplineSpaceNew(
-            num_parametric_dimensions=2,
-            degree=fun_data["degree"],
-            coefficients_shape=fun_data["coefficients_shape"],
-        )
-        functions[int(key)] = lfs.Function(
-            space=space,
-            coefficients=fun_data["coefficients"],
-        )
-
-    return lfs.FunctionSet(functions=functions)
 
 
 def _require_numpy_bspline_factory() -> None:

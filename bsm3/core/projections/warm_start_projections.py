@@ -24,10 +24,11 @@ import jax.numpy as jnp
 import numpy as np
 import pyvista as pv
 import pickle
-from pathlib import Path
 
-
-DEFAULT_FUN_SET_PATH = Path(__file__).with_name("refitted_fun_set.pkl")
+try:
+    import lsdo_function_spaces as lfs
+except Exception:  # pragma: no cover - optional research dependency
+    lfs = None
 
 # ----------------------------
 # Mesh construction
@@ -652,11 +653,16 @@ def unsort(inv_order: np.ndarray, *arrays_sorted):
     return [np.asarray(a)[inv_order] for a in arrays_sorted]
 
 
-def load_function_set(pickle_path) -> lfs.FunctionSet:
-    """Rebuild a B-spline function set from a local pickle.
+def load_function_set_from_trusted_pickle(pickle_path) -> "lfs.FunctionSet":
+    """Rebuild a B-spline function set from a trusted local pickle.
 
     Each pickled entry supplies a patch degree, coefficient shape, and
     coefficients, which are reassembled into ``lfs`` spaces and functions.
+
+    This is the single retained function-set pickle entry point. It is an
+    explicitly opt-in compatibility path: ``pickle_path`` is **mandatory** and
+    there is no default, package-relative fallback, or implicit file lookup, so
+    nothing in the package loads a pickle unless a caller names one.
 
     .. warning::
        Python pickle executes arbitrary code on load. Use this only with a
@@ -666,13 +672,23 @@ def load_function_set(pickle_path) -> lfs.FunctionSet:
     Parameters
     ----------
     pickle_path
-        Path to the pickled function-set description.
+        Path to the pickled function-set description. Required.
 
     Returns
     -------
     lsdo_function_spaces.FunctionSet
         Function set keyed by integer patch ID.
+
+    Raises
+    ------
+    ImportError
+        If ``lsdo_function_spaces`` is unavailable.
     """
+    if lfs is None:
+        raise ImportError(
+            "lsdo_function_spaces is required to load a FunctionSet from pickle."
+        )
+
     with open(pickle_path, "rb") as f:
         wing_fun_set_data = pickle.load(f)
 
@@ -708,7 +724,7 @@ if __name__ == "__main__":
     file_path = 'bsm3/core/projections/'
     file_name = 'swept_wing.stp'
     lpc = lfs.import_file_patched(file_path + file_name, parallelize=False)
-    # lpc = load_function_set(pickle_path=DEFAULT_FUN_SET_PATH)
+    # lpc = load_function_set_from_trusted_pickle("path/to/refitted_fun_set.pkl")
     
     # Create bounding box for lpc geom
     coefficients = []
