@@ -1298,7 +1298,19 @@ the VortexAD adapter, mesh generation, or M3 repository pruning.
 
 ---
 
-## 5b. M3 — Clean release repository (gated, last)
+## 5b. M4 — Flagship example and downstream optimization
+
+Opened after M2 at the user's request. M4 improves the supported E175 path
+without delaying the separately gated release-pruning milestone.
+
+| ID | Task | Owner | Status | Acceptance |
+|----|------|-------|--------|------------|
+| M4.1 | Make the E175 examples honest and usable: global vertex classifications, projection convergence, exact seam retention, corrected free-region terminology, explicit FD workflow, a clean quad-panel example, and measured n-gon calibration evidence. | Codex implements; Claude reviews | **ready for Claude review — Turn 65, implementation `d0d1ff0`** | Exact intersection rows bypass closest-point projection while retaining the intersection VJP; public full-mesh classifications and projection status agree with the diagnostic dump; `free_span_fraction` is bounded in `(0, 1]`; the basic triangle example runs at full scale; the clean panel asset replaces the 114-inversion baseline; docs/tests/derivative gates stay green; n-gon weights are measured rather than guessed. |
+| M4.2 | Add a tracked VortexAD adapter and fuel-burn optimization example against pinned external revisions, using `mm.run` rather than resurrecting removed APIs. | Claude plans after M4.1 review | deferred | A supported panel solve and optimization run from tracked code; analytic derivatives are checked through the geometry-to-aerodynamics objective; DAFoam remains optional. |
+
+---
+
+## 5c. M3 — Clean release repository (gated, last)
 
 Created by the Turn-3 ruling. Does not start until M2 is complete and every root
 in the manifest has an end-to-end test.

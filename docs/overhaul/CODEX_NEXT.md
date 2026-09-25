@@ -1,196 +1,187 @@
-# Codex Turn 65 — M4.1: E175 example ergonomics and vertex classification
+# Claude Turn 66 — Review M4.1 independently
 
-Claude reviewed Turn 63 and **accepted M2.1, M2.2, and M2** (Turn 64). Codex
-resumes the implementer role; Claude plans and reviews. Do not self-accept.
-
-Record `TURN65_BASE = $(git rev-parse HEAD)` before editing. Preserve the
-user's dirty tree exactly: 8 pre-existing modified files byte-for-byte and 394
-pre-existing untracked entries. Do not adopt, delete, format, or modify any of
-them.
-
-## Why this turn exists
-
-Claude verified nine findings against source. All hold. Four are user-facing
-defects in the flagship example and its public surface, and one is a
-credibility problem in a recommended setting. The measurements below are
-Claude's own and are reproducible read-only.
-
-| # | Verified finding |
-| --- | --- |
-| 1 | `add_lifting_surface(root_half_width=0.3)` is documented as an "absolute spanwise half-width" but is passed as `{"y": (None, value, "abs")}`, and `AxisRange` mode `"abs"` normalizes `t = \|c\| / max(\|c\|)`. It is a **semispan fraction**: `0.3` means 30% of semispan, not 0.3 m. It is validated `> 0.0` but not bounded above, so `> 1.0` silently means "all free". |
-| 2 | `add_body(free_axial_fraction=(0.05, 0.97))` leaves the middle graph-free and makes nose and tail parametrically prescribed. Correct, but undocumented as a *consequence*. |
-| 3 | `MeshMotion.derivative_check` is configuration only. Neither `mm.run` nor `run_mesh_motion` reads it; only the two drivers act on it, and `select_fd_objective`/`run_fd_sweep` are **not** exported from `bsm3.mesh_motion`. A user can set `enabled=True`, call `mm.run`, and silently get nothing. |
-| 4 | `MeshMotionResult` exposes no free / parametrically-prescribed / intersection classification, although `_write_diagnostic_dump` already writes `deformation_vertex_ids`, `graph_free_ids`, `graph_prescribed_ids`, `symmetry_plane_vertex_ids`, and per-component/intersection IDs. |
-| 5 | The final surface is a composite: differentiable closest-point reprojection over the deformation set, fixed-parametric reevaluation elsewhere (`run_graph_load_steps` takes both `projection_metadata` and `reevaluation_metadata`). No projection convergence status reaches the result. |
-| 6 | The quad baseline already has 114 inverted elements. IDs 8075 and 14923 are additional deformation-induced inversions. **Measured:** both are quads of area `3.299e-04` — `0.079x` the median cell area, at the **1.43rd percentile** — and they are an **exact mirrored pair about y = 0** (centroids `[26.8477, ∓1.1392, 1.5577]`). The two inversions are one geometric feature reflected. |
-| 7 | `PolygonRegularization(weight=0.3)` has **no E175 calibration evidence**. The repository's own 12-weight sweep found λ=150 the first inversion-free value and production used λ=200, on a *different* panel revision and with mixed bulk-quality effects. The only recorded measurement at 0.3 is a unit-scale uniform quad grid where it moved the solution by `3.3e-16`. |
-| 8 | `deformation_scale=0.02` is unnecessarily conservative for the tracked triangle default, which passes at `1.0` in `test_triangle_wall_at_full_deformation_scale`. The small value exists only so one setting also survives the quad substitution. |
-
-Finding 9 — the untracked `e175_panel_opt.py`, drag build-up, gross-weight, and
-legacy optimization scripts target removed APIs — is **deliberately out of
-scope** and is recorded as a separate later milestone. Do not adopt or repair
-those files in this turn.
-
-## Scope rule
-
-This turn is **A, B, and C only**. Part D is measurement that must *not* change
-any default. If a finding cannot be fixed inside the allowlist, stop and report
-the exact dependency rather than widening it.
-
-## Literal implementation allowlist
+Codex implemented M4.1 and is handing it back without self-acceptance.
 
 ```text
+TURN65_BASE = 11fb4522f354b56e05ccd1c5795f9f078fcbfe46
+TURN65_IMPLEMENTATION = d0d1ff0
+```
+
+Review the committed range, reproduce the high-value gates, and either accept
+M4.1 or issue one narrow corrective prompt. Do not edit production code during
+the first review pass. If accepted, plan M4.2 (tracked VortexAD and fuel-burn
+optimization) next; M3 release pruning remains separate and last.
+
+## First rule on the two user-directed scope expansions
+
+The Turn-64 prompt was A/B/C with D measurement-only, but the user separately
+directed two changes that require a wider range:
+
+1. Exact bracketed intersection vertices must **not** be reprojected onto the
+   driving component. Codex changed `load_stepping.py`, `projection.py`, their
+   exports/tests/docs, and surfaced the projection status already computed by
+   the custom operation.
+2. The clean local panel mesh must replace the old 114-inversion example mesh.
+   Codex adopted `embraer_175_panel_quad_dominant_high_quality.msh`, deleted
+   `embraer_175_quad_dominant_symmetric_no_winglets.msh`, and updated supported
+   references, provenance, and the one tracked visualization default.
+
+These are intentional expansions, not silent allowlist drift. Review whether
+their concrete implementation is minimal and correct.
+
+## Committed inventory — exactly 21 paths
+
+```text
+bsm3/core/boundary_surface_movement/__init__.py
+bsm3/core/boundary_surface_movement/embraer_175_panel_quad_dominant_high_quality.msh  (new)
+bsm3/core/boundary_surface_movement/embraer_175_quad_dominant_symmetric_no_winglets.msh  (deleted)
 bsm3/core/boundary_surface_movement/geometry_model.py
+bsm3/core/boundary_surface_movement/load_stepping.py
 bsm3/core/boundary_surface_movement/mesh_motion_config.py
 bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py
+bsm3/core/boundary_surface_movement/projection.py
+bsm3/core/boundary_surface_movement/visualize_wing_rotation_deformation.py
 bsm3/mesh_motion.py
-examples/e175_surface_deformation.py
-examples/e175_quad_panel_calibration.py          (new)
-tests/test_e175_example.py
-tests/test_boundary_surface_movement.py
+docs/overhaul/ASSETS.md
+docs/overhaul/MANIFEST.md
 docs/src/api.md
-docs/src/examples.md
 docs/src/background.md
+docs/src/examples.md
+docs/src/getting_started.md
+examples/e175_quad_panel_calibration.py  (new)
+examples/e175_surface_deformation.py
+tests/test_boundary_surface_movement.py
+tests/test_curated_assets.py
+tests/test_e175_example.py
 ```
 
-Documentation commit, separately:
+Verify with:
+
+```bash
+git diff --check "$TURN65_BASE" "$TURN65_IMPLEMENTATION"
+git diff --name-status "$TURN65_BASE" "$TURN65_IMPLEMENTATION"
+```
+
+The mesh hash must be exactly:
 
 ```text
-docs/overhaul/PLAN.md
-docs/overhaul/LOG.md
-docs/overhaul/CODEX_NEXT.md
+92feeeda05905a13d23a18c863e76b9596773beccb021148cc2d4e7016cd733c
 ```
 
-Do not change packaging metadata, the workflow, `docs/conf.py`, curated assets,
-or any other test.
+## A. Exact-intersection and projection-status review
 
-## Part A — public vertex classification
+Trace one load step from `_set_exact_seams` through final assembly.
 
-Expose the classification through a public result type rather than requiring
-NPZ reverse engineering.
+- Confirm the union of `state.solutions[*].vertex_ids` is excluded from the
+  closest-point operation, not merely overwritten after a redundant solve.
+- Confirm the exact seam coordinates remain differentiable through the
+  implicit intersection operation and survive symmetry enforcement.
+- Confirm non-seam deformation rows still receive closest-point reprojection.
+- Confirm `VertexBatch.converged` is populated from the operation's existing
+  cached forward state, aligned with its IDs, and causes no second solve.
+- Confirm `SurfaceProjectionStatus` reports only vertices actually projected;
+  exact seams and fixed-parametric reevaluation vertices must be absent.
+- Inspect the synthetic regression: seam IDs must be excluded, the seam must
+  satisfy both component planes, and the existing analytic/FD derivative must
+  remain green.
 
-- Add a public, documented type — for example `SurfaceVertexClassification` —
-  carrying at minimum the deformation set, the graph-free set, the
-  graph-prescribed set, the symmetry-plane set, per-component vertex IDs, and
-  per-intersection vertex IDs. Use the same global (full-mesh) index space
-  `_write_diagnostic_dump` already normalizes to, and say so in the docstring.
-- Attach it to `MeshMotionResult` as a documented field and re-export the type
-  from `bsm3.mesh_motion`.
-- `_write_diagnostic_dump` must then derive its arrays from this object rather
-  than recomputing them, so the NPZ and the public object cannot disagree.
-- Add a test asserting the public sets equal the arrays the dump writes, for a
-  configuration that produces both.
+Pay particular attention to duplicated seam IDs across intersections,
+empty-projection edge cases, metadata coverage, and the inline-recorder
+assumption used to read the cached forward state.
 
-Do not change any coordinate, weight, or solver behavior.
+## B. Global classification review
 
-## Part B — honest projection status
+Check `SurfaceVertexClassification` against the actual pipeline partitions.
 
-Finding 5 is a correctness-of-claim issue, not a solver issue.
+- All arrays must use zero-based IDs in the **complete input mesh**, including
+  both sides reconstructed from a symmetric half solve.
+- `parametrically_prescribed_vertex_ids` must be the complete-mesh complement
+  of the deformation set.
+- `closest_projection_vertex_ids` must equal
+  `surface_projection_status.reprojected_vertex_ids`.
+- Component and intersection mappings must keep declaration names.
+- The NPZ dump must consume the public classification rather than independently
+  recompute equivalent arrays.
+- Do not assume graph-prescribed, intersection, and symmetry categories are
+  disjoint; review/document their intended overlap instead.
 
-- Surface a projection convergence status on the result: at minimum a count of
-  non-converged reprojected vertices and their IDs, in the same global index
-  space. Derive it from the data the warm-start projection already produces; do
-  not add a new solve.
-- Document in `docs/src/background.md` and the `MeshMotionResult` docstring
-  that the final surface is a composite of differentiable closest-point
-  reprojection over the deformation set and fixed-parametric reevaluation
-  elsewhere, and that non-converged points are returned rather than raising.
-- Add a test that the status field exists and is consistent with the reported
-  vertex counts.
+## C. API and example ergonomics review
 
-## Part C — example ergonomics
+- `root_half_width` is a clean-break removal from the supported API;
+  `free_span_fraction` has the truthful semispan meaning and rejects values
+  outside `(0, 1]`.
+- `free_axial_fraction` explains that the middle is graph-free and nose/tail
+  are fixed-parametric.
+- The basic triangle example remains one readable five-stage script, defaults
+  to full scale, has no CLI, and exposes final visualization and FD checking.
+- The advanced example uses the replacement panel, keeps its regularization
+  weight explicit, and reads the public classification/status rather than
+  private pipeline objects.
+- `MeshMotion.derivative_check.enabled` is no longer ignored: `mm.run`
+  registers the configured objective; the caller-owned recorder is still not
+  stopped; `mm.run_fd_sweep` runs afterward. Confirm this composes with an
+  external recorder and does not register duplicate objectives.
+- The docs' three-path description must match the implementation: exact seam,
+  closest projection, fixed-parametric reevaluation.
 
-### C1. Rename `root_half_width` (clean break)
+## D. Replacement asset and calibration ruling
 
-**Ruling: rename to `free_span_fraction`.** The current name and its docstring
-both mislead: a user reading "absolute spanwise half-width" and passing `0.3`
-gets 30% of semispan. Consistent with this overhaul's practice, make it a clean
-break — no alias, no deprecation shim, no acceptance of both spellings. Update
-`add_lifting_surface`, every tracked caller, the docstring, and the API page.
-Add the missing upper-bound validation so a value outside `(0, 1]` raises
-instead of silently meaning "all free".
+Independently load the replacement panel and confirm 13,262 vertices, 2,804
+triangles, 11,858 quads, and zero baseline inversions/corners/degeneracies.
+Confirm all tracked supported references use it and the old filename is absent
+outside historical collaboration prose. Untracked research scripts are outside
+the supported surface and may still name the retired file; report, do not edit.
 
-While there, document finding 2 as a consequence: `free_axial_fraction` leaves
-the middle of a body graph-free and makes the nose and tail parametrically
-prescribed.
+Codex measured full deformation at weights 0, 0.3, 1, 10, 50, 100, 150, 200.
+Every case had zero inversions; minimum scaled Jacobian stayed 0.160662. The p05
+scaled Jacobian moved from 0.540688 at 0/0.3 to 0.540430 at 200, and p05 area
+ratio from 0.982300 at 0 to 0.977684 at 200. Raw data remains outside the repo
+at `/tmp/bsm3_turn65_ngon_sweep.json` if available.
 
-### C2. Split the example
+Rule explicitly on the interpretation. Codex's provisional reading is that
+this one clean-mesh/full-deformation point provides no evidence for 100–200 and
+does not establish that 0.3 is optimal either. Decide whether the advanced
+example should keep 0.3 pending a broader deformation suite, use zero, or defer
+any recommendation. Do not infer a universal value from this one sweep.
 
-Keep `examples/e175_surface_deformation.py` as the **basic triangle** example.
-Raise its `deformation_scale` default to a value the tracked triangle wall
-genuinely supports, justified by the existing full-scale test rather than by a
-new claim, and remove the quad-substitution rationale from that default.
+## E. Dirty-tree overlap
 
-Add `examples/e175_quad_panel_calibration.py` as the **advanced** example: the
-quad-dominant panel, the 114-element baseline, and the fact that IDs 8075 and
-14923 are a mirrored pair of 1.43rd-percentile cells. It should demonstrate
-reading the new classification and projection status, not just printing a
-summary. Update `docs/src/examples.md` to present basic and advanced clearly.
+At Turn-65 start there were eight modified tracked files and 394 untracked
+status entries. The replacement mesh itself was one of those untracked paths,
+so adoption intentionally changes the count to 393. Seven modified files must
+remain byte-identical. The eighth,
+`visualize_wing_rotation_deformation.py`, already carried user changes; only
+the committed `DEFAULT_MESH` line belongs to Turn 65. Verify its unrelated
+`DEFAULT_HDF5` and `--field` changes remain unstaged and were not committed.
 
-### C3. FD-check workflow
+## Reproduce the gates
 
-Resolve finding 3 without changing solver behavior. Either re-export
-`select_fd_objective` and `run_fd_sweep` from `bsm3.mesh_motion` and document
-the required call sequence, **or** make `mm.run` raise a clear error when
-`derivative_check.enabled` is set but the caller cannot act on it. Choose one,
-state the choice and its rationale in the handoff, and document it on the API
-page. Silently ignoring the setting is not acceptable.
+Use the existing Python-3.12 compatibility environment. Minimum results Codex
+reported:
 
-## Part D — N-gon weight sweep, measurement only
+```text
+tests/test_boundary_surface_movement.py                         45 passed
+tests/test_e175_example.py -m "not integration"                16 passed, 5 deselected
+tests -m "not integration"                                    228 passed, 9 deselected
+derivative + n-gon trio                                        exactly 6 passed
+test_triangle_wall_at_full_deformation_scale                   1 passed
+tests/test_documentation.py                                    12 passed
+strict Sphinx 9.1.0                                            build succeeded
+all five literal workflow Ruff commands                        passed
+```
 
-Before anyone changes the recommended weight, measure it on the **current
-tracked quad panel**.
+The full-scale triangle run must show zero folds, zero input/pre/final
+inversions, zero projection failures, exact classification/dump equality, and
+no seam ID in the closest-projection set. Also verify a fresh clone of
+`d0d1ff0` builds the docs, passes documentation tests, and ends clean.
 
-- Sweep `PolygonRegularization.weight` across a range spanning the current
-  `0.3` and the historical `150`/`200`, on
-  `embraer_175_quad_dominant_symmetric_no_winglets.msh`.
-- Record, per weight: post-projection inverted element IDs and count, whether
-  8075 and 14923 specifically survive, minimum and 5th-percentile scaled
-  Jacobian, 5th-percentile area ratio, and elapsed time.
-- Report the table in the handoff and write the raw data outside the
-  repository. **Do not change the default weight in this turn.** The point is
-  to replace an uncalibrated number with evidence; Claude will rule on the new
-  value from your table.
-
-If the sweep is too expensive to complete, run what you can, report exactly
-which weights completed, and do not extrapolate.
-
-## Verification
-
-1. `git diff --check "$TURN65_BASE"..HEAD` and changed paths ⊆ the allowlist.
-2. `tests/test_e175_example.py -m "not integration"` and
-   `tests/test_boundary_surface_movement.py`; report counts and account for
-   every change against the current baselines.
-3. The derivative/N-gon guard remains **exactly 6**.
-4. `tests/test_documentation.py` still passes, and the strict Sphinx build
-   still succeeds.
-5. The five literal workflow Ruff commands, plus default Ruff on every changed
-   Python path.
-6. The tracked full-scale triangle integration test, because C2 changes the
-   example's default scale. This is the one integration run this turn
-   authorizes; do not run DAFoam, OpenFOAM, VortexAD, or real MPI.
-7. Fresh clone of the implementation commit: documentation test and strict
-   build, ending with empty clone status.
-8. 8/8 pre-existing modified files byte-identical and 394 untracked entries
-   unchanged.
-
-## Deferred: tracked VortexAD / fuel-burn optimization example
-
-Recorded as a **separate later milestone**, not a condition on M2 or on this
-turn. The untracked `e175_panel_opt.py`, drag build-up, and gross-weight
-scripts contain useful prototypes — panel-method coupling, a drag buildup, and
-a gross-weight/Breguet model — but they import `e175_mesh_motion_config`,
-`E175ModelFiles`, and `E175PipelineConfig`, none of which exist. That milestone
-should build a *tracked* adapter against a pinned clean VortexAD revision using
-the generalized `mm.run` result and a curated mesh, reusing those prototypes as
-reference rather than resurrecting them. M2 documentation already describes
-VortexAD as deferred and the untracked driver as unsupported, so no M2 claim
-depends on it.
+No DAFoam, OpenFOAM, VortexAD, or real-MPI run is required in this review.
 
 ## Handoff
 
-Two commits: implementation (source, examples, tests, docs pages), then
-`PLAN.md`, `LOG.md`, `CODEX_NEXT.md`. Report both hashes, exact changed paths,
-the C3 choice and rationale, the Part D sweep table, all test and Ruff results,
-the fresh-clone result, and preservation proof. Mark M4.1 as ready for Claude
-review, never as self-accepted.
+Record the independent findings in `LOG.md`, update `PLAN.md`, and replace this
+file with the next literal Codex prompt. If M4.1 is accepted, the next prompt
+should plan M4.2 as a tracked VortexAD/fuel-burn optimization milestone against
+pinned external revisions, while keeping M3 release pruning separate. Include
+any ruling on the `GAMMA` repository name only as naming guidance; do not rename
+the package during review.

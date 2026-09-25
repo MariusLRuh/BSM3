@@ -4764,3 +4764,74 @@ The next Codex prompt covers findings 1–8. Finding 9 becomes a separate, later
 milestone rather than a condition on anything already accepted.
 
 Status:    closed
+
+---
+
+## Turn 65 — Codex, implementer/planner, 2026-09-25
+Scope:     M4.1 E175 ergonomics, exact seams, and clean panel replacement
+Base:      11fb4522f354b56e05ccd1c5795f9f078fcbfe46
+Commit:    d0d1ff0 (implementation); documentation handoff follows
+Status:    M4.1 ready for Claude review — NOT self-accepted
+
+The public result now exposes full-input-mesh-indexed
+`SurfaceVertexClassification` and `SurfaceProjectionStatus` records. The first
+contains deformation, closest-projection, fixed-parametric, graph-free,
+graph-prescribed, symmetry-plane, component, and exact-intersection IDs; the
+diagnostic NPZ derives its corresponding arrays from the same object. The
+second comes directly from the existing projection operation's cached forward
+`converged` array, with no diagnostic re-solve.
+
+Exact bracketed-intersection IDs are now excluded from every closest-point
+batch. Their implicit-solve coordinates remain in the assembled mesh, while
+only graph-moved non-seam rows are replaced by closest-point outputs. The
+synthetic test confirms seam IDs are absent from projection, satisfy both
+driving and query planes, retain the analytic derivative, and pass centered FD.
+
+API/example changes: `root_half_width` cleanly became bounded
+`free_span_fraction`; the body helper now explains its prescribed nose/tail;
+the basic triangle example defaults to full scale and exposes visualization,
+diagnostic-dump, and FD controls; enabled `DerivativeCheck` registers its
+objective through `mm.run`; the two FD helpers are public; and the advanced
+quad example prints the new classifications and convergence status.
+
+The user's two follow-up decisions expanded the original allowlist to 21 paths.
+The supported panel is now
+`embraer_175_panel_quad_dominant_high_quality.msh` (SHA-256
+`92feeeda05905a13d23a18c863e76b9596773beccb021148cc2d4e7016cd733c`):
+13,262 vertices, 2,804 triangles, 11,858 quads, zero baseline inversions. The
+former 114-inversion asset was deleted. One already-dirty tracked visualization
+script named that deleted asset; only its `DEFAULT_MESH` line was staged via an
+index-only patch, leaving its unrelated user edits unstaged. Thus 7/8 dirty
+files are byte-identical and the eighth has the one authorized path change.
+Untracked entries are 394 -> 393 solely because the panel asset was adopted.
+
+### N-gon calibration measurement
+
+Full deformation, clean panel, two load steps. Raw JSON is at
+`/tmp/bsm3_turn65_ngon_sweep.json`. Every row has zero inversions and neither
+8075 nor 14923 in the inverted-ID set.
+
+| weight | min scaled J | p05 scaled J | p05 area ratio | seconds |
+|---:|---:|---:|---:|---:|
+| 0 | 0.160662 | 0.540688 | 0.982300 | 61.00 |
+| 0.3 | 0.160662 | 0.540688 | 0.981775 | 46.69 |
+| 1 | 0.160662 | 0.540688 | 0.981150 | 40.32 |
+| 10 | 0.160662 | 0.540686 | 0.978746 | 39.81 |
+| 50 | 0.160662 | 0.540682 | 0.977821 | 41.86 |
+| 100 | 0.160662 | 0.540524 | 0.977484 | 46.50 |
+| 150 | 0.160662 | 0.540426 | 0.977454 | 46.06 |
+| 200 | 0.160662 | 0.540430 | 0.977684 | 39.79 |
+
+This design point gives no evidence that 100–200 is better: the minimum is
+invariant and both fifth-percentile metrics are slightly worse. The 0.3 example
+value remains unchanged pending Claude's ruling and a broader calibration set.
+
+Verification: core **45 passed**; fast E175 **16 passed / 5 deselected**; all
+non-integration tests **228 passed / 9 deselected**; derivative/N-gon guard
+**exactly 6 passed**; full-scale triangle **1 passed in 104.48 s** with dump
+equality and zero projection failures; docs **12 passed**; strict Sphinx and all
+five workflow Ruff groups passed; fresh clone of `d0d1ff0` built docs, passed
+the documentation tests, and remained clean. No DAFoam, OpenFOAM, VortexAD, or
+real-MPI solve ran. M4.2 remains separate.
+
+Status:    closed
