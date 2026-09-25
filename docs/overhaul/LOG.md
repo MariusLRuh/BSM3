@@ -3843,3 +3843,139 @@ Claude's literal allowlist, schema, test gates, stop rule, and commit structure
 are in `CODEX_NEXT.md`. M1.8 is not accepted in advance.
 
 Status:    closed
+
+---
+
+## Turn 57 — Claude, implementer, 2026-09-24
+Scope:     M1.8 — safe polygon asset and pickle boundary
+Base:      TURN57_BASE = eeb2c38
+Commits:   2449441 (asset, reader, pipeline, tests), 4a39fd8 (warm-start API), docs commit follows
+Status:    M1.8 ready for Codex acceptance — NOT accepted by the implementer
+
+### Asset conversion
+
+The legacy file verified against the recorded baseline before anything was
+touched: 2,863,763 bytes, sha256
+`34165debb2a3dde52dd7380cc1d91e99d829db96042858f710154b201f055b4d`. It was a
+dict of `points` `(79207, 3)` float64 and a 40,706-entry `connectivity` list.
+
+It was converted once with a script kept outside the repository, and every
+recorded value reproduced exactly:
+
+| Item | Result |
+| --- | --- |
+| `vertices` | `(79207, 3)` float64, sha256 `76ceaadd…` ✓ |
+| `connectivity` | `(239385,)` int64, sha256 `971e53f7…` ✓ |
+| `offsets` | `(40707,)` int64, sha256 `eff2e0fe…` ✓ |
+| Face counts by width | 3:5, 4:565, 5:7,891, 6:28,190, 7:3,927, 8:126, 9:2 ✓ |
+| Node-ID range | 0 through 79,206 ✓ |
+| Faces / adjacent width transitions | 40,706 / 14,720 ✓ |
+| Per-face round trip in original order | exact for all 40,706 faces |
+| Object arrays | none |
+
+`wall_surface.pkl` was then deleted and `wall_surface.npz` added.
+
+### Safe reader
+
+`import_mesh`/`read_mesh` dispatch `.npz` by suffix, with no `mesh_kind`
+argument and no new public importer. `_import_npz` calls
+`numpy.load(..., allow_pickle=False)` explicitly, requires exactly the three
+field names, and validates dimensions, numeric/integer dtypes, finite vertices,
+offset start and end, face spans of at least three nodes, a nonempty face set,
+and node-ID bounds.
+
+The decoded face sequence is preserved in `MeshData.connectivity` with matching
+per-face `cell_types`, while `cell_blocks` regroup the same faces by ascending
+width. Those two orderings deliberately differ for a mixed-width surface; the
+docstring says so. Uniform-width archives return a 2-D connectivity, mixed ones
+an object array of rows.
+
+`.pkl`/`.pickle` remain outside suffix dispatch.
+`import_trusted_polygon_pickle` stays as the explicit opt-in boundary, keeps
+its warning, and now has a synthetic test that also asserts suffix dispatch
+still refuses the same file — so the boundary is intentional, not dead code.
+
+### Pipeline
+
+`_load_polygon_surface_pickle` and `_cfd_mesh_from_pickle` are deleted, along
+with the direct `pickle` import and the `.pkl`/`.pickle` suffix checks. The
+surface always loads through `bsm3.preprocessing.import_mesh`.
+
+`polygon_connectivity` now comes from the imported mesh's stored connectivity
+via a new `_ordered_surface_cells`, which restores the legacy face sequence the
+fold diagnostics are defined against — previously only the pickle branch had
+it, and the generic branch silently used the width-grouped order.
+`_cfd_surface_cells` is unchanged and still supplies the width-grouped
+quality/inversion order. No solver, projection, regularization, quality, or
+derivative behavior changed.
+
+### Warm-start API
+
+`DEFAULT_FUN_SET_PATH` is deleted from `warm_start_projections`, together with
+the `pathlib` import that became dead there, and the stale re-export and
+`pathlib` import in `warm_start_candidate_projection_numpy`. The duplicate
+loader in the candidate module is removed. Both are consolidated into
+`load_function_set_from_trusted_pickle(pickle_path)` with a **mandatory** path:
+no default, no package-relative fallback, no implicit lookup.
+
+**Defect found and fixed during consolidation.** `warm_start_projections`
+imported `lsdo_function_spaces` only inside its `__main__` block, so its
+retained `load_function_set` raised `NameError: name 'lfs' is not defined`
+whenever it was called as a library function — confirmed by direct call before
+editing. The duplicate in the candidate module carried the guarded import that
+made it work. The consolidated entry point now has that guarded module-level
+import and its `ImportError`. This is the only executable change in commit 2
+beyond the removals, and it was required for the consolidated function to work
+at all.
+
+### Local incompatibility from the clean break
+
+The untracked `bsm3/core/projections/warm_start_candidate_projection_driver.py`
+imports `load_function_set_from_pickle` (line 44) and `DEFAULT_FUN_SET_PATH`
+(lines 48, 117), and calls the old loader at line 206. It will fail to import
+until its owner updates it to
+`load_function_set_from_trusted_pickle(<explicit path>)`. It was deliberately
+not edited or adopted, per the allowlist.
+
+The tracked-but-prohibited research script
+`bsm3/core/boundary_surface_movement/movement_test_embraer_175_hex_mesh.py`
+still sets `MESH_PATH = SCRIPT_DIR / "wall_surface.pkl"` at line 33 and will
+break on the deleted asset. It is an already-modified dirty file that the
+allowlist explicitly forbids touching, so it was left alone. It should point at
+`wall_surface.npz`, which the generic importer now reads.
+
+No tracked module, test, or curated asset references either removed name.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| Focused implementation tests | **54 passed** |
+| Focused suite (`-m "not integration"`) | **97 passed, 3 deselected** (82 baseline + 15 added) |
+| Drivers/volume/MPI suite | **102 passed** (89 baseline + 13 added) |
+| Derivative + N-gon guards | **6 passed** (unchanged) |
+| Curated integration, incl. 40,706-face affine assembly | **3 passed, 3 deselected** |
+| Critical static checks (default Ruff) | **All checks passed** |
+| Surface-motion core `--select D` | **All checks passed** |
+| Projection/preprocessing `--select D` | **All checks passed** |
+| `git ls-files` on the two asset paths | only `wall_surface.npz` |
+| `pickle.load` in the four scoped modules | only `load_function_set_from_trusted_pickle` and `import_trusted_polygon_pickle` |
+| `DEFAULT_FUN_SET_PATH` in the retained modules | absent |
+| Scoped old-asset-name grep | empty |
+
+Every added test is accounted for: 13 in `test_preprocessing_plotting.py` and
+2 fast checks in `test_curated_assets.py`. The +15 and +13 deltas are exactly
+those, so no historical count moved on its own.
+
+### Deviations
+
+- The scoped old-asset-name grep must be empty, so `ASSETS.md` and
+  `MANIFEST.md` record the superseded asset's provenance by size and sha256
+  rather than by its literal former filename. `PLAN.md` and `LOG.md` are
+  outside that scoped grep and keep their historical mentions.
+- The guarded `lsdo_function_spaces` import described above is an executable
+  addition inside an allowlisted file. Reported rather than absorbed silently.
+
+M1.8 is **ready for Codex acceptance** and is not accepted by the implementer.
+
+Status:    closed
