@@ -60,8 +60,6 @@ Open:
 
 Status:    closed
 
----
-
 ## Turn 2 — Codex, implementer/reviewer, 2026-09-21
 Scope:     Plan review; Q-A/Q-B/Q-C; safe portions of M0.1/M0.3/M0.4
 
@@ -5642,3 +5640,70 @@ whenever the user chooses → M5.2 namespace migration, blocked on the dirty
 tree → M3 archive/history pruning, last.
 
 Status:    closed
+
+## Turn 74 — Codex implements M4.2 and hands it to Claude
+
+Date:      2026-09-25
+Role:      Codex implements and verifies; Claude reviews next
+Scope:     Optional VortexAD adapter, fuel-burn model, and tracked optimization example
+Base:      `a291231` (prompt commit `699ad9a`)
+Commit:    `027a890`
+Status:    **ready for Claude review; not self-accepted**
+
+### Result
+
+The new public builder consumes only `MeshMotionResult`'s public surface,
+imports VortexAD lazily, leaves recorder ownership with the caller, validates
+projection/classification state, derives triangle/quad topology and trailing
+edges from the baseline mesh, and registers named `CL`, `CDi`, `L`, and `Di`
+outputs. The independent Breguet function is a pure CSDL graph with explicit
+units and no VortexAD dependency. The tracked E175 example composes the five
+stages through a lift constraint and fuel-burn objective without enabling the
+mesh-motion convenience derivative objective.
+
+The external target was read from official main without installation:
+`https://github.com/LSDOlab/VortexAD.git` at full revision
+`8c5bc86fda5fa1e359fecde24c6c6e8527c773b5`. The exact `--no-deps` install
+form is recorded in `requirements.txt`, the adapter error, and user docs.
+
+The derivative test was tightened before handoff: its design amplitude now
+passes through the fake panel solver **and** `compute_fuel_burn`, and the
+fuel-burn scalar's analytic VJP is compared with centered finite differences.
+This closes the composed panel-to-fuel claim rather than checking an unrelated
+aerodynamic linear combination.
+
+### Verification
+
+| Gate | Result |
+| --- | --- |
+| New tests | **12 passed, 1 skipped** (real VortexAD export check) |
+| Full non-integration suite | **240 passed, 10 deselected**; baseline 228/9 plus exactly 12/1 |
+| Boundary-surface core | **45 passed** |
+| Fast E175 | **16 passed, 5 deselected** |
+| Derivative / N-gon guard | **exactly 6 passed** |
+| Full-scale triangle + clean quad guards | **2 passed, 19 deselected**, 163.14 s |
+| Documentation tests | **12 passed** |
+| Strict Sphinx 9.1.0 | succeeded in place and from final clean clone |
+| Ruff | five literal workflow groups, changed paths, and `--select D` on all five new Python files passed |
+| Final clean clone | docs/tests/build clean; status empty before and after install |
+| Out-of-tree installed import | `0.2.0a1`, resolved from site-packages with `VortexAD` absent; both supported public namespaces import |
+
+The five new Python paths are not members of the workflow's existing literal
+Ruff path lists. The prompt prohibited changing the workflow, so this is a
+reported coverage gap for Claude to rule on, not a silently widened scope.
+
+The first disposable import probe incorrectly tried package-root
+`from bsm3 import PanelCondition`; that is not a promised namespace. The
+supported `import bsm3.mesh_motion as mm` and
+`bsm3.core.boundary_surface_movement` surfaces both import successfully from
+site-packages with VortexAD absent. No production correction was warranted.
+
+No real VortexAD, DAFoam, OpenFOAM, or MPI execution occurred. Exactly the 11
+implementation-allowlist paths changed in `027a890`. Preservation remains
+exact: 8 modified tracked files and 393 untracked entries, with dirty-diff
+SHA-256 `981318561a10dff8e9d723540902b6d2560875b29656a0b59f0803cbff116177`
+and untracked-list SHA-256
+`c38fd93dc32ecf7f927fc612c1079bd9786c19f6c1f74b4f8e69d28aaa44da60`.
+
+M3 remains separate and last. The GitHub rename remains the first external
+publication action and was not performed here.

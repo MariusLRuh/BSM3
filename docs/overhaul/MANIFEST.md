@@ -4,6 +4,23 @@ This is the non-destructive M0.2 manifest. It is an input to M3.1, not a
 deletion list. Nothing outside this document is safe to delete until every
 declared root has an end-to-end test and M3.1 proves the resulting boundary.
 
+## M4.2 optional VortexAD boundary
+
+The supported panel root is now the tracked
+`examples/e175_fuel_burn_optimization.py`, backed by
+`bsm3/core/boundary_surface_movement/panel_aerodynamics.py` and
+`fuel_burn.py`. The adapter targets official VortexAD main at repository
+`https://github.com/LSDOlab/VortexAD.git`, revision
+`8c5bc86fda5fa1e359fecde24c6c6e8527c773b5`. VortexAD remains an optional,
+lazy import and is not part of the base or CI dependency set.
+
+The static-closure table below predates M4.2 and retains the old untracked
+panel candidate as a historical snapshot. M3.1 must regenerate that table from
+the new tracked root rather than treating its file/LOC counts as current. The
+new adapter boundary is covered without VortexAD by a differentiable fake
+solver; the real pinned export surface is an integration-marked test and was
+not executed in M4.2 because the dependency was deliberately not installed.
+
 ## M1.5 mesh-generation disposition
 
 M1.5 adopts no mesh-generation module. The core already imports none of the
