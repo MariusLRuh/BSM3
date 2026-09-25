@@ -1,10 +1,17 @@
-# Codex Turn 71 — M5.1 and M6.1: GAMMA public identity, HTML-only docs alpha
+# Codex Turn 71 (corrected) — M5.1 and M6.1: GAMMA identity, HTML-only alpha
 
 Claude ruled the identity in Turn 70. Codex implements; Claude reviews. Do not
 self-accept.
 
+**This prompt supersedes the first Turn-71 issue, which was unsatisfiable.**
+Codex correctly stopped before editing: the prompt required
+`project = "GAMMA"` in `docs/conf.py` and no `BSM3` in `docs/src/api.md`
+while `tests/test_documentation.py` hard-codes both and `tests/**` was
+prohibited. The defect was in the prompt, not the implementation. Exactly one
+path is added below; nothing else is widened.
+
 ```text
-TURN71_BASE = 09cd954
+TURN71_BASE = 6068892
 ```
 
 Preserve the user's dirty tree exactly: **8 modified tracked files
@@ -57,7 +64,11 @@ MANIFEST.in
 HPC_DAFOAM_INSTALL.md
 .github/workflows/actions.yml
 .gitignore
+tests/test_documentation.py
 ```
+
+`tests/test_documentation.py` is the **only** test file authorized in this
+turn, and only for the four changes in Part E.
 
 Documentation commit, separately:
 
@@ -71,10 +82,14 @@ docs/overhaul/CODEX_NEXT.md
 
 ```text
 bsm3/**            except bsm3/__init__.py (version line only)
-tests/**
+tests/**           except tests/test_documentation.py (Part E only)
 examples/**
 docs/overhaul/**   except the three handoff documents above
 ```
+
+No other test file may change. `tests/test_e175_example.py` mentions BSM3 in
+three prose comments (lines 204, 492-494, 543); those assert nothing, describe
+the package accurately, and stay exactly as they are.
 
 `bsm3/__init__.py` is on the allowlist **only** for the `__version__` string.
 Do not touch its `__all__`, imports, or docstring. Stop and report rather than
@@ -138,8 +153,60 @@ git grep -c "import bsm3\|from bsm3" -- '*.py' | wc -l
 git grep -c "BSM3" -- docs/overhaul/ | head
 ```
 
-Check 3 is a guard against an accidental namespace rename: its count must not
-fall. Report the before and after numbers.
+Check 3 is a guard against an accidental namespace rename: it is **53** at
+`TURN71_BASE` and must still be 53 afterwards. Report both numbers.
+
+
+## Part E — the four authorized test edits
+
+`tests/test_documentation.py` encodes the old identity in four places. Change
+these and nothing else in that file.
+
+1. **Line 115.** `assert 'project = "BSM3"' in conf` becomes
+   `project = "GAMMA"`, matching the `docs/conf.py` change in Part A.
+2. **Lines 155-156.** The export-inventory regex expects
+   `<!-- BEGIN BSM3 PUBLIC EXPORTS -->` / `<!-- END BSM3 PUBLIC EXPORTS -->`.
+   Rename both markers to `GAMMA` in the test **and** in `docs/src/api.md`, so
+   the delimited inventory keeps matching.
+3. **Prose.** Where a docstring or comment in this file names the *current
+   public identity*, say GAMMA. Where it names the *import namespace* or a
+   path, it stays `bsm3` — the namespace is unchanged. Line 131 ("without
+   importing BSM3") describes the import, so rule on it deliberately and say
+   which reading you applied.
+4. **Line 219 — do not skip this one.** The guard reads:
+
+   ```python
+   assert "BSM3 never starts or stops a recorder" not in text, path
+   ```
+
+   It is a *negative* guard, one of the four rejected overclaims. After the
+   rebrand it would keep passing while protecting nothing, because the prose it
+   forbids would now read "GAMMA never starts or stops a recorder". Update the
+   string to `"GAMMA never starts or stops a recorder"` so the semantic
+   protection survives. A silently retired guard is worse than a failing test.
+
+Do not add, delete, weaken, or reorder any other assertion in this file.
+
+## Verified baselines
+
+Re-derived independently at `TURN71_BASE`. Use these exact commands so the
+post-change comparison is unambiguous:
+
+```bash
+git diff | shasum -a 256
+# 981318561a10dff8e9d723540902b6d2560875b29656a0b59f0803cbff116177
+
+git status --porcelain | grep '^??' | cut -c4- | sort | shasum -a 256
+# c38fd93dc32ecf7f927fc612c1079bd9786c19f6c1f74b4f8e69d28aaa44da60
+
+git diff --name-only | wc -l                 # 8
+git status --porcelain | grep -c '^??'       # 393
+git grep -lE "import bsm3|from bsm3" -- '*.py' | wc -l   # 53
+```
+
+Supported-surface `BSM3` is **39 matching lines / 40 occurrences** — one line
+carries two tokens. Check 1 in Part D uses `git grep -n` (lines); if you report
+an occurrence count, label it as such.
 
 ## Verification
 
@@ -203,11 +270,20 @@ Do not rewrite or weaken it. Order: M5.1/M6.1 (this turn) → M6.2 (user
 authorization) → M4.2 → M5.2 namespace migration, blocked on the dirty tree →
 M3 archive/history pruning, last.
 
+## Unchanged from the first issue
+
+Every Turn-70 ruling stands: `GAMMA` / `GAMMA-MDO` / `gamma-mdo`, the import
+namespace stays `bsm3`, `bsm3/` does not move, version is `0.2.0a1`, the first
+hosted build is HTML only, and the four external mutations remain
+user-authorized. All verification requirements are unchanged. The M4.2 prompt
+remains preserved verbatim at `38cd0bf`.
+
 ## Handoff
 
 Two commits: implementation, then the collaboration documents. Report both
 hashes, exact changed paths, the four stale-name check counts with before/after
 for check 3, the wheel filename and the out-of-tree import result, all gate
-results, the clean-clone result, preservation proof, and the external-action
-checklist. Mark M5.1 and M6.1 as ready for Claude review, never as
+results, the clean-clone result, preservation proof (both SHA-256 hashes
+recomputed), the four Part E edits with the line 131 ruling, and the
+external-action checklist. Mark M5.1 and M6.1 as ready for Claude review, never as
 self-accepted.
