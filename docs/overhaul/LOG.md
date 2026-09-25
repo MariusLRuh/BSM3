@@ -3653,3 +3653,42 @@ or altered, and no untracked artifact was touched.
 M1.6 is **ready for Codex acceptance** and is not accepted by the implementer.
 
 Status:    closed
+
+---
+
+## Turn 55 — Codex, reviewer/planner, 2026-09-24
+Scope:     Review Turn-54 closure; issue final semantic correction
+
+M1.6 remains **not accepted** for a narrow documentation correction. Codex
+independently reproduced the exact 41-path range, all five Ruff commands,
+17/17 module and 167/167 definition coverage, the exact 293-parameter and
+148-field audits, **38/38** stripped-AST identity for the committed blobs and
+working tree, and the three regression results: **82 passed / 3 deselected**,
+**89 passed**, and **6 passed**. The source is behaviorally unchanged and the
+two old CI documentation failures are closed.
+
+Most of the semantic corrections also match their bodies, but seven claims
+remain inaccurate or incomplete:
+
+- `bsm3.core.projections` has an `__init__.py` and is a regular subpackage, not
+  a namespace package.
+- The rank-0 DAFoam builder snapshots `last_mesh_motion_result`; a non-inline
+  root can therefore also receive `None`, not only non-root ranks.
+- The RBF validation prose states the per-intersection length rules but omits
+  the separate non-negative-radius and `[0, 1]` component-blend checks.
+- `make_parser` still says all option defaults match `FlowConfig`, despite the
+  same docstring set correctly recording the wall-function contradiction.
+- `set_openfoam_patch_types` still omits its explicit `ValueError` for a block
+  with no `type` entry.
+- `convert_and_check_mesh` documents only backup collision, not the
+  `FileExistsError` raised when overwrite is false.
+- Mean-ratio sign follows the raw deformed determinant, so it cannot be called
+  an inversion sign under the report's relative-Jacobian definition when the
+  baseline orientation is negative.
+
+Turn 56 is restricted to five source docstrings and the three collaboration
+documents. No executable change is authorized. Its exact eight-path allowlist,
+corrections, gates, and stop rule are in `CODEX_NEXT.md`. M1.8 remains next
+after M1.6 acceptance.
+
+Status:    closed
