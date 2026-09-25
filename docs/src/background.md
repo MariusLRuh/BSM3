@@ -7,7 +7,8 @@ This page explains what each pipeline stage does and why the settings exist.
 When a CAD outer mould line deforms, a surface mesh attached to it must follow.
 Moving only the boundary nodes and leaving the interior alone tangles the mesh;
 moving everything rigidly ignores the shape change. BSM3 propagates the motion
-through the mesh graph, then reprojects each moved node toward the deformed
+through the mesh graph, then combines closest-point projection, exact
+intersection coordinates, and fixed-parametric reevaluation on the deformed
 geometry while recording convergence diagnostics. The map remains
 differentiable so it can sit inside an optimization, but a non-converged
 projection is returned rather than silently treated as exact.
@@ -18,8 +19,11 @@ projection is returned rather than silently treated as exact.
 
 Components meet along closed curves — a wing root against a fuselage, a tail
 root against the same body. `connect` names such a curve. Those curves are
-recomputed for the deformed geometry, because where the wing meets the body
-moves when the wing does.
+recomputed by a bracketed implicit solve for the deformed geometry, because
+where the wing meets the body moves when the wing does. The resulting seam
+coordinates are already exact points on the driving component and satisfy the
+query-component intersection residual to the configured tolerance. They are
+retained directly rather than passed through closest-point projection again.
 
 ### Surface motion
 
@@ -43,11 +47,19 @@ Several settings shape that solve:
 
 ### Reprojection
 
-Every moved node is evaluated by a projection onto the deformed outer mould
-line. This uses a warm-started Newton solve with candidate ranking across
-patches and patch boundaries. A point is still returned when that solve does
-not converge, so callers must inspect the convergence and quality diagnostics
-rather than assume exact coincidence with the geometry.
+The final surface combines three differentiable paths:
+
+- graph-moved non-intersection vertices use closest-point projection onto the
+  deformed outer mould line;
+- exact intersection vertices retain the bracketed intersection solution; and
+- vertices outside the deformation set are reevaluated at their fixed
+  component-parametric coordinates.
+
+Closest-point projection uses a warm-started Newton solve with candidate
+ranking across patches and patch boundaries. A best candidate is still
+returned when that solve does not converge. `surface_projection_status`
+reports the projected global vertex IDs and the non-converged subset, so
+callers need not infer convergence from mesh-quality metrics.
 
 ### Quality diagnostics
 

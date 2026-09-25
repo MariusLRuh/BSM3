@@ -4,7 +4,10 @@ The topology stays fixed, but inverse-area graph weights and the factorization
 are rebuilt from the previously projected mesh.  Together with the nonlinear
 closest-point projection, this makes the increments genuinely path-dependent:
 
-``geometry(t_k) -> exact seams -> L(x_(k-1)) increment -> project to OML(t_k)``.
+``geometry(t_k) -> exact seams -> L(x_(k-1)) increment -> project graph rows``.
+
+Exact intersection rows already lie on the driving OML by construction and
+are not sent through the closest-point solver a second time.
 
 The number of steps is deliberately fixed while a CSDL graph is being built.
 Adaptive step acceptance would make both the graph structure and its derivative
@@ -70,6 +73,10 @@ class GraphLoadStepResult:
         Optional quadratic-regularizer normalization.
     ngon_affine_normalization_scale
         Optional affine-residual regularizer normalization.
+    final_reprojected_vertex_ids
+        Global IDs passed through closest-point projection at the final step.
+    final_nonconverged_vertex_ids
+        Subset whose final closest-point solve did not converge.
     """
 
     final_mesh_vertices: csdl.Variable
@@ -78,6 +85,8 @@ class GraphLoadStepResult:
     load_fractions: tuple[float, ...]
     preprojected_mesh_history: tuple[csdl.Variable, ...]
     projected_mesh_history: tuple[csdl.Variable, ...]
+    final_reprojected_vertex_ids: np.ndarray
+    final_nonconverged_vertex_ids: np.ndarray
     distortion_normalization_scale: float | None = None
     distortion_redundancy: float | None = None
     distortion_num_ear_clipped: int = 0
@@ -137,10 +146,9 @@ def run_graph_load_steps(
     factorization are rebuilt from the *previously projected* mesh.  This is
     the nonlinear continuation state.
 
-    With one coefficient entry this is algebraically identical to the existing
-    one-shot graph path.  Seam rows are overwritten by the current exact
-    intersection before every projection so projection roundoff from the prior
-    step cannot accumulate at a component junction.
+    Seam rows are overwritten by the current exact intersection and bypass
+    closest-point projection, so the bracketed solution is preserved without
+    a redundant nonlinear solve.
 
     Parameters
     ----------
@@ -360,6 +368,8 @@ def run_graph_load_steps(
 
     preprojected_history: list[csdl.Variable] = []
     projected_history: list[csdl.Variable] = []
+    final_reprojected_ids = np.empty(0, dtype=np.int64)
+    final_nonconverged_ids = np.empty(0, dtype=np.int64)
     for step_index, coefficient_map in enumerate(coefficient_steps):
         state = motion.build_load_step_state(
             component_coeffs=coefficient_map,
@@ -582,12 +592,34 @@ def run_graph_load_steps(
             vertex_ids=plane_ids,
             axis=symmetry_plane_axis,
         )
-        projected_batch = project_onto_oml(
-            deformed_mesh_vertices=preprojected_deformation,
-            deformed_mesh_vertex_ids=ids,
-            projection_metadata=projection_metadata,
-            component_coefficients=coefficient_map,
-            projection_options=dict(projection_options or {}),
+        exact_seam_ids = _solution_vertex_ids(state.solutions)
+        reproject_mask = ~np.isin(ids, exact_seam_ids)
+        reprojected_ids = ids[reproject_mask]
+        reprojected_rows = np.where(reproject_mask)[0].astype(np.int64)
+        projected_deformation = preprojected_deformation
+        if reprojected_ids.size:
+            closest_batch = project_onto_oml(
+                deformed_mesh_vertices=preprojected_deformation[
+                    _row_slice(reprojected_rows)
+                ],
+                deformed_mesh_vertex_ids=reprojected_ids,
+                projection_metadata=projection_metadata,
+                component_coefficients=coefficient_map,
+                projection_options=dict(projection_options or {}),
+            )
+            projected_deformation = projected_deformation.set(
+                _row_slice(reprojected_rows), closest_batch.values
+            )
+            final_nonconverged_ids = reprojected_ids[
+                ~np.asarray(closest_batch.converged, dtype=bool)
+            ]
+        else:
+            final_nonconverged_ids = np.empty(0, dtype=np.int64)
+        final_reprojected_ids = reprojected_ids
+        projected_batch = VertexBatch(
+            values=projected_deformation,
+            vertex_ids=ids,
+            num_mesh_vertices=motion.initial_vertices.shape[0],
         )
 
         projected_mesh = combine_vertices(
@@ -648,6 +680,8 @@ def run_graph_load_steps(
             if ngon_affine_system is None
             else ngon_affine_system.maximum_warp_ratio
         ),
+        final_reprojected_vertex_ids=final_reprojected_ids,
+        final_nonconverged_vertex_ids=final_nonconverged_ids,
     )
 
 
@@ -705,6 +739,18 @@ def _set_exact_seams(values, solutions, row_by_id):
                 ],
             )
     return output
+
+
+def _solution_vertex_ids(solutions) -> np.ndarray:
+    """Return the unique mesh IDs governed by exact intersection solves."""
+    blocks = [
+        np.asarray(solution.vertex_ids, dtype=np.int64).reshape(-1)
+        for solution in solutions
+        if solution.vertex_ids is not None
+    ]
+    if not blocks:
+        return np.empty(0, dtype=np.int64)
+    return np.unique(np.concatenate(blocks)).astype(np.int64)
 
 
 def _row_slice(rows):

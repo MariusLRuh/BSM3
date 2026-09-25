@@ -438,6 +438,78 @@ class DerivativeCheck:
 
 
 @dataclass(frozen=True)
+class SurfaceVertexClassification:
+    """Classify surface vertices in the complete input-mesh index space.
+
+    The arrays contain zero-based global vertex IDs from the complete surface
+    mesh, even when a symmetric half mesh was used internally. Mirrored
+    vertices inherit the classification of the half-mesh vertex from which
+    they were reconstructed.
+
+    Attributes
+    ----------
+    deformation_vertex_ids
+        Vertices participating in graph motion, exact intersection motion, or
+        closest-point reprojection.
+    closest_projection_vertex_ids
+        Deformation vertices passed through closest-point OML reprojection.
+        Exact intersection vertices are deliberately excluded.
+    parametrically_prescribed_vertex_ids
+        Vertices outside the deformation set, updated by fixed-parametric
+        reevaluation on their owning component.
+    graph_free_vertex_ids
+        Unknown rows solved by the graph-Laplacian system.
+    graph_prescribed_vertex_ids
+        Boundary rows prescribed to the graph-Laplacian system.
+    symmetry_plane_vertex_ids
+        Vertices constrained to the configured symmetry plane.
+    component_vertex_ids
+        Global vertex IDs keyed by declared component name.
+    intersection_vertex_ids
+        Exact bracketed-intersection vertex IDs keyed by intersection name.
+    """
+
+    deformation_vertex_ids: np.ndarray
+    closest_projection_vertex_ids: np.ndarray
+    parametrically_prescribed_vertex_ids: np.ndarray
+    graph_free_vertex_ids: np.ndarray
+    graph_prescribed_vertex_ids: np.ndarray
+    symmetry_plane_vertex_ids: np.ndarray
+    component_vertex_ids: dict[str, np.ndarray]
+    intersection_vertex_ids: dict[str, np.ndarray]
+
+
+@dataclass(frozen=True)
+class SurfaceProjectionStatus:
+    """Report closest-point convergence in global surface-mesh indexing.
+
+    Attributes
+    ----------
+    reprojected_vertex_ids
+        Vertices actually passed through the closest-point operation. Exact
+        intersection vertices and fixed-parametric reevaluation vertices are
+        not included.
+    nonconverged_vertex_ids
+        Reprojected vertices whose final warm-started Newton solve did not
+        report convergence. The pipeline returns their best candidates rather
+        than raising, and derivatives at those points are not guaranteed.
+    """
+
+    reprojected_vertex_ids: np.ndarray
+    nonconverged_vertex_ids: np.ndarray
+
+    @property
+    def num_reprojected(self) -> int:
+        """Return the number of vertices sent through closest projection."""
+        return int(self.reprojected_vertex_ids.size)
+
+    @property
+    def num_nonconverged(self) -> int:
+        """Return the number of closest projections that did not converge."""
+        return int(self.nonconverged_vertex_ids.size)
+
+
+@dataclass(frozen=True)
 class MeshMotion:
     """Collect all mesh-motion pipeline settings.
 
@@ -640,6 +712,14 @@ class MeshMotionResult:
         Optional loaded volume-mesh object.
     surface_mesh
         Loaded surface-mesh object.
+    surface_vertex_classification
+        Global vertex-ID sets identifying graph, parametric, symmetry, and
+        exact-intersection roles.
+    surface_projection_status
+        Closest-point reprojection IDs and non-converged subset. The final
+        surface is composite: graph-moved vertices use differentiable
+        closest-point reprojection, exact intersections retain the bracketed
+        solve, and all remaining vertices use fixed-parametric reevaluation.
     """
 
     input_files: InputFiles
@@ -654,6 +734,8 @@ class MeshMotionResult:
     volume_quality_summary: dict | None
     volume_mesh: Any | None
     surface_mesh: Any
+    surface_vertex_classification: SurfaceVertexClassification
+    surface_projection_status: SurfaceProjectionStatus
     recorder: Any = None
     elapsed_seconds: float = 0.0
     surface_fold_count: int = 0
@@ -665,9 +747,9 @@ class MeshMotionResult:
     def print_summary(self) -> None:
         """Print a concise forward-diagnostic summary of this solve.
 
-        Reports mesh size, load stepping, fold and inversion counts, elapsed
-        wall-clock time, and the aggregate surface-quality metrics that the
-        pipeline already computed. Nothing is recomputed here.
+        Reports mesh size, fold and inversion counts, projection convergence,
+        elapsed wall-clock time, and aggregate surface-quality metrics already
+        computed by the pipeline. Nothing is recomputed here.
         """
         vertices = int(self.initial_surface_coordinates.shape[0])
         print("mesh motion summary")
@@ -692,6 +774,9 @@ class MeshMotionResult:
                 "  min scaled Jacobian : "
                 f"{report.minimum_scaled_jacobian:.4g}"
             )
+        status = self.surface_projection_status
+        print(f"  closest projected   : {status.num_reprojected}")
+        print(f"  projection failures : {status.num_nonconverged}")
 
 
 __all__ = [
@@ -704,6 +789,8 @@ __all__ = [
     "PolygonRegularization",
     "QualityChecks",
     "SurfaceMotion",
+    "SurfaceProjectionStatus",
+    "SurfaceVertexClassification",
     "Visualization",
     "VolumeMotion",
 ]

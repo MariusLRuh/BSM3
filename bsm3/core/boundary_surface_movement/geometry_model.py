@@ -470,7 +470,7 @@ class GeometryModel:
         aspect_ratio: Any = None,
         reference_area: float | None = None,
         reference_aspect_ratio: float | None = None,
-        root_half_width: float = 0.3,
+        free_span_fraction: float = 0.3,
         projection_name: str | None = None,
         pivot_chord_fraction: float = 0.25,
     ) -> None:
@@ -494,8 +494,10 @@ class GeometryModel:
             reference values.
         reference_area, reference_aspect_ratio
             Planform values the baseline geometry already has.
-        root_half_width
-            Absolute spanwise half-width of the graph free region at the root.
+        free_span_fraction
+            Fraction of the component semispan, in ``(0, 1]``, included in the
+            graph-free root region. Vertices farther outboard are updated by
+            fixed-parametric reevaluation.
         projection_name
             Diagnostic projection name; defaults to ``name``.
         pivot_chord_fraction
@@ -510,8 +512,8 @@ class GeometryModel:
         self._check_name(name)
         if not 0.0 <= pivot_chord_fraction <= 1.0:
             raise ValueError("pivot_chord_fraction must lie in [0, 1].")
-        if root_half_width <= 0.0:
-            raise ValueError("root_half_width must be positive.")
+        if not 0.0 < free_span_fraction <= 1.0:
+            raise ValueError("free_span_fraction must lie in (0, 1].")
         if area is not None and reference_area is None:
             raise ValueError("Supplying area also requires reference_area.")
         if aspect_ratio is not None and reference_aspect_ratio is None:
@@ -555,7 +557,7 @@ class GeometryModel:
                 coefficient_builder=build,
                 free_region_factory=(
                     lambda component: _free_region(
-                        component, {"y": (None, root_half_width, "abs")}
+                        component, {"y": (None, free_span_fraction, "abs")}
                     )
                 ),
                 projection_name=projection_name,
@@ -583,7 +585,9 @@ class GeometryModel:
         diameter_scale
             Cross-section scale target; ``1.0`` leaves the body unchanged.
         free_axial_fraction
-            Lower and upper longitudinal extent fractions of the free region.
+            Lower and upper longitudinal extent fractions of the graph-free
+            middle region. Nose and tail vertices outside that interval are
+            updated by fixed-parametric reevaluation.
         projection_name
             Diagnostic projection name; defaults to ``name``.
 

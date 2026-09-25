@@ -28,9 +28,13 @@ are still reviewed against the implementation.
 - `mm.PolygonRegularization`
 - `mm.QualityChecks`
 - `mm.SurfaceMotion`
+- `mm.SurfaceProjectionStatus`
+- `mm.SurfaceVertexClassification`
 - `mm.Visualization`
 - `mm.VolumeMotion`
 - `mm.run`
+- `mm.run_fd_sweep`
+- `mm.select_fd_objective`
 <!-- END BSM3 PUBLIC EXPORTS -->
 
 ## `run`
@@ -67,8 +71,8 @@ depend on must belong to the recorder passed to `run`.
 | Method | Purpose |
 | --- | --- |
 | `add_component(*, name, search_name, deformed_coefficients, free_region=None, projection_name=None, projection_mode="all")` | **The general entry point.** Bind externally produced deformed coefficients. See [External parameterization](external_parameterization.md). |
-| `add_lifting_surface(*, name, search_name, pivot_intersection, translation_x=0.0, rotation_y_degrees=0.0, area=None, aspect_ratio=None, reference_area=None, reference_aspect_ratio=None, ...)` | Optional convenience for a wing- or tail-like surface. |
-| `add_body(*, name, search_name, diameter_scale=1.0, free_axial_fraction=(0.05, 0.97), projection_name=None)` | Optional convenience for a fuselage-like body. |
+| `add_lifting_surface(*, name, search_name, pivot_intersection, translation_x=0.0, rotation_y_degrees=0.0, area=None, aspect_ratio=None, reference_area=None, reference_aspect_ratio=None, free_span_fraction=0.3, ...)` | Optional convenience for a wing- or tail-like surface. `free_span_fraction` selects the graph-free root region as a fraction of semispan and must lie in `(0, 1]`; farther-outboard vertices are parametrically reevaluated. |
+| `add_body(*, name, search_name, diameter_scale=1.0, free_axial_fraction=(0.05, 0.97), projection_name=None)` | Optional convenience for a fuselage-like body. The interval is the graph-free middle; nose and tail vertices outside it are parametrically reevaluated. |
 | `connect(*, name, driving_component, query_component, search_direction="u", solver_name=None)` | Name the closed intersection curve between two components. |
 | `design_variable(name, value, *, lower=None, upper=None, scaler=None)` | Register a design variable on the active recorder and return the CSDL variable. |
 | `design_variables` | Mapping of registered design-variable name to CSDL variable. |
@@ -95,7 +99,7 @@ are only needed for the optional volume chain.
 | `volume` | `VolumeMotion` — optional volume propagation |
 | `quality` | `QualityChecks` — which diagnostics run |
 | `visualization` | `Visualization` — optional plotting |
-| `derivative_check` | `DerivativeCheck` — optional finite-difference sweep |
+| `derivative_check` | `DerivativeCheck` — settings consumed by the caller through the public FD helpers |
 | `symmetry` | Treat the surface as a half model |
 | `symmetry_plane_tolerance` | Tolerance for detecting plane membership |
 | `setup_projection_resolution` | Setup-time projection sampling |
@@ -122,6 +126,21 @@ The nested types:
 - `Visualization(enabled, opacity)`
 - `DerivativeCheck(enabled, objective, step_sizes)`
 
+`mm.run` does not launch a finite-difference sweep as a side effect. When
+`derivative_check.enabled` is true, it uses `mm.select_fd_objective` to
+register the configured scalar on the active recorder. Stop the recorder after
+graph construction and then run the public sweep:
+
+```python
+result = mm.run(inputs=inputs, geometry=geometry, motion=motion, recorder=recorder)
+recorder.stop()
+if motion.derivative_check.enabled:
+    errors = mm.run_fd_sweep(recorder, motion.derivative_check.step_sizes)
+```
+
+Call `mm.select_fd_objective` directly when constructing a custom workflow
+that does not use the `MeshMotion.derivative_check` settings.
+
 ## `MeshMotionResult`
 
 Returned by `run`. Differentiable outputs plus forward diagnostics.
@@ -141,9 +160,18 @@ Returned by `run`. Differentiable outputs plus forward diagnostics.
 | `surface_fold_count` | Polygons whose area-weighted normal flipped |
 | `surface_cell_count` | Cells in the surface |
 | `surface_ngon_mode_count` | N-gon hourglass modes present |
+| `surface_vertex_classification` | Global IDs for deformation, closest-projection, parametric, graph-free, graph-prescribed, symmetry-plane, component, and exact-intersection roles |
+| `surface_projection_status` | Closest-point projection IDs and the non-converged subset |
 | `elapsed_seconds` | Wall-clock time of the solve |
 | `surface_mesh`, `volume_mesh` | Loaded mesh objects |
 | `input_files`, `geometry`, `recorder` | The inputs that produced this result |
+
+All classification and status arrays use zero-based IDs in the complete input
+surface mesh, including reconstructed mirror-side vertices. The final surface
+is composite: closest-point reprojection is used for graph-moved non-seam
+vertices, fixed-parametric reevaluation is used outside the deformation set,
+and exact bracketed component-intersection coordinates are retained without a
+second projection.
 
 The three inversion reports use the same metric, so any two may be compared
 directly. `print_summary()` reports vertex, cell, and n-gon-mode counts;

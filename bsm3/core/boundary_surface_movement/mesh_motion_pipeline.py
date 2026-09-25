@@ -26,6 +26,8 @@ from .mesh_motion_config import (
     QualityChecks,
     InputFiles,
     MeshMotion,
+    SurfaceProjectionStatus,
+    SurfaceVertexClassification,
     VolumeMotion,
 )
 
@@ -1239,25 +1241,92 @@ def _run_volume_handoff(
     )
 
 
-def _write_diagnostic_dump(
+def _global_surface_ids(
+    setup: _GeometrySetup,
+    half_mesh_ids,
+) -> np.ndarray:
+    """Expand internal half-mesh IDs into complete input-mesh IDs."""
+    ids = np.asarray(half_mesh_ids, dtype=np.int64).reshape(-1)
+    if setup.symmetry_split is None:
+        return np.unique(ids).astype(np.int64)
+    return np.where(
+        np.isin(setup.symmetry_split.gather_index, ids)
+    )[0].astype(np.int64)
+
+
+def _surface_vertex_classification(
     setup: _GeometrySetup,
     system: _SurfaceSystem,
     surface_result: _SurfaceResult,
+) -> SurfaceVertexClassification:
+    """Build the public surface classification in global mesh indexing."""
+    deformation_ids = _global_surface_ids(
+        setup, system.deformation_vertex_ids
+    )
+    closest_ids = _global_surface_ids(
+        setup,
+        surface_result.load_step_result.final_reprojected_vertex_ids,
+    )
+    return SurfaceVertexClassification(
+        deformation_vertex_ids=deformation_ids,
+        closest_projection_vertex_ids=closest_ids,
+        parametrically_prescribed_vertex_ids=np.setdiff1d(
+            np.arange(setup.initial_full_vertices.shape[0], dtype=np.int64),
+            deformation_ids,
+            assume_unique=True,
+        ),
+        graph_free_vertex_ids=_global_surface_ids(
+            setup, system.motion.free_ids
+        ),
+        graph_prescribed_vertex_ids=_global_surface_ids(
+            setup, system.motion.prescribed_ids
+        ),
+        symmetry_plane_vertex_ids=_global_surface_ids(
+            setup, setup.symmetry_plane_vertex_ids
+        ),
+        component_vertex_ids={
+            name: _global_surface_ids(setup, vertex_ids)
+            for name, vertex_ids in setup.component_ids.items()
+        },
+        intersection_vertex_ids={
+            name: _global_surface_ids(setup, data.vertex_ids)
+            for name, data in setup.intersections.items()
+        },
+    )
+
+
+def _surface_projection_status(
+    setup: _GeometrySetup,
+    surface_result: _SurfaceResult,
+) -> SurfaceProjectionStatus:
+    """Build the public final-step closest-projection convergence status."""
+    load_result = surface_result.load_step_result
+    return SurfaceProjectionStatus(
+        reprojected_vertex_ids=_global_surface_ids(
+            setup, load_result.final_reprojected_vertex_ids
+        ),
+        nonconverged_vertex_ids=_global_surface_ids(
+            setup, load_result.final_nonconverged_vertex_ids
+        ),
+    )
+
+
+def _write_diagnostic_dump(
+    setup: _GeometrySetup,
+    surface_result: _SurfaceResult,
+    classification: SurfaceVertexClassification,
     inversion_report,
     final_vertices: np.ndarray,
     dump_path: Path,
 ) -> None:
     """Write generic component/intersection diagnostics to an NPZ archive."""
-    if setup.symmetry_split is None:
-        ids_to_full = lambda ids: np.asarray(ids, dtype=np.int64)
-        parametric = setup.initial_parametric_coordinates
-    else:
-        ids_to_full = lambda ids: setup.symmetry_split.half_to_full[
-            np.asarray(ids, dtype=np.int64)
-        ]
-        parametric = setup.initial_parametric_coordinates[
+    parametric = (
+        setup.initial_parametric_coordinates
+        if setup.symmetry_split is None
+        else setup.initial_parametric_coordinates[
             setup.symmetry_split.gather_index
         ]
+    )
     payload = {
         "preprojected_vertices": np.asarray(
             surface_result.preprojected_mesh_vertices.value, dtype=float
@@ -1274,26 +1343,32 @@ def _write_diagnostic_dump(
         ),
         "inverted_element_ids": inversion_report.inverted_element_ids,
         "initial_parametric_coordinates": parametric,
-        "deformation_vertex_ids": ids_to_full(system.deformation_vertex_ids),
-        "graph_free_ids": ids_to_full(system.motion.free_ids),
-        "graph_prescribed_ids": ids_to_full(system.motion.prescribed_ids),
-        "symmetry_plane_vertex_ids": ids_to_full(
-            setup.symmetry_plane_vertex_ids
+        "deformation_vertex_ids": classification.deformation_vertex_ids,
+        "closest_projection_vertex_ids": (
+            classification.closest_projection_vertex_ids
+        ),
+        "parametrically_prescribed_vertex_ids": (
+            classification.parametrically_prescribed_vertex_ids
+        ),
+        "graph_free_ids": classification.graph_free_vertex_ids,
+        "graph_prescribed_ids": classification.graph_prescribed_vertex_ids,
+        "symmetry_plane_vertex_ids": (
+            classification.symmetry_plane_vertex_ids
         ),
     }
-    for name, vertex_ids in setup.component_ids.items():
-        payload[f"{name}_ids"] = ids_to_full(vertex_ids)
-    for name, data in setup.intersections.items():
-        payload[f"{name}_vertices"] = data.vertices
-        payload[f"{name}_ids"] = ids_to_full(data.vertex_ids)
+    for name, vertex_ids in classification.component_vertex_ids.items():
+        payload[f"{name}_ids"] = vertex_ids
+    for name, vertex_ids in classification.intersection_vertex_ids.items():
+        payload[f"{name}_vertices"] = setup.intersections[name].vertices
+        payload[f"{name}_ids"] = vertex_ids
     np.savez(dump_path, **payload)
     print(f"[diagnostics] dumped arrays to {dump_path}")
 
 
 def _evaluate_surface_diagnostics(
     setup: _GeometrySetup,
-    system: _SurfaceSystem,
     surface_result: _SurfaceResult,
+    classification: SurfaceVertexClassification,
     config: MeshMotion,
 ) -> _SurfaceDiagnostics:
     """Evaluate and report surface quality without changing pipeline values."""
@@ -1412,8 +1487,8 @@ def _evaluate_surface_diagnostics(
     if config.diagnostic_dump:
         _write_diagnostic_dump(
             setup,
-            system,
             surface_result,
+            classification,
             inversion,
             final_np,
             config.diagnostic_dump,
@@ -1498,8 +1573,12 @@ def run_mesh_motion(
     volume_outputs, volume_summary = _run_volume_handoff(
         setup, deformation, surface_result, config
     )
+    classification = _surface_vertex_classification(
+        setup, system, surface_result
+    )
+    projection_status = _surface_projection_status(setup, surface_result)
     diagnostics = _evaluate_surface_diagnostics(
-        setup, system, surface_result, config
+        setup, surface_result, classification, config
     )
     _ngon_mode_count = (
         getattr(surface_result.load_step_result, "ngon_affine_num_modes", 0)
@@ -1555,6 +1634,8 @@ def run_mesh_motion(
         preprojection_inversion_report=(
             diagnostics.preprojection_inversion_report
         ),
+        surface_vertex_classification=classification,
+        surface_projection_status=projection_status,
     )
 
 

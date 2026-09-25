@@ -12,6 +12,9 @@ import bsm3.mesh_motion as mm
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_PATH = REPOSITORY_ROOT / "examples" / "e175_surface_deformation.py"
+ADVANCED_EXAMPLE_PATH = (
+    REPOSITORY_ROOT / "examples" / "e175_quad_panel_calibration.py"
+)
 ASSET_DIRECTORY = (
     REPOSITORY_ROOT / "bsm3" / "core" / "boundary_surface_movement"
 )
@@ -22,7 +25,7 @@ TRIANGLE_SURFACE_FILE = (
     / "e175_fluent_R1_aircraft_wall_tri.msh"
 )
 QUAD_SURFACE_FILE = (
-    ASSET_DIRECTORY / "embraer_175_quad_dominant_symmetric_no_winglets.msh"
+    ASSET_DIRECTORY / "embraer_175_panel_quad_dominant_high_quality.msh"
 )
 
 requires_assets = pytest.mark.skipif(
@@ -55,7 +58,7 @@ def test_example_is_small_and_uncluttered():
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     ]
 
-    assert len(source.splitlines()) <= 220
+    assert len(source.splitlines()) <= 230
     assert len(imports) <= 5
     assert not [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
     assert [node.name for node in functions] == ["main"]
@@ -81,15 +84,70 @@ def test_example_is_small_and_uncluttered():
     assert positions == sorted(positions)
 
 
-def test_quad_path_is_a_file_swap_with_the_same_regularization():
-    """The quad mesh is selected by path alone, with one shared setting."""
+def test_basic_and_advanced_examples_have_distinct_jobs():
+    """Keep the basic triangle run separate from panel calibration."""
     source = EXAMPLE_PATH.read_text(encoding="utf-8")
-    assert "QUAD_SURFACE_MESH_FILE" in source
-    assert "PolygonRegularization(weight=0.3)" in source
-    # A single regularization setting serves both meshes: no topology label,
-    # no branch, and no second configuration block.
+    advanced = ADVANCED_EXAMPLE_PATH.read_text(encoding="utf-8")
+    assert "QUAD_SURFACE_MESH_FILE" not in source
+    assert "embraer_175_panel_quad_dominant_high_quality.msh" in advanced
+    assert "surface_vertex_classification" in advanced
+    assert "surface_projection_status" in advanced
     assert source.count("PolygonRegularization(") == 1
-    assert "if " not in source.split("def main(")[1].split("return result")[0]
+    assert "DEFAULT_DEFORMATION_SCALE = 1.0" in source
+
+
+def test_lifting_surface_free_span_fraction_is_bounded():
+    """The convenience input is an explicit semispan fraction."""
+    model = mm.GeometryModel()
+    model.add_lifting_surface(
+        name="wing",
+        search_name="wing",
+        pivot_intersection="root",
+        free_span_fraction=0.3,
+    )
+    for value in (0.0, -0.1, 1.01):
+        with pytest.raises(ValueError, match="free_span_fraction"):
+            mm.GeometryModel().add_lifting_surface(
+                name="wing",
+                search_name="wing",
+                pivot_intersection="root",
+                free_span_fraction=value,
+            )
+
+
+def test_fd_helpers_are_available_from_the_public_namespace():
+    """A configured derivative check has a documented executable workflow."""
+    assert callable(mm.select_fd_objective)
+    assert callable(mm.run_fd_sweep)
+
+
+def test_enabled_derivative_check_registers_the_configured_objective(
+    monkeypatch,
+):
+    """``mm.run`` must consume an enabled check rather than ignore it."""
+    result = type("Result", (), {"recorder": None})()
+    selected = []
+    monkeypatch.setattr(mm, "run_mesh_motion", lambda **kwargs: result)
+    monkeypatch.setattr(
+        mm,
+        "select_fd_objective",
+        lambda actual, name: selected.append((actual, name)),
+    )
+    recorder = object()
+    returned = mm.run(
+        inputs=mm.InputFiles(Path("geometry.stp"), Path("surface.msh")),
+        geometry=mm.GeometryModel(),
+        motion=mm.MeshMotion(
+            derivative_check=mm.DerivativeCheck(
+                enabled=True,
+                objective="surface_coordinates",
+            )
+        ),
+        recorder=recorder,
+    )
+    assert returned is result
+    assert result.recorder is recorder
+    assert selected == [(result, "surface_coordinates")]
 
 
 @pytest.mark.integration
@@ -101,6 +159,7 @@ def test_example_deforms_the_triangle_wall_without_folds(tmp_path):
     result = example.main(
         surface_mesh_file=TRIANGLE_SURFACE_FILE,
         cache_directory=tmp_path / "cache",
+        diagnostic_dump=tmp_path / "diagnostics.npz",
     )
 
     assert result.surface_coordinates.value.shape[0] == 16400
@@ -115,6 +174,30 @@ def test_example_deforms_the_triangle_wall_without_folds(tmp_path):
     # The triangle wall carries no affine hourglass mode, so a positive
     # polygon-regularization weight is simply inapplicable here.
     assert result.surface_ngon_mode_count == 0
+    classification = result.surface_vertex_classification
+    status = result.surface_projection_status
+    assert classification.graph_free_vertex_ids.size > 0
+    assert classification.parametrically_prescribed_vertex_ids.size > 0
+    assert classification.intersection_vertex_ids["wing_root"].size > 0
+    assert not np.intersect1d(
+        status.reprojected_vertex_ids,
+        np.concatenate(tuple(classification.intersection_vertex_ids.values())),
+    ).size
+    assert status.num_nonconverged <= status.num_reprojected
+    with np.load(tmp_path / "diagnostics.npz") as dump:
+        np.testing.assert_array_equal(
+            dump["deformation_vertex_ids"],
+            classification.deformation_vertex_ids,
+        )
+        np.testing.assert_array_equal(
+            dump["graph_free_ids"], classification.graph_free_vertex_ids
+        )
+        np.testing.assert_array_equal(
+            dump["graph_prescribed_ids"],
+            classification.graph_prescribed_vertex_ids,
+        )
+        for name, vertex_ids in classification.intersection_vertex_ids.items():
+            np.testing.assert_array_equal(dump[f"{name}_ids"], vertex_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -344,11 +427,12 @@ def test_validate_does_not_require_a_model_owned_design_variable():
 @pytest.mark.timeout(900)
 @requires_assets
 def test_quad_panel_introduces_no_new_inverted_elements(tmp_path):
-    """The quad asset's pre-existing inversions must not grow."""
+    """The replacement quad asset starts and remains inversion-free."""
     example = _load_example()
     result = example.main(
         surface_mesh_file=QUAD_SURFACE_FILE,
         cache_directory=tmp_path / "quad-cache",
+        polygon_regularization_weight=0.3,
     )
 
     initial = set(
@@ -370,13 +454,13 @@ def test_quad_panel_introduces_no_new_inverted_elements(tmp_path):
         mesh=result.surface_mesh,
         vertices=np.asarray(result.initial_surface_coordinates, dtype=float),
     )
-    assert len(initial) == 114
-    assert initial_quality.inverted_corners == 114
+    assert len(initial) == 0
+    assert initial_quality.inverted_corners == 0
     assert initial_quality.degenerate_elements == 0
     # Compare ID sets, not only counts: the deformation must introduce no
     # inverted element that the input did not already have.
-    assert not preprojection - initial
-    assert not final - initial
+    assert not preprojection
+    assert not final
     assert result.surface_fold_count == 0
     # Real quad cells activate the affine model.
     assert result.surface_ngon_mode_count > 0
@@ -656,6 +740,7 @@ def test_triangle_wall_at_full_deformation_scale(tmp_path):
         surface_mesh_file=TRIANGLE_SURFACE_FILE,
         cache_directory=tmp_path / "full-scale-cache",
         deformation_scale=1.0,
+        diagnostic_dump=tmp_path / "full-scale-diagnostics.npz",
     )
 
     initial = np.asarray(result.initial_surface_coordinates, dtype=float)
@@ -676,6 +761,22 @@ def test_triangle_wall_at_full_deformation_scale(tmp_path):
     assert not preprojection_ids - initial_ids
     assert not final_ids - initial_ids
     assert result.surface_fold_count == 0
+    classification = result.surface_vertex_classification
+    status = result.surface_projection_status
+    exact_ids = np.concatenate(
+        tuple(classification.intersection_vertex_ids.values())
+    )
+    assert not np.intersect1d(status.reprojected_vertex_ids, exact_ids).size
+    assert status.num_nonconverged == 0
+    with np.load(tmp_path / "full-scale-diagnostics.npz") as dump:
+        np.testing.assert_array_equal(
+            dump["deformation_vertex_ids"],
+            classification.deformation_vertex_ids,
+        )
+        np.testing.assert_array_equal(
+            dump["closest_projection_vertex_ids"],
+            classification.closest_projection_vertex_ids,
+        )
 
     # Guard against the case silently collapsing to a near-null deformation.
     max_displacement = float(np.max(np.linalg.norm(final - initial, axis=1)))

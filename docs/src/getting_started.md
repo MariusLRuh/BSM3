@@ -90,7 +90,7 @@ These are tracked and are enough to run the E175 example:
 
 - `bsm3/core/boundary_surface_movement/embraer_175_no_winglets.stp`
 - `.../fluent_R1_tet_euler_volume_mesh/e175_fluent_R1_aircraft_wall_tri.msh`
-- `.../embraer_175_quad_dominant_symmetric_no_winglets.msh`
+- `.../embraer_175_panel_quad_dominant_high_quality.msh`
 - `.../wall_surface.npz`
 
 Larger volume meshes, refinement-4 walls, and any private CFD case are **not**

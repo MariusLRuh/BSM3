@@ -1,7 +1,8 @@
 # E175 example
 
-The tracked example `examples/e175_surface_deformation.py` deforms an E175
-CFD surface mesh and reports its quality. Run it directly:
+The basic `examples/e175_surface_deformation.py` deforms the tracked triangular
+E175 CFD wall at the full example design point and reports its quality. Run it
+directly:
 
 ```bash
 python examples/e175_surface_deformation.py
@@ -33,12 +34,9 @@ inputs = mm.InputFiles(
 )
 ```
 
-The example defaults to the tracked triangle wall. To deform the
-quad-dominant panel mesh instead, point `surface_mesh_file` at
-`embraer_175_quad_dominant_symmetric_no_winglets.msh`. **Nothing else
-changes** — it is a path substitution. The same positive
-`PolygonRegularization` weight applies to whichever cells the mesh has, and a
-triangle-only surface simply has no polygon modes for it to constrain.
+The basic example deliberately stays on the triangle wall. Panel-mesh
+regularization is a separate calibration problem covered by the advanced
+example below.
 
 ## 2. Declare the geometry motion
 
@@ -120,7 +118,6 @@ identical either way.
                 length_scale=10.0,
                 decay="exp",
             ),
-            polygon_regularization=mm.PolygonRegularization(weight=0.3),
         ),
         quality=mm.QualityChecks(surface=True),
         symmetry=True,
@@ -157,11 +154,34 @@ variable, with `initial_surface_coordinates` and
 `preprojected_surface_coordinates` alongside it for comparison, plus the
 inversion and quality reports. See the [API reference](api.md).
 
+Set `visualize=True` when calling `main(...)` to open an interactive view of
+the final deformed mesh. Set `check_derivatives=True` to register the surface
+coordinate objective and run the public finite-difference convergence sweep.
+
 ## Deformation scale
 
 The example interpolates the whole design point with a single
 `deformation_scale`, so one number moves every target coherently. Its default
-is small and deliberate: it is the largest coherent scale measured to leave the
-sliver-sensitive quad-dominant panel with no newly inverted element. Raising it
-is reasonable on the triangle wall and should be checked against the inversion
-report on the quad panel.
+is `1.0`, the complete documented design point. The tracked triangle-wall
+integration test exercises that scale without folds or inversions.
+
+## Advanced quad-panel calibration
+
+`examples/e175_quad_panel_calibration.py` runs the same geometry motion on the
+clean curated `embraer_175_panel_quad_dominant_high_quality.msh` panel. It
+keeps `polygon_regularization_weight` explicit because the best weight depends
+on mesh topology and deformation; `0.3` remains a historical placeholder while
+the calibration sweep is reviewed, not a universal recommendation.
+
+The advanced example prints the new public classifications:
+
+- graph-free and graph-prescribed IDs;
+- parametrically prescribed IDs, which are reevaluated at fixed surface
+  coordinates;
+- exact intersection IDs from the bracketed component-intersection solve;
+- the IDs actually sent through closest-point projection; and
+- the non-converged closest-point subset.
+
+Every array uses the complete input mesh's zero-based index space. This also
+makes custom visualization direct: use `result.surface_coordinates.value` for
+the final coordinates and color rows selected by the classification arrays.

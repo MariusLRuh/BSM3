@@ -21,7 +21,10 @@ R1_WALL_MAP_FILE = (
     R1_DIRECTORY / "e175_fluent_R1_aircraft_wall_tri.volume_map.npz"
 )
 QUAD_PANEL_FILE = (
-    ASSET_DIRECTORY / "embraer_175_quad_dominant_symmetric_no_winglets.msh"
+    ASSET_DIRECTORY / "embraer_175_panel_quad_dominant_high_quality.msh"
+)
+QUAD_PANEL_SHA256 = (
+    "92feeeda05905a13d23a18c863e76b9596773beccb021148cc2d4e7016cd733c"
 )
 MIXED_NGON_FILE = ASSET_DIRECTORY / "wall_surface.npz"
 
@@ -153,8 +156,12 @@ def test_curated_e175_surface_assets_load_with_expected_topology():
     assert triangle_wall.cell_blocks["triangle"].shape == (32522, 3)
 
     quad_panel = import_mesh(QUAD_PANEL_FILE)
-    assert quad_panel.vertices.shape == (14411, 3)
-    assert quad_panel.cell_blocks["quad"].shape == (13696, 4)
+    assert hashlib.sha256(QUAD_PANEL_FILE.read_bytes()).hexdigest() == (
+        QUAD_PANEL_SHA256
+    )
+    assert quad_panel.vertices.shape == (13262, 3)
+    assert quad_panel.cell_blocks["triangle"].shape == (2804, 3)
+    assert quad_panel.cell_blocks["quad"].shape == (11858, 4)
 
     mixed_ngon = import_mesh(MIXED_NGON_FILE)
     assert mixed_ngon.vertices.shape == (79207, 3)

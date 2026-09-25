@@ -7,11 +7,11 @@ The script walks the five stages the pipeline performs, in order:
 2. **Define design variables and component motion.** Each design variable is a
    differentiable control. Components declare how they respond, and
    ``connect`` names the closed intersection curves between them.
-3. **Choose mesh-motion and quality settings.** Load stepping, seam-distance
-   weighting, and polygon regularization for the graph-Laplacian solve.
+3. **Choose mesh-motion and quality settings.** Load stepping and seam-distance
+   weighting for the graph-Laplacian solve.
 4. **Run the differentiable mesh-motion model.** Intersections are recomputed,
-   the interior is propagated, and every moved node is reprojected onto the
-   deformed outer mould line.
+   the interior is propagated, graph-moved nodes are reprojected onto the
+   deformed outer mould line, and exact intersections are retained.
 5. **Inspect the result.** Fold, inversion, and quality diagnostics come back
    on the result object.
 
@@ -27,10 +27,8 @@ Run it directly::
 
     python examples/e175_surface_deformation.py
 
-To deform the quad-dominant panel mesh instead, point ``SURFACE_MESH_FILE`` at
-``QUAD_SURFACE_MESH_FILE``. Nothing else changes: the same positive
-``PolygonRegularization`` weight applies to whichever cells the mesh has, and a
-triangle-only surface simply has no polygon modes for it to constrain.
+The advanced ``e175_quad_panel_calibration.py`` example uses the curated
+quad-dominant panel and reports vertex classifications and projection status.
 """
 
 from pathlib import Path
@@ -52,9 +50,6 @@ SURFACE_MESH_FILE = (
     / "fluent_R1_tet_euler_volume_mesh"
     / "e175_fluent_R1_aircraft_wall_tri.msh"
 )
-QUAD_SURFACE_MESH_FILE = (
-    ASSETS / "embraer_175_quad_dominant_symmetric_no_winglets.msh"
-)
 CACHE_DIRECTORY = Path(tempfile.gettempdir()) / "bsm3_e175_example_cache"
 
 # Full-size deformation targets, and the neutral value each one moves from.
@@ -67,10 +62,8 @@ FULL_DEFORMATION = {
     "tail_incidence": (0.0, 1.2),
     "fuselage_width": (1.0, 1.02),
 }
-# Largest coherent scale that leaves the sliver-sensitive quad-dominant panel
-# with no new inverted element. Measured in Turn 36: 0.1 and 0.05 both flip
-# elements 8075 and 14923; 0.02 does not.
-DEFAULT_DEFORMATION_SCALE = 0.02
+# The tracked triangle wall is covered end to end at this full design point.
+DEFAULT_DEFORMATION_SCALE = 1.0
 
 
 def main(
@@ -79,6 +72,10 @@ def main(
     surface_mesh_file: Path = SURFACE_MESH_FILE,
     cache_directory: Path = CACHE_DIRECTORY,
     deformation_scale: float = DEFAULT_DEFORMATION_SCALE,
+    polygon_regularization_weight: float = 0.0,
+    check_derivatives: bool = False,
+    visualize: bool = False,
+    diagnostic_dump: Path | None = None,
 ) -> mm.MeshMotionResult:
     """Deform the E175 surface mesh and report its quality.
 
@@ -94,6 +91,16 @@ def main(
         One control for the whole design point. ``0.0`` leaves the geometry
         neutral and ``1.0`` applies the full targets in
         :data:`FULL_DEFORMATION`.
+    polygon_regularization_weight
+        N-gon affine-residual weight. It is inactive on the default
+        triangle-only wall and intended for panel-mesh calibration.
+    check_derivatives
+        Run the configured finite-difference convergence sweep after building
+        the analytic derivative graph.
+    visualize
+        Open an interactive view of the final deformed mesh.
+    diagnostic_dump
+        Optional NPZ path for vertex classifications and mesh diagnostics.
 
     Returns
     -------
@@ -180,13 +187,15 @@ def main(
                     length_scale=10.0,
                     decay="exp",
                 ),
-                # Applies to whichever cells the mesh has. Triangles carry no
-                # affine hourglass mode, so this is inactive on the tri wall
-                # and active on the quad-dominant panel.
-                polygon_regularization=mm.PolygonRegularization(weight=0.3),
+                polygon_regularization=mm.PolygonRegularization(
+                    weight=polygon_regularization_weight
+                ),
             ),
             quality=mm.QualityChecks(surface=True),
+            visualization=mm.Visualization(enabled=visualize),
+            derivative_check=mm.DerivativeCheck(enabled=check_derivatives),
             symmetry=True,
+            diagnostic_dump=diagnostic_dump,
         )
 
         # 4. Run the differentiable mesh-motion model
@@ -201,6 +210,8 @@ def main(
 
     # 5. Inspect the result
     result.print_summary()
+    if motion.derivative_check.enabled:
+        mm.run_fd_sweep(recorder, motion.derivative_check.step_sizes)
     return result
 
 

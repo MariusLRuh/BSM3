@@ -70,6 +70,8 @@ from .mesh_motion_config import (
     PolygonRegularization,
     QualityChecks,
     SurfaceMotion,
+    SurfaceProjectionStatus,
+    SurfaceVertexClassification,
     Visualization,
     VolumeMotion,
 )
@@ -224,6 +226,8 @@ __all__ = [
     "SPDSolveVJP",
     "StiffnessAssembler",
     "SurfaceMotion",
+    "SurfaceProjectionStatus",
+    "SurfaceVertexClassification",
     "TetraVolumeMesh",
     "VertexBatch",
     "VolumeBoundaryPartition",

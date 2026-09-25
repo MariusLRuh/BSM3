@@ -40,11 +40,16 @@ class VertexBatch:
         Global mesh indices aligned with ``values``.
     num_mesh_vertices
         Total number of vertices in the complete mesh.
+    converged
+        Optional Boolean convergence flags aligned with ``values``. This is
+        populated for closest-point projection batches and absent for exact
+        parametric reevaluation batches.
     """
 
     values: csdl.Variable
     vertex_ids: np.ndarray
     num_mesh_vertices: int
+    converged: np.ndarray | None = None
 
 
 def project_onto_oml(
@@ -122,6 +127,7 @@ def project_onto_oml(
     local_row_by_id = {int(vertex_id): row for row, vertex_id in enumerate(ids)}
     projected = deformed_mesh_vertices * 1.0
     assigned = np.zeros(ids.size, dtype=bool)
+    converged = np.zeros(ids.size, dtype=bool)
 
     for metadata in metadata_list:
         component = metadata.component
@@ -156,7 +162,7 @@ def project_onto_oml(
                 if len(group_patch_ids) == len(component_patch_ids(component))
                 else _coefficient_subset(component, coefficients, group_patch_ids)
             )
-            projected_points = _project_group(
+            projected_points, group_converged = _project_group(
                 component,
                 group_coefficients,
                 source_points,
@@ -167,6 +173,7 @@ def project_onto_oml(
                 _row_slice(local_rows),
                 projected_points,
             )
+            converged[local_rows] = group_converged
         else:
             parent_by_id = {
                 int(vertex_id): int(patch_id)
@@ -202,7 +209,7 @@ def project_onto_oml(
                     (int(patch_id),),
                 )
                 if fixed_coordinates is None:
-                    projected_points = _project_group(
+                    projected_points, group_converged = _project_group(
                         component,
                         patch_coefficients,
                         patch_points,
@@ -210,7 +217,7 @@ def project_onto_oml(
                         projection_options=projection_options,
                     )
                 else:
-                    projected_coordinates = _project_group(
+                    projected_coordinates, group_converged = _project_group(
                         component,
                         patch_coefficients,
                         patch_points,
@@ -233,6 +240,7 @@ def project_onto_oml(
                     _row_slice(output_rows),
                     projected_points,
                 )
+                converged[output_rows] = group_converged
         assigned[local_rows] = True
 
     if np.any(~assigned):
@@ -245,6 +253,7 @@ def project_onto_oml(
         values=projected,
         vertex_ids=ids,
         num_mesh_vertices=int(np.max(ids) + 1) if ids.size else 0,
+        converged=converged,
     )
 
 
@@ -362,10 +371,21 @@ def _project_group(
         patch_indices=patch_ids,
         **options,
     )
-    return FunctionSetProjectionOperation(
+    operation = FunctionSetProjectionOperation(
         model,
         return_parametric=return_parametric,
-    ).evaluate(coefficients, points)
+    )
+    output = operation.evaluate(coefficients, points)
+    try:
+        converged = np.asarray(
+            operation.shared_state["forward"]["converged"], dtype=bool
+        ).reshape(-1)
+    except KeyError as error:
+        raise RuntimeError(
+            "Projection convergence is unavailable. Use an inline CSDL "
+            "recorder when building the mesh-motion pipeline."
+        ) from error
+    return output, converged
 
 
 def _coefficient_subset(component, coefficients, selected_patch_ids):

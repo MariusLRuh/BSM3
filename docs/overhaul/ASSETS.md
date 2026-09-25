@@ -8,10 +8,15 @@ the repository root. No volume mesh is required for M1.
 | STEP geometry | `bsm3/core/boundary_surface_movement/embraer_175_no_winglets.stp` | 0.9 MB |
 | Triangle CFD wall | `bsm3/core/boundary_surface_movement/fluent_R1_tet_euler_volume_mesh/e175_fluent_R1_aircraft_wall_tri.msh` | 1.9 MB |
 | R1 wall-to-volume metadata | `bsm3/core/boundary_surface_movement/fluent_R1_tet_euler_volume_mesh/e175_fluent_R1_aircraft_wall_tri.volume_map.npz` | 1.3 MB |
-| Quad-dominant panel mesh | `bsm3/core/boundary_surface_movement/embraer_175_quad_dominant_symmetric_no_winglets.msh` | 1.1 MB |
+| Quad-dominant panel mesh | `bsm3/core/boundary_surface_movement/embraer_175_panel_quad_dominant_high_quality.msh` | 1.3 MB |
 | Mixed N-gon CFD wall | `bsm3/core/boundary_surface_movement/wall_surface.npz` | 2.2 MB |
 
-Total size is approximately 7.4 MB. The mixed N-gon asset contains polygon5
+Total size is approximately 7.6 MB. The panel asset replaces the former
+quad-dominant example mesh, whose baseline contained 114 inverted elements.
+The replacement contains 13,262 vertices, 2,804 triangles, and 11,858 quads;
+its curated SHA-256 is
+`92feeeda05905a13d23a18c863e76b9596773beccb021148cc2d4e7016cd733c`.
+The mixed N-gon asset contains polygon5
 through polygon9 cells, including 28,190 six-sided cells. The similarly named
 `embraer_175_hexagonal_symmetric_no_winglets.msh` is not an N-gon surface mesh;
 it contains triangles and quads and is therefore not part of this set.

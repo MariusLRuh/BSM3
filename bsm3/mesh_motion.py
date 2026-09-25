@@ -39,9 +39,13 @@ from .core.boundary_surface_movement import (
     PolygonRegularization,
     QualityChecks,
     SurfaceMotion,
+    SurfaceProjectionStatus,
+    SurfaceVertexClassification,
     Visualization,
     VolumeMotion,
+    run_fd_sweep,
     run_mesh_motion,
+    select_fd_objective,
 )
 
 __all__ = [
@@ -55,9 +59,13 @@ __all__ = [
     "PolygonRegularization",
     "QualityChecks",
     "SurfaceMotion",
+    "SurfaceProjectionStatus",
+    "SurfaceVertexClassification",
     "Visualization",
     "VolumeMotion",
     "run",
+    "run_fd_sweep",
+    "select_fd_objective",
 ]
 
 
@@ -83,6 +91,9 @@ def run(
         depend on must belong to ``recorder``.
     motion
         Surface, volume, quality, visualization, and derivative-check settings.
+        When its derivative check is enabled, this function registers the
+        configured scalar objective; call :func:`run_fd_sweep` after stopping
+        the recorder to execute the numerical comparison.
     recorder
         Active CSDL recorder, owned by the caller. This call never starts or
         stops it, so mesh motion composes inside a larger graph such as the
@@ -107,4 +118,6 @@ def run(
         aerodynamic_volume_method=aerodynamic_volume_method,
     )
     result.recorder = recorder
+    if motion.derivative_check.enabled:
+        select_fd_objective(result, motion.derivative_check.objective)
     return result

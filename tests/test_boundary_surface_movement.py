@@ -969,7 +969,16 @@ def test_fixed_graph_load_steps_project_each_increment_and_differentiate(
     recorder.stop()
 
     final = np.asarray(result.final_mesh_vertices.value)
+    np.testing.assert_array_equal(
+        result.final_reprojected_vertex_ids,
+        np.sort(free_ids),
+    )
+    assert not np.intersect1d(
+        result.final_reprojected_vertex_ids, seam_ids
+    ).size
+    assert result.final_nonconverged_vertex_ids.size == 0
     # The exact seam follows dz; the two adjacent free rows follow dz/2.
+    np.testing.assert_allclose(final[seam_ids, 0], 0.0, atol=1e-10)
     np.testing.assert_allclose(final[seam_ids, 2], 0.2, atol=1e-8)
     free_z_displacement = final[free_ids, 2] - vertices[free_ids, 2]
     if quad_bracing_mode == "single_diagonal" and quad_diagonal_weight > 0.0:
