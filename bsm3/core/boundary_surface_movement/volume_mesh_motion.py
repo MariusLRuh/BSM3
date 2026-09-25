@@ -579,8 +579,12 @@ class VolumeQualityReport:
         current cell's shape, computed from the deformed cell's own edges and
         volume: a regular tetrahedron scores one and a degenerate cell zero. It
         does not compare against the baseline shape, so a baseline cell that is
-        already sliver-like scores low even when undeformed. The sign follows
-        the deformed determinant, so an inverted cell scores negative.
+        already sliver-like scores low even when undeformed. Its sign follows
+        the **raw** deformed determinant, whereas inversion elsewhere in this
+        report is the deformed-to-baseline determinant ratio. The two agree only
+        under a positive-baseline-orientation convention: given a
+        negative-oriented baseline cell, an unchanged cell has a positive
+        relative Jacobian yet a negative mean ratio.
     mean_ratio_p001, mean_ratio_p01
         The 0.1st- and 1st-percentile values of that metric.
     """

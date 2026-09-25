@@ -12,8 +12,9 @@ usable. Do not assume ``bsm3.FunctionSetProjectionModel`` and its siblings
 exist; guard access with :func:`hasattr`, or import from the module that
 defines the name, if your code requires them.
 
-Note that :mod:`bsm3.core.projections` is a namespace package that re-exports
-nothing, so importing these names *from* it does not work. The defining modules
+Note that :mod:`bsm3.core.projections` is a regular subpackage whose
+``__init__`` re-exports nothing, so importing these names *from* it does not
+work. The defining modules
 are :mod:`bsm3.core.projections.function_set_closest_distance_custom_op` for
 ``FunctionSetClosestDistanceOperation`` and ``FunctionSetProjectionModel``,
 :mod:`bsm3.core.projections.function_set_evaluation_custom_op` for

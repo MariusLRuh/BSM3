@@ -408,9 +408,13 @@ class E175DAFoamResult:
     ----------
     mesh_motion
         Full mesh-motion result, including surface and volume coordinates and
-        the quality diagnostics. In the rank-0 execution path this is ``None``
-        on non-root ranks, which hold no geometry backend, even though the
-        annotation is not currently optional.
+        the quality diagnostics. In the rank-0 execution path it is a snapshot
+        of the backend's ``last_mesh_motion_result`` taken while this object is
+        built, so it is ``None`` on every non-root rank, which holds no
+        backend, and can **also** be ``None`` on the root rank when the custom
+        operation has not executed inline before that snapshot. Being on root
+        is therefore not a guarantee that it is populated. The annotation is
+        not currently optional; see the M1.7 carry-in.
     flow_outputs
         Every aerodynamic function DAFoam produced, keyed by function name.
     cl
@@ -731,10 +735,12 @@ def build_cfd_analysis_rank0(
     -------
     E175DAFoamResult
         Every aerodynamic output together with the ``CL`` and ``CD`` variables.
-        Its ``mesh_motion`` field is populated from the rank-0 geometry backend
-        and is therefore ``None`` on every non-root rank, which builds no
-        backend. The field's annotation does not yet express that; see the
-        carry-in recorded for M1.7.
+        Its ``mesh_motion`` field is a snapshot of the rank-0 backend's
+        ``last_mesh_motion_result`` taken as the result is constructed, so it is
+        ``None`` on every non-root rank, which builds no backend, and may still
+        be ``None`` on the root rank if the custom operation has not executed
+        inline by then. The field's annotation does not yet express either
+        case; see the carry-in recorded for M1.7.
 
     Raises
     ------

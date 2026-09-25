@@ -141,10 +141,11 @@ class DisplacementInterpolationParameters:
         path is used only when every entry supplies ``distances``.
     seam_neighbor_blend_radius
         Blend radius around each seam, as one value for all intersections or
-        one per intersection.
+        one per intersection. Every value must be non-negative.
     seam_neighbor_component_blend
         Component-motion weight within that radius, as one value for all
-        intersections or one per intersection.
+        intersections or one per intersection. Every value must lie in
+        ``[0, 1]``.
     seam_neighbor_support_cutoff
         Support weight below which a seam neighbor is dropped. Must lie in
         ``[0, 1]``.
@@ -178,9 +179,11 @@ class DisplacementInterpolationParameters:
         At construction, if ``intersection_params`` is empty; ``rbf_kernel``,
         ``fit_mode``, or ``interpolation_vertex_selection_method`` is
         unrecognized; ``num_interpolation_vertices`` or
-        ``smoothing_iterations`` is negative; ``seam_neighbor_blend_radius`` or
-        ``seam_neighbor_component_blend`` cannot be resolved against the number
-        of intersections; ``seam_neighbor_support_cutoff`` or
+        ``smoothing_iterations`` is negative; ``seam_neighbor_blend_radius`` is
+        neither scalar nor one value per intersection, or any of its values is
+        negative; ``seam_neighbor_component_blend`` is neither scalar nor one
+        value per intersection, or any of its values falls outside ``[0, 1]``;
+        ``seam_neighbor_support_cutoff`` or
         ``smoothing_relaxation`` falls outside ``[0, 1]``; ``sigma_phi`` is not
         positive; ``seam_support_sigma`` is supplied and not positive;
         ``seam_support_sigma_factor`` or ``setup_weight_alpha`` is negative; or
@@ -228,8 +231,10 @@ class DisplacementInterpolationParameters:
             If ``intersection_params`` is empty; ``rbf_kernel``, ``fit_mode``,
             or ``interpolation_vertex_selection_method`` is unrecognized;
             ``num_interpolation_vertices`` or ``smoothing_iterations`` is
-            negative; the per-intersection seam radii or component blends
-            cannot be resolved against the number of intersections;
+            negative; ``seam_neighbor_blend_radius`` is neither scalar nor one
+            value per intersection or holds a negative value;
+            ``seam_neighbor_component_blend`` is neither scalar nor one value
+            per intersection or holds a value outside ``[0, 1]``;
             ``seam_neighbor_support_cutoff`` or ``smoothing_relaxation`` falls
             outside ``[0, 1]``; ``sigma_phi`` is not positive;
             ``seam_support_sigma`` is supplied and not positive;

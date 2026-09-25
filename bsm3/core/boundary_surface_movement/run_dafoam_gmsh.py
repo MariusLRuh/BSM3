@@ -624,6 +624,9 @@ def set_openfoam_patch_types(boundary_file: Path, patch_types: dict[str, str]) -
     KeyError
         Propagated from :func:`find_patch_block` if a named patch has no block
         in the file.
+    ValueError
+        If a named patch's block exists but contains no ``type`` entry to
+        rewrite.
     """
     lines = boundary_file.read_text(encoding="utf-8").splitlines(keepends=True)
     type_pattern = re.compile(r"^(\s*)type\s+[^;]+;")
@@ -712,8 +715,9 @@ def convert_and_check_mesh(
         If ``gmshToFoam`` or ``checkMesh`` is not on ``PATH``, or the Gmsh
         conversion did not produce a 2.2 ASCII mesh.
     FileExistsError
-        If an existing ``polyMesh`` must be moved aside but its timestamped
-        backup path is already taken.
+        Either when a ``polyMesh`` already exists and ``overwrite_existing`` is
+        ``False``, or when overwriting is permitted but the timestamped backup
+        destination is already taken.
     FileNotFoundError
         If ``gmshToFoam`` completed without creating the boundary file.
     KeyError
@@ -1138,9 +1142,16 @@ def run_dafoam(
 def make_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for this driver.
 
-    Option defaults are taken from a default-constructed :class:`FlowConfig`,
-    so the two stay consistent. This is the CLI surface of a standalone driver
-    script; it is unrelated to the no-CLI user example.
+    The numerical flow and solver options take their defaults from a
+    default-constructed :class:`FlowConfig`. The case, path, and patch-name
+    options do **not**: they carry their own parser defaults, independent of the
+    dataclass. The wall-function flag is a further exception, since
+    ``--no-wall-functions`` inverts it and leaves the parser's effective default
+    disagreeing with the dataclass default. So the two are consistent only for
+    the numerical options, not across the whole surface.
+
+    This is the CLI surface of a standalone driver script; it is unrelated to
+    the no-CLI user example.
 
     Returns
     -------
