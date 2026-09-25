@@ -1,124 +1,213 @@
-# Claude Turn 70 — Plan GAMMA identity and the first Read the Docs alpha
+# Codex Turn 71 — M5.1 and M6.1: GAMMA public identity, HTML-only docs alpha
 
-M4.1 is accepted. Do **not** begin M4.2 yet. The user has promoted the GAMMA
-identity decision and an initial versioned Read the Docs release ahead of the
-VortexAD/fuel-burn implementation.
+Claude ruled the identity in Turn 70. Codex implements; Claude reviews. Do not
+self-accept.
 
-Turn 68's complete M4.2 prompt is preserved verbatim at:
-
-```bash
-git show 38cd0bf:docs/overhaul/CODEX_NEXT.md
+```text
+TURN71_BASE = 09cd954
 ```
 
-Do not rewrite or weaken that prompt. Queue it after the identity and docs
-publication milestones.
+Preserve the user's dirty tree exactly: **8 modified tracked files
+byte-for-byte and 393 untracked entries.** Do not adopt, delete, format, stage,
+or move any of them.
 
-## Scope of this turn
-
-This is a **planning and ruling turn only**. Inspect the repository and external
-name availability, update `PLAN.md` and `LOG.md`, and replace this file with one
-literal Codex implementation prompt. Do not rename files, imports, the GitHub
-repository, or the Read the Docs project. Do not create a tag, reserve a name,
-push, publish, install dependencies, or alter user-owned dirty files.
-
-## Proposed public identity
+## The rulings you are implementing
 
 ```text
 Display name:        GAMMA
 Expansion:           Geometry Adaptation for Multidisciplinary Modeling and Analysis
 Repository slug:     GAMMA-MDO
 Python distribution: gamma-mdo
-Python import:       gamma_mdo
+Python import:       bsm3          <-- UNCHANGED, deliberately
 Read the Docs slug:  gamma-mdo
-Candidate first tag: v0.1.0a1
+Version:             0.2.0a1       <-- not 0.1.0a1
 ```
 
-The display name and expansion are the leading proposal, not permission to
-assume every technical identifier. Bare `gamma` is already occupied on PyPI
-and is overloaded in this domain. Verify availability of every proposed
-qualified identifier from authoritative sources and distinguish "not found"
-from "reserved successfully"; this turn authorizes no reservation.
+**The import namespace does not change and `bsm3/` does not move.** 304 of the
+393 untracked entries and 6 of the 8 modified tracked files live under
+`bsm3/`; 57 untracked user scripts and 5 modified tracked files import `bsm3`,
+and no agent may edit them. A distribution name differing from its import name
+is ordinary (`scikit-learn`/`sklearn`, `pillow`/`PIL`). Do not add an alias
+module, a shim, a deprecation path, or a `gamma_mdo` package. If you find
+yourself renaming a directory, you have misread this turn.
 
-## Required rulings
+Version is `0.2.0a1`, not `0.1.0a1`: `bsm3` was never published to PyPI and no
+tag exists locally or on `origin`, but source installs already report `0.1.4`,
+so the prerelease must move forward rather than appear to downgrade.
 
-### 1. Rename boundary
+## Literal implementation allowlist — exactly these paths
 
-Rule separately on:
+```text
+setup.py
+bsm3/__init__.py
+docs/conf.py
+.readthedocs.yaml
+README.md
+docs/README.md
+docs/index.md
+docs/src/api.md
+docs/src/background.md
+docs/src/examples.md
+docs/src/external_parameterization.md
+docs/src/getting_started.md
+docs/src/integrations.md
+requirements.txt
+requirements-ci.txt
+MANIFEST.in
+HPC_DAFOAM_INSTALL.md
+.github/workflows/actions.yml
+.gitignore
+```
 
-- human-facing project/docs name;
-- GitHub repository slug;
-- Python distribution name in packaging metadata;
-- Python import namespace and tracked `bsm3/` directory;
-- Read the Docs project slug.
+Documentation commit, separately:
 
-The key question is whether the first alpha should already use
-`import gamma_mdo`, or whether GAMMA should deliberately retain `import bsm3`
-as a stable implementation namespace (as distributions such as scikit-learn
-use a different import name). Do not hide this choice inside mechanical rename
-work. Recommend one, enumerate migration consequences, and make the eventual
-Codex prompt reflect the ruling. The user previously accepted a clean break;
-do not add a compatibility shim unless you establish a concrete need and ask
-for approval.
+```text
+docs/overhaul/PLAN.md
+docs/overhaul/LOG.md
+docs/overhaul/CODEX_NEXT.md
+```
 
-### 2. Version policy
+### Explicitly prohibited paths
 
-The source currently says `0.1.4`, setup metadata derives from it, and the local
-repository has no tags. Determine whether `0.1.4` has ever been publicly
-released or published. Use `v0.1.0a1` only if moving to it does not create a
-public version regression; otherwise choose a forward-moving PEP 440
-prerelease. Keep source, built metadata, Sphinx `version`/`release`, Git tag,
-and RTD version label coherent.
+```text
+bsm3/**            except bsm3/__init__.py (version line only)
+tests/**
+examples/**
+docs/overhaul/**   except the three handoff documents above
+```
 
-### 3. Dirty-tree-safe implementation
+`bsm3/__init__.py` is on the allowlist **only** for the `__version__` string.
+Do not touch its `__all__`, imports, or docstring. Stop and report rather than
+widening this list.
 
-The live checkout contains eight modified tracked files and 393 untracked
-entries, many under `bsm3/`. A wholesale directory move could relocate, stage,
-or lose user-owned work. Design a concrete safe workflow, preferably an
-isolated worktree/branch from the accepted committed state, and explain how the
-result can be integrated without overwriting the live dirty files. If a full
-import-package rename cannot be safely integrated until the dirty work is
-resolved, say so and separate public branding from namespace migration rather
-than pretending the risk does not exist.
+## Part A — public identity
 
-### 4. Read the Docs alpha boundary
+- `setup.py`: `name="bsm3"` becomes `name="gamma-mdo"`; update `url` to the
+  `GAMMA-MDO` repository; refresh `description` to the GAMMA one-liner. Keep
+  `install_requires=[]` and keep `find_packages()` resolving `bsm3` — the
+  distribution ships the `bsm3` import package by design.
+- `docs/conf.py`: `project`, `author`, and `html_title` carry GAMMA. Do **not**
+  change `_read_version()`; it reads `bsm3/__init__.py` by regex without
+  importing, which is what keeps the docs build hermetic.
+- `README.md`, `docs/README.md`, `docs/index.md` and the six `docs/src/` pages:
+  present the project as GAMMA, state the expansion once where a reader first
+  meets the name, and **state plainly that the distribution is `gamma-mdo`
+  while the import is `bsm3`**. A reader must not have to discover that by
+  failing.
+- Where a page shows an install command, it must be the real one.
 
-The repository already has a hermetic Sphinx site and a v2
-`.readthedocs.yaml`. Plan the first release as HTML-only because only HTML has
-been verified; PDF/HTMLZIP can follow after independent builds. Specify the
-project import, webhook, tag activation/default-version policy, badge/link
-update, and clean-build proof. Distinguish repository changes Codex can prepare
-from external actions requiring explicit user authorization.
+Do not mechanically replace every occurrence of "BSM3". Prose describing the
+historical package, the validated environment name `bsm3_py312_main`, cache
+filenames, or the existing directory layout stays accurate as written.
 
-No CSDL_alpha, LFS, JAX, gmsh, DAFoam, MPI, VortexAD, or geometry assets should
-be needed merely to build the hosted documentation.
+## Part B — version
 
-## Implementation-prompt requirements
+Set `__version__ = "0.2.0a1"` in `bsm3/__init__.py`. Confirm `setup.py` and
+`docs/conf.py` both derive from it and that the built metadata, the Sphinx
+`version`/`release`, and the intended tag label agree. Report the version as
+seen by `pip show` on a built artifact, not just the source string.
 
-The next literal Codex prompt must:
+## Part C — HTML-only documentation alpha
 
-- have a per-path allowlist and explicit prohibited paths;
-- preserve historical `docs/overhaul` prose rather than mechanically replacing
-  every occurrence of BSM3;
-- define exact greps for stale supported-surface names without demanding that
-  historical collaboration text be rewritten;
-- keep the eight modified and 393 untracked entries safe;
-- require package-build/install/import checks from outside the source tree;
-- require the full non-integration suite, E175 integration guards,
-  derivative/N-gon guard, all five Ruff groups, documentation tests, and strict
-  Sphinx;
-- test the old import's intended clean-break behavior if the namespace changes;
-- keep external mutations (GitHub rename, RTD project creation, tag/push, PyPI
-  publication or reservation) in a separately enumerated user-authorized step;
-  and
-- leave M4.2 queued, recoverable from `38cd0bf`, with M3 archive/history
-  pruning separate and last.
+`.readthedocs.yaml` declares `formats: [pdf, htmlzip]`. **Neither has ever been
+built**, and `fail_on_warning: true` in the same file would apply
+warnings-as-errors to an unverified LaTeX toolchain on the first hosted build.
+Reduce `formats` to HTML only and update the surrounding comment to say why,
+including that PDF and HTMLZIP may be enabled later after independent builds.
 
-If any identifier or version-history fact cannot be established, issue a
-short, evidence-backed decision question instead of inventing it.
+Keep the build hermetic: `docs/requirements.txt` only, no autodoc, no geometry
+stack. Leave the CSDL_alpha and lsdo_function_spaces pin note intact.
+
+## Part D — stale-name checks, scoped precisely
+
+Historical collaboration prose must **not** be rewritten. Run these exact
+checks and report each count:
+
+```bash
+# 1. Supported-surface branding: expect zero stale project-name references.
+git grep -n "BSM3" -- setup.py docs/conf.py README.md docs/README.md \
+  docs/index.md docs/src/ .readthedocs.yaml
+
+# 2. Distribution name: expect zero.
+git grep -n 'name="bsm3"\|name=.bsm3.' -- setup.py
+
+# 3. The import namespace MUST still be everywhere. Expect the pre-change count.
+git grep -c "import bsm3\|from bsm3" -- '*.py' | wc -l
+
+# 4. Historical prose deliberately untouched: report, do not fix.
+git grep -c "BSM3" -- docs/overhaul/ | head
+```
+
+Check 3 is a guard against an accidental namespace rename: its count must not
+fall. Report the before and after numbers.
+
+## Verification
+
+1. `git diff --check "$TURN71_BASE"..HEAD`; changed paths ⊆ the allowlist.
+2. **Build and install the distribution, then import from outside the source
+   tree.** Build a wheel, install it into a disposable environment, `cd /tmp`,
+   and confirm `import bsm3` works and `bsm3.__version__` reports `0.2.0a1`.
+   Running this from the checkout proves nothing — a Turn-64 false positive
+   came from exactly that mistake. Report the wheel filename, which must carry
+   `gamma_mdo-0.2.0a1`.
+3. Full non-integration suite; baseline **228 passed, 9 deselected**.
+4. `tests/test_boundary_surface_movement.py` **45 passed**;
+   `tests/test_e175_example.py -m "not integration"` **16 passed, 5
+   deselected**.
+5. Derivative / N-gon three-file guard: **exactly 6**.
+6. Both E175 integration guards still pass:
+   `test_triangle_wall_at_full_deformation_scale` and
+   `test_quad_panel_introduces_no_new_inverted_elements`.
+7. `tests/test_documentation.py` and the strict Sphinx 9.1.0 build.
+8. All five literal workflow Ruff groups, plus default Ruff on changed paths.
+9. **Clean clone:** clone the implementation commit, build the docs strictly
+   with only `docs/requirements.txt`, run the documentation tests, and end with
+   an empty `git status`.
+10. Preservation: **8 modified tracked files byte-identical and 393 untracked
+    entries**, counted before and after.
+
+No DAFoam, OpenFOAM, VortexAD, or real-MPI run. Do not install project
+dependencies; a disposable venv for the wheel-install check is expected and is
+not a project dependency install.
+
+## External actions — NOT part of this turn
+
+Prepare the repository only. Every item below is a user-authorized external
+mutation that **no agent performs**. List them in the handoff as a checklist
+for the user, with the exact values needed:
+
+- rename the GitHub repository `BSM3` → `GAMMA-MDO`;
+- import the Read the Docs project under slug `gamma-mdo` and add its webhook;
+- create and push the `v0.2.0a1` tag, then activate it on RTD and set the
+  default version;
+- reserve or publish `gamma-mdo` on PyPI.
+
+Do not create a tag, push, publish, reserve a name, create an RTD project, or
+rename anything on GitHub. Two availability facts are **not** reservations and
+must be restated as such: PyPI returns 404 for `gamma-mdo`, and the RTD API
+reports no project with that slug. The GitHub owner-namespace check was
+**inconclusive** — the existing private repository also returns 404
+unauthenticated — so the user must confirm `GAMMA-MDO` is free in their
+account before renaming.
+
+## Queued behind this turn
+
+M4.2 — the tracked VortexAD and fuel-burn milestone — is planned and preserved
+verbatim. Recover it with:
+
+```bash
+git show 38cd0bf:docs/overhaul/CODEX_NEXT.md
+```
+
+Do not rewrite or weaken it. Order: M5.1/M6.1 (this turn) → M6.2 (user
+authorization) → M4.2 → M5.2 namespace migration, blocked on the dirty tree →
+M3 archive/history pruning, last.
 
 ## Handoff
 
-Commit only `PLAN.md`, `LOG.md`, and `CODEX_NEXT.md`. Report the identifier and
-version rulings, external availability evidence, dirty-tree strategy, exact
-next milestone ordering, and the commit hash. Do not mark a rename or hosted
-release complete; neither has started.
+Two commits: implementation, then the collaboration documents. Report both
+hashes, exact changed paths, the four stale-name check counts with before/after
+for check 3, the wheel filename and the out-of-tree import result, all gate
+results, the clean-clone result, preservation proof, and the external-action
+checklist. Mark M5.1 and M6.1 as ready for Claude review, never as
+self-accepted.
