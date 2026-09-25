@@ -1,187 +1,169 @@
-# Claude Turn 66 — Review M4.1 independently
+# Codex Turn 67 — M4.1 corrective: symmetric-mesh diagnostic dump
 
-Codex implemented M4.1 and is handing it back without self-acceptance.
+Claude reviewed M4.1 in Turn 66 and **did not accept it**. Everything else in
+`d0d1ff0` was verified and stands. This is one narrow corrective turn; do not
+reopen any other part of M4.1, and do not begin M4.2.
 
 ```text
-TURN65_BASE = 11fb4522f354b56e05ccd1c5795f9f078fcbfe46
-TURN65_IMPLEMENTATION = d0d1ff0
+TURN67_BASE = 9930dbe
 ```
 
-Review the committed range, reproduce the high-value gates, and either accept
-M4.1 or issue one narrow corrective prompt. Do not edit production code during
-the first review pass. If accepted, plan M4.2 (tracked VortexAD and fuel-burn
-optimization) next; M3 release pruning remains separate and last.
+Preserve the user's dirty tree exactly: seven pre-existing modified files
+byte-for-byte, the eighth
+(`visualize_wing_rotation_deformation.py`) with its unstaged `DEFAULT_HDF5` and
+`--field` edits left untouched, and 393 untracked entries.
 
-## First rule on the two user-directed scope expansions
+## What was accepted, so you do not redo it
 
-The Turn-64 prompt was A/B/C with D measurement-only, but the user separately
-directed two changes that require a wider range:
+Verified by execution, not by reading your report:
 
-1. Exact bracketed intersection vertices must **not** be reprojected onto the
-   driving component. Codex changed `load_stepping.py`, `projection.py`, their
-   exports/tests/docs, and surfaced the projection status already computed by
-   the custom operation.
-2. The clean local panel mesh must replace the old 114-inversion example mesh.
-   Codex adopted `embraer_175_panel_quad_dominant_high_quality.msh`, deleted
-   `embraer_175_quad_dominant_symmetric_no_winglets.msh`, and updated supported
-   references, provenance, and the one tracked visualization default.
+- Exact seams bypass the closest-point operation via
+  `~np.isin(ids, exact_seam_ids)` rather than being overwritten afterwards; the
+  implicit intersection VJP survives; `enforce_symmetry_plane` runs after
+  assembly; the empty-projection case short-circuits correctly; `converged`
+  comes from the cached forward state with no second solve.
+- The classification partitions the complete mesh on **both** mesh kinds:
+  triangle wall 4,547 + 11,853 = 16,400; quad panel likewise, with 4,262
+  closest projections, 2,236 n-gon modes, zero inversions.
+- The replacement panel independently measures 13,262 vertices, 2,804
+  triangles, 11,858 quads, zero inverted elements, zero inverted corners, zero
+  degenerate elements, minimum scaled Jacobian 0.1606796.
+- All eleven gates reproduced at exactly the numbers you reported.
 
-These are intentional expansions, not silent allowlist drift. Review whether
-their concrete implementation is minimal and correct.
+## The defect
 
-## Committed inventory — exactly 21 paths
+The tracked triangle wall is a **half** mesh (`y` in `[0, 11.96]`), so
+`setup.symmetry_split is None` and `_global_surface_ids` takes its
+`np.unique(ids)` branch. Every dump-equality assertion in the suite runs on
+that mesh. The symmetric branch you added is therefore never tested.
+
+The curated quad panel **is** a full symmetric mesh (`y` in `[-11.96, 11.96]`).
+There `_global_surface_ids` mirror-expands — correct and desirable for the
+public classification — but `_write_diagnostic_dump` still writes half-mesh
+seam coordinates for `{name}_vertices` beside the expanded `{name}_ids`:
+
+| key | before Turn 65 | after Turn 65 |
+| --- | ---: | ---: |
+| `wing_root_vertices` | 97 | 97 |
+| `wing_root_ids` | 97 | **194** |
+| `tail_root_vertices` | 67 | 67 |
+| `tail_root_ids` | 67 | **134** |
+
+They were aligned 1:1 by construction before. Pairing them is the only reason
+the archive carries both arrays. A consumer that zips them now mispairs
+coordinates with IDs, or fails, and nothing in the archive announces it.
+
+Reproduce it before fixing it: run the basic example's `main` against
+`embraer_175_panel_quad_dominant_high_quality.msh` with a `diagnostic_dump`
+path and compare `wing_root_vertices.shape[0]` against `wing_root_ids.size`.
+
+## Literal implementation allowlist
 
 ```text
-bsm3/core/boundary_surface_movement/__init__.py
-bsm3/core/boundary_surface_movement/embraer_175_panel_quad_dominant_high_quality.msh  (new)
-bsm3/core/boundary_surface_movement/embraer_175_quad_dominant_symmetric_no_winglets.msh  (deleted)
-bsm3/core/boundary_surface_movement/geometry_model.py
-bsm3/core/boundary_surface_movement/load_stepping.py
-bsm3/core/boundary_surface_movement/mesh_motion_config.py
 bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py
-bsm3/core/boundary_surface_movement/projection.py
-bsm3/core/boundary_surface_movement/visualize_wing_rotation_deformation.py
-bsm3/mesh_motion.py
-docs/overhaul/ASSETS.md
-docs/overhaul/MANIFEST.md
-docs/src/api.md
-docs/src/background.md
-docs/src/examples.md
-docs/src/getting_started.md
-examples/e175_quad_panel_calibration.py  (new)
-examples/e175_surface_deformation.py
-tests/test_boundary_surface_movement.py
-tests/test_curated_assets.py
 tests/test_e175_example.py
+docs/src/api.md
 ```
 
-Verify with:
-
-```bash
-git diff --check "$TURN65_BASE" "$TURN65_IMPLEMENTATION"
-git diff --name-status "$TURN65_BASE" "$TURN65_IMPLEMENTATION"
-```
-
-The mesh hash must be exactly:
+Documentation commit, separately:
 
 ```text
-92feeeda05905a13d23a18c863e76b9596773beccb021148cc2d4e7016cd733c
+docs/overhaul/PLAN.md
+docs/overhaul/LOG.md
+docs/overhaul/CODEX_NEXT.md
 ```
 
-## A. Exact-intersection and projection-status review
+Stop and report rather than widening this. In particular, do not change
+`_global_surface_ids`, the classification dataclasses, `load_stepping.py`,
+`projection.py`, the curated asset, or either example.
 
-Trace one load step from `_set_exact_seams` through final assembly.
+## Part A — make the archive self-consistent
 
-- Confirm the union of `state.solutions[*].vertex_ids` is excluded from the
-  closest-point operation, not merely overwritten after a redundant solve.
-- Confirm the exact seam coordinates remain differentiable through the
-  implicit intersection operation and survive symmetry enforcement.
-- Confirm non-seam deformation rows still receive closest-point reprojection.
-- Confirm `VertexBatch.converged` is populated from the operation's existing
-  cached forward state, aligned with its IDs, and causes no second solve.
-- Confirm `SurfaceProjectionStatus` reports only vertices actually projected;
-  exact seams and fixed-parametric reevaluation vertices must be absent.
-- Inspect the synthetic regression: seam IDs must be excluded, the seam must
-  satisfy both component planes, and the existing analytic/FD derivative must
-  remain green.
+Pick one and state which in the handoff:
 
-Pay particular attention to duplicated seam IDs across intersections,
-empty-projection edge cases, metadata coverage, and the inline-recorder
-assumption used to read the cached forward state.
+1. Mirror-expand the seam coordinates so `{name}_vertices` and `{name}_ids`
+   are aligned 1:1 again on every mesh, applying the symmetry sign to the
+   mirrored rows; or
+2. Keep `{name}_vertices` paired with a half-mesh-aligned ID array under an
+   explicitly distinct key, and write the mirror-expanded classification IDs
+   under their own clearly named key.
 
-## B. Global classification review
+Option 1 preserves the archive's existing contract and is preferred unless you
+find a concrete reason it cannot hold. Whichever you choose, every array pair
+in the NPZ that a reader would naturally zip must be aligned, and the choice
+must be documented where the dump's contents are described.
 
-Check `SurfaceVertexClassification` against the actual pipeline partitions.
+## Part B — close the test hole
 
-- All arrays must use zero-based IDs in the **complete input mesh**, including
-  both sides reconstructed from a symmetric half solve.
-- `parametrically_prescribed_vertex_ids` must be the complete-mesh complement
-  of the deformation set.
-- `closest_projection_vertex_ids` must equal
-  `surface_projection_status.reprojected_vertex_ids`.
-- Component and intersection mappings must keep declaration names.
-- The NPZ dump must consume the public classification rather than independently
-  recompute equivalent arrays.
-- Do not assume graph-prescribed, intersection, and symmetry categories are
-  disjoint; review/document their intended overlap instead.
+Add a dump/classification assertion that runs on a **symmetric** mesh, so the
+mirror-expansion branch of `_global_surface_ids` is covered. It must assert the
+alignment invariant you chose in Part A, not merely that the arrays exist.
 
-## C. API and example ergonomics review
+Mark it `integration` consistently with the existing quad-panel test. Do not
+weaken or delete any existing assertion.
 
-- `root_half_width` is a clean-break removal from the supported API;
-  `free_span_fraction` has the truthful semispan meaning and rejects values
-  outside `(0, 1]`.
-- `free_axial_fraction` explains that the middle is graph-free and nose/tail
-  are fixed-parametric.
-- The basic triangle example remains one readable five-stage script, defaults
-  to full scale, has no CLI, and exposes final visualization and FD checking.
-- The advanced example uses the replacement panel, keeps its regularization
-  weight explicit, and reads the public classification/status rather than
-  private pipeline objects.
-- `MeshMotion.derivative_check.enabled` is no longer ignored: `mm.run`
-  registers the configured objective; the caller-owned recorder is still not
-  stopped; `mm.run_fd_sweep` runs afterward. Confirm this composes with an
-  external recorder and does not register duplicate objectives.
-- The docs' three-path description must match the implementation: exact seam,
-  closest projection, fixed-parametric reevaluation.
+## Part C — two documented residues
 
-## D. Replacement asset and calibration ruling
+Both are one or two sentences on the API page; neither changes behavior.
 
-Independently load the replacement panel and confirm 13,262 vertices, 2,804
-triangles, 11,858 quads, and zero baseline inversions/corners/degeneracies.
-Confirm all tracked supported references use it and the old filename is absent
-outside historical collaboration prose. Untracked research scripts are outside
-the supported surface and may still name the retired file; report, do not edit.
+1. `_project_group` raises `RuntimeError` naming the inline recorder when the
+   cached forward state is absent. The pipeline already required an inline
+   recorder — it reads `.value` in several places — but the API page never says
+   so. State the requirement where the caller-owned recorder is described.
+2. `mm.run` calls `set_as_objective()` whenever `derivative_check.enabled` is
+   true. Inside a larger optimization graph that already has an objective,
+   enabling the debug flag replaces it. Warn about this where the FD workflow
+   is documented.
 
-Codex measured full deformation at weights 0, 0.3, 1, 10, 50, 100, 150, 200.
-Every case had zero inversions; minimum scaled Jacobian stayed 0.160662. The p05
-scaled Jacobian moved from 0.540688 at 0/0.3 to 0.540430 at 200, and p05 area
-ratio from 0.982300 at 0 to 0.977684 at 200. Raw data remains outside the repo
-at `/tmp/bsm3_turn65_ngon_sweep.json` if available.
+## Verification
 
-Rule explicitly on the interpretation. Codex's provisional reading is that
-this one clean-mesh/full-deformation point provides no evidence for 100–200 and
-does not establish that 0.3 is optimal either. Decide whether the advanced
-example should keep 0.3 pending a broader deformation suite, use zero, or defer
-any recommendation. Do not infer a universal value from this one sweep.
+1. `git diff --check "$TURN67_BASE"..HEAD`; changed paths ⊆ the allowlist.
+2. The new symmetric assertion fails against `d0d1ff0` and passes after the
+   fix. Report both results — a test that never saw the bug proves nothing.
+3. `tests/test_e175_example.py -m "not integration"`, the full non-integration
+   suite (baseline 228 passed / 9 deselected), and
+   `tests/test_boundary_surface_movement.py` (baseline 45 passed).
+4. The derivative / N-gon guard across all three files: **exactly 6**.
+5. `test_triangle_wall_at_full_deformation_scale`: 1 passed, zero folds, zero
+   inversions in all three reports, zero projection failures.
+6. `tests/test_documentation.py` and the strict Sphinx build.
+7. The five literal workflow Ruff commands, plus default Ruff on changed paths.
+8. Preservation: 7/8 byte-identical, the eighth's unstaged edits intact, 393
+   untracked entries.
 
-## E. Dirty-tree overlap
+No DAFoam, OpenFOAM, VortexAD, or real-MPI run. Do not install dependencies.
 
-At Turn-65 start there were eight modified tracked files and 394 untracked
-status entries. The replacement mesh itself was one of those untracked paths,
-so adoption intentionally changes the count to 393. Seven modified files must
-remain byte-identical. The eighth,
-`visualize_wing_rotation_deformation.py`, already carried user changes; only
-the committed `DEFAULT_MESH` line belongs to Turn 65. Verify its unrelated
-`DEFAULT_HDF5` and `--field` changes remain unstaged and were not committed.
+## Rulings to record verbatim in LOG.md
 
-## Reproduce the gates
+**N-gon weight.** The sweep is a null result, not a calibration. The minimum
+scaled Jacobian is bit-identical (0.16066206527471977) at all eight weights and
+the undeformed panel's own minimum is 0.1606796, so the statistic is pinned by
+a pre-existing worst cell the deformation barely touches. The p05 scaled
+Jacobian is bit-identical at weights 0, 0.3 and 1. The p05 area ratio degrades
+monotonically from 0.982300 at weight 0 to 0.977454 at 150. Increasing the
+weight is mildly harmful here and never helpful; the elapsed-time column is
+warm-up noise. **Keep `0.3` as the explicitly labeled non-recommendation it
+already is. Do not adopt 100–200. Do not adopt 0.** No universal weight follows
+from one deformation case; a real calibration needs a deformation that provokes
+hourglassing.
 
-Use the existing Python-3.12 compatibility environment. Minimum results Codex
-reported:
+**Retired element IDs.** The sweep's `contains_8075` / `contains_14923` columns
+are vacuous on the replacement mesh: it has 14,662 cells, so element 14923 does
+not exist and element 8075 is an unrelated cell. Correct the Turn-65 LOG
+sentence so it cannot be read as continuous with the Turn-64 measurement.
 
-```text
-tests/test_boundary_surface_movement.py                         45 passed
-tests/test_e175_example.py -m "not integration"                16 passed, 5 deselected
-tests -m "not integration"                                    228 passed, 9 deselected
-derivative + n-gon trio                                        exactly 6 passed
-test_triangle_wall_at_full_deformation_scale                   1 passed
-tests/test_documentation.py                                    12 passed
-strict Sphinx 9.1.0                                            build succeeded
-all five literal workflow Ruff commands                        passed
-```
+## After this turn
 
-The full-scale triangle run must show zero folds, zero input/pre/final
-inversions, zero projection failures, exact classification/dump equality, and
-no seam ID in the closest-projection set. Also verify a fresh clone of
-`d0d1ff0` builds the docs, passes documentation tests, and ends clean.
-
-No DAFoam, OpenFOAM, VortexAD, or real-MPI run is required in this review.
+M4.2 — a tracked VortexAD and fuel-burn optimization example against pinned
+external revisions — is planned by Claude once M4.1 is accepted. It is not part
+of this turn. M3 release pruning stays separate and last. The `GAMMA` naming
+question is recorded as guidance in the Turn-66 log and is an M3 concern; do
+not rename anything.
 
 ## Handoff
 
-Record the independent findings in `LOG.md`, update `PLAN.md`, and replace this
-file with the next literal Codex prompt. If M4.1 is accepted, the next prompt
-should plan M4.2 as a tracked VortexAD/fuel-burn optimization milestone against
-pinned external revisions, while keeping M3 release pruning separate. Include
-any ruling on the `GAMMA` repository name only as naming guidance; do not rename
-the package during review.
+Two commits: implementation (pipeline, test, API page), then `PLAN.md`,
+`LOG.md`, `CODEX_NEXT.md`. Report both hashes, the Part A choice and its
+rationale, the before/after result of the new test, all gate results, and
+preservation proof. Mark the M4.1 correction as ready for Claude review, never
+as self-accepted.
