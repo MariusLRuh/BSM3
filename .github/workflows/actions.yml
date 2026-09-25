@@ -31,9 +31,61 @@ jobs:
 
       - name: Critical static checks
         run: |
+          # Default Ruff selection over the complete retained production
+          # manifest -- every bsm3 path the four documentation steps below
+          # cover -- plus the M0 test files. Kept literal and auditable; the
+          # dirty/untracked research tree is deliberately excluded.
           python -m ruff check \
-            bsm3/preprocessing/mesh_io.py \
+            bsm3/__init__.py \
+            bsm3/component_parameters.py \
+            bsm3/core/__init__.py \
+            bsm3/core/boundary_surface_movement/__init__.py \
+            bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py \
+            bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py \
+            bsm3/core/boundary_surface_movement/constraints.py \
+            bsm3/core/boundary_surface_movement/current_graph_solve.py \
+            bsm3/core/boundary_surface_movement/dafoam_csdl.py \
+            bsm3/core/boundary_surface_movement/e175_derivative_ladder.py \
+            bsm3/core/boundary_surface_movement/elasticity.py \
+            bsm3/core/boundary_surface_movement/forward_only_fd_checker.py \
+            bsm3/core/boundary_surface_movement/free_region.py \
+            bsm3/core/boundary_surface_movement/geometry.py \
+            bsm3/core/boundary_surface_movement/geometry_model.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_backend.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_mpi.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_operation.py \
+            bsm3/core/boundary_surface_movement/graph_distance.py \
+            bsm3/core/boundary_surface_movement/intersections.py \
+            bsm3/core/boundary_surface_movement/load_stepping.py \
+            bsm3/core/boundary_surface_movement/mesh_motion_config.py \
+            bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
+            bsm3/core/boundary_surface_movement/motion.py \
+            bsm3/core/boundary_surface_movement/ngon_affine.py \
+            bsm3/core/boundary_surface_movement/projection.py \
+            bsm3/core/boundary_surface_movement/quadratic_distortion.py \
+            bsm3/core/boundary_surface_movement/quality.py \
+            bsm3/core/boundary_surface_movement/rbf.py \
+            bsm3/core/boundary_surface_movement/run_dafoam_gmsh.py \
+            bsm3/core/boundary_surface_movement/spd_solve_custom_op.py \
+            bsm3/core/boundary_surface_movement/volume_mesh_motion.py \
+            bsm3/core/projections/function_set_closest_distance_custom_op.py \
+            bsm3/core/projections/function_set_evaluation_custom_op.py \
+            bsm3/core/projections/function_set_projection_custom_op.py \
+            bsm3/core/projections/orthogonality_projection_numpy.py \
+            bsm3/core/projections/warm_start_candidate_projection_numpy.py \
+            bsm3/core/projections/warm_start_projections.py \
+            bsm3/core/weighting_functions.py \
+            bsm3/mesh_motion.py \
+            bsm3/plotting.py \
             bsm3/preprocessing/__init__.py \
+            bsm3/preprocessing/components.py \
+            bsm3/preprocessing/gmsh.py \
+            bsm3/preprocessing/intersections.py \
+            bsm3/preprocessing/mesh_io.py \
+            bsm3/preprocessing/movement.py \
+            bsm3/preprocessing/quad_conversion.py \
+            bsm3/preprocessing/stl.py \
+            bsm3/preprocessing/symmetry.py \
             tests/test_derivative_gate.py \
             tests/test_curated_assets.py \
             tests/test_e175_driver_configuration.py

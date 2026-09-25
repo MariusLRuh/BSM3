@@ -102,6 +102,130 @@ GEOMETRY_VALUES = {
 }
 
 
+#: Names of the six geometric design variables this driver parameterizes.
+GEOMETRY_VARIABLE_NAMES: tuple[str, ...] = (
+    "wing_translation_x",
+    "wing_rotation_degrees",
+    "tail_rotation_degrees",
+    "wing_area",
+    "wing_aspect_ratio",
+    "fuselage_diameter_scale",
+)
+
+
+def _populate_e175_geometry(
+    geometry: GeometryModel,
+    variables: Mapping[str, Any],
+) -> GeometryModel:
+    """Declare the E175 components and intersections on ``geometry``.
+
+    The single source of truth for the driver's geometry declaration. Both
+    :func:`create_geometry_model` and
+    :func:`create_geometry_parameterization_from_variables` call it, so the two
+    entry points cannot drift apart.
+
+    Parameters
+    ----------
+    geometry
+        Model to populate. It is modified in place and returned.
+    variables
+        The six driving quantities keyed by
+        :data:`GEOMETRY_VARIABLE_NAMES`. Each value is used as supplied, so it
+        may be a registered design variable or any caller-owned CSDL
+        expression.
+
+    Returns
+    -------
+    GeometryModel
+        The same object, with two lifting surfaces, one body, and two
+        intersections declared.
+    """
+    geometry.add_lifting_surface(
+        name="wing",
+        search_name="wing",
+        pivot_intersection="wing_fuse",
+        translation_x=variables["wing_translation_x"],
+        rotation_y_degrees=variables["wing_rotation_degrees"],
+        area=variables["wing_area"],
+        aspect_ratio=variables["wing_aspect_ratio"],
+        reference_area=70.0,
+        reference_aspect_ratio=8.4,
+    )
+    geometry.add_lifting_surface(
+        name="tail",
+        search_name="HT",
+        pivot_intersection="tail_fuse",
+        rotation_y_degrees=variables["tail_rotation_degrees"],
+        projection_name="horizontal_tail",
+    )
+    geometry.add_body(
+        name="fuselage",
+        search_name="fuselage",
+        diameter_scale=variables["fuselage_diameter_scale"],
+    )
+    geometry.connect(
+        name="wing_fuse",
+        driving_component="wing",
+        query_component="fuselage",
+        solver_name="wing_fuselage",
+    )
+    geometry.connect(
+        name="tail_fuse",
+        driving_component="tail",
+        query_component="fuselage",
+        solver_name="tail_fuselage",
+    )
+    return geometry
+
+
+def create_geometry_parameterization_from_variables(
+    variables: Mapping[str, Any],
+) -> GeometryModel:
+    """Build the E175 geometry model from caller-owned variables.
+
+    The rank-0 geometry-to-volume backend owns its own private recorder and
+    supplies its own CSDL variables, so this entry point registers **no** design
+    variables and owns no recorder. The supplied expressions are used exactly as
+    given, which keeps the caller's derivative graph intact.
+
+    The resulting components and intersections are identical to
+    :func:`create_geometry_model`; only the source of the six driving
+    quantities differs.
+
+    Parameters
+    ----------
+    variables
+        Mapping of exactly :data:`GEOMETRY_VARIABLE_NAMES` to CSDL variables or
+        expressions.
+
+    Returns
+    -------
+    GeometryModel
+        Populated model with no registered design variables.
+
+    Raises
+    ------
+    KeyError
+        If any required name is missing, or any unexpected name is present.
+        Both are reported rather than silently ignored.
+    """
+    supplied = set(variables)
+    required = set(GEOMETRY_VARIABLE_NAMES)
+    missing = sorted(required - supplied)
+    unexpected = sorted(supplied - required)
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise KeyError(
+            "create_geometry_parameterization_from_variables requires exactly "
+            f"{sorted(required)}; got {'; '.join(details)}."
+        )
+    return _populate_e175_geometry(GeometryModel(), variables)
+
+
 def create_geometry_model() -> GeometryModel:
     """Build the E175 geometry model with its registered design variables.
 
@@ -110,7 +234,9 @@ def create_geometry_model() -> GeometryModel:
     GeometryModel
         Driver-owned design variables, components, and intersections. The
         motion is identical to the previous hand-written declaration; the
-        general mechanism now lives in :class:`GeometryModel`.
+        general mechanism now lives in :class:`GeometryModel`. The component
+        and intersection declaration itself is shared with
+        :func:`create_geometry_parameterization_from_variables`.
     """
     geometry = GeometryModel()
     wing_translation_x = geometry.design_variable(
@@ -156,42 +282,17 @@ def create_geometry_model() -> GeometryModel:
         scaler=1.0,
     )
 
-    geometry.add_lifting_surface(
-        name="wing",
-        search_name="wing",
-        pivot_intersection="wing_fuse",
-        translation_x=wing_translation_x,
-        rotation_y_degrees=wing_rotation_degrees,
-        area=wing_area,
-        aspect_ratio=wing_aspect_ratio,
-        reference_area=70.0,
-        reference_aspect_ratio=8.4,
+    return _populate_e175_geometry(
+        geometry,
+        {
+            "wing_translation_x": wing_translation_x,
+            "wing_rotation_degrees": wing_rotation_degrees,
+            "tail_rotation_degrees": tail_rotation_degrees,
+            "wing_area": wing_area,
+            "wing_aspect_ratio": wing_aspect_ratio,
+            "fuselage_diameter_scale": fuselage_diameter_scale,
+        },
     )
-    geometry.add_lifting_surface(
-        name="tail",
-        search_name="HT",
-        pivot_intersection="tail_fuse",
-        rotation_y_degrees=tail_rotation_degrees,
-        projection_name="horizontal_tail",
-    )
-    geometry.add_body(
-        name="fuselage",
-        search_name="fuselage",
-        diameter_scale=fuselage_diameter_scale,
-    )
-    geometry.connect(
-        name="wing_fuse",
-        driving_component="wing",
-        query_component="fuselage",
-        solver_name="wing_fuselage",
-    )
-    geometry.connect(
-        name="tail_fuse",
-        driving_component="tail",
-        query_component="fuselage",
-        solver_name="tail_fuselage",
-    )
-    return geometry
 
 
 # ---------------------------------------------------------------------------
@@ -784,7 +885,7 @@ def build_cfd_analysis_rank0(
             geometry_values=geometry_values,
             pipeline_config=mesh_motion,
             parameterization_factory=(
-                create_geometry_from_variables
+                create_geometry_parameterization_from_variables
             ),
             aerodynamic_volume_method="elasticity",
         )

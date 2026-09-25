@@ -393,7 +393,7 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
 
     def __init__(
         self,
-        model_files: Any,
+        input_files: Any,
         geometry_values: Mapping[str, float],
         pipeline_config: Any,
         *,
@@ -403,7 +403,7 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
         aerodynamic_volume_method: str = "elasticity",
         build_eagerly: bool = False,
     ):
-        self._model_files = model_files
+        self._input_files = input_files
         self._geometry_values = dict(geometry_values)
         self._pipeline_config = pipeline_config
         self._parameterization_factory = parameterization_factory
@@ -438,8 +438,8 @@ class MeshMotionVolumeBackend(CSDLRecorderBackend):
         )
         result = run_mesh_motion(
             recorder=recorder,
-            model_files=self._model_files,
-            geometry_parameterization=geometry_parameterization,
+            input_files=self._input_files,
+            geometry=geometry_parameterization,
             config=self._pipeline_config,
             aerodynamic_analysis=None,
             aerodynamic_volume_method=self._aerodynamic_volume_method,

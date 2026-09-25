@@ -59,7 +59,35 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol, runtime_checkable
+
+@runtime_checkable
+class _Communicator(Protocol):
+    """Structural type for the MPI communicator features this module uses.
+
+    ``mpi4py`` is an optional, environment-provided dependency, so annotating
+    against ``mpi4py.MPI.Comm`` would require importing it eagerly just to
+    resolve a type. This protocol describes only what the functions below
+    actually touch, so the annotations resolve at runtime with no MPI
+    installed, and a real ``MPI.Comm`` satisfies it structurally.
+
+    Attributes
+    ----------
+    rank
+        Index of this process within the communicator.
+    size
+        Number of processes in the communicator.
+    """
+
+    rank: int
+    size: int
+
+    def Barrier(self) -> None:
+        """Block until every rank reaches this call."""
+
+    def bcast(self, obj: object, root: int = 0) -> object:
+        """Broadcast a picklable object from ``root`` to every rank."""
+
 
 # Avoid accidental oversubscription when one Python process is launched per MPI
 # rank. Override these in the shell before launching if you intentionally want
@@ -208,7 +236,7 @@ DAFOAM_OPTIONS_OVERRIDES: dict[str, Any] = {}
 # =============================================================================
 
 
-def rank0_print(comm: MPI.Comm, *items: object) -> None:
+def rank0_print(comm: _Communicator, *items: object) -> None:
     """Print on rank zero only, flushing immediately.
 
     Parameters
@@ -1028,7 +1056,7 @@ def build_da_options(
 def apply_custom_mesh_deformation(
     da_solver: Any,
     case_dir: Path,
-    comm: MPI.Comm,
+    comm: _Communicator,
 ) -> None:
     """
     Extension hook for the user's future surface/volume deformation code.
@@ -1068,7 +1096,7 @@ def run_dafoam(
     config: FlowConfig,
     wall_patches: list[str],
     farfield_patches: list[str],
-    comm: MPI.Comm,
+    comm: _Communicator,
 ) -> dict[str, Any]:
     """Instantiate PYDAFOAM, run the primal, and evaluate CD and CL.
 

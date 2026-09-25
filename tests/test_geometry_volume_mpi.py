@@ -675,3 +675,99 @@ def test_derivative_comparison_best_step_is_a_float_when_errors_exist():
     best_eta, best_error = comparison.best()[key]
     assert best_eta == pytest.approx(1e-4)
     assert best_error == pytest.approx(1e-9)
+
+
+def test_mesh_motion_volume_backend_calls_the_current_pipeline_api(monkeypatch):
+    """Execute the backend build path against a current-signature fake pipeline.
+
+    This guards the API boundary M1.1 broke: the backend must call
+    ``run_mesh_motion`` with ``input_files`` and ``geometry``, not the removed
+    ``model_files``/``geometry_parameterization`` spellings. It patches the
+    pipeline function the backend imports, so it needs no CAD asset, volume
+    mesh, MPI, or DAFoam.
+    """
+    import csdl_alpha as csdl
+
+    from bsm3.core.boundary_surface_movement import mesh_motion_pipeline
+    from bsm3.core.boundary_surface_movement.geometry_volume_backend import (
+        MeshMotionVolumeBackend,
+    )
+
+    seen = {}
+
+    class _FakeResult:
+        def __init__(self, volume):
+            self.volume_coordinates = {"elasticity": volume}
+
+    def _fake_run_mesh_motion(
+        *,
+        recorder,
+        input_files,
+        geometry,
+        config,
+        aerodynamic_analysis=None,
+        aerodynamic_volume_method="elasticity",
+    ):
+        seen.update(
+            recorder=recorder,
+            input_files=input_files,
+            geometry=geometry,
+            config=config,
+            aerodynamic_analysis=aerodynamic_analysis,
+            aerodynamic_volume_method=aerodynamic_volume_method,
+        )
+        # A minimal (num_points, 3) volume output driven by the design variable.
+        design = geometry["shift"]
+        base = csdl.Variable(value=np.zeros((4, 3)))
+        return _FakeResult(base + design)
+
+    monkeypatch.setattr(
+        mesh_motion_pipeline, "run_mesh_motion", _fake_run_mesh_motion
+    )
+
+    sentinel_files = object()
+    sentinel_config = object()
+
+    def _factory(variables):
+        # The backend hands its own CSDL variables to the factory.
+        assert set(variables) == {"shift"}
+        return {"shift": variables["shift"]}
+
+    backend = MeshMotionVolumeBackend(
+        input_files=sentinel_files,
+        geometry_values={"shift": 0.25},
+        pipeline_config=sentinel_config,
+        parameterization_factory=_factory,
+        aerodynamic_volume_method="elasticity",
+    )
+
+    coordinates = backend.forward({"shift": 0.5})
+
+    # The fake received the current keyword names and the caller's objects.
+    assert seen["input_files"] is sentinel_files
+    assert seen["config"] is sentinel_config
+    assert seen["geometry"] == {"shift": seen["geometry"]["shift"]}
+    assert seen["aerodynamic_analysis"] is None
+    assert seen["aerodynamic_volume_method"] == "elasticity"
+    assert isinstance(seen["recorder"], csdl.Recorder)
+
+    # The selected volume output came back and tracks the design variable.
+    assert coordinates.shape == (4, 3)
+    np.testing.assert_allclose(coordinates, np.full((4, 3), 0.5))
+    assert backend.output_shape == (4, 3)
+    assert backend.design_variable_names == ("shift",)
+
+
+def test_mesh_motion_volume_backend_rejects_the_removed_keyword():
+    """Refuse the pre-M1.1 ``model_files`` spelling; this is a clean break."""
+    from bsm3.core.boundary_surface_movement.geometry_volume_backend import (
+        MeshMotionVolumeBackend,
+    )
+
+    with pytest.raises(TypeError, match="model_files"):
+        MeshMotionVolumeBackend(
+            model_files=object(),
+            geometry_values={"shift": 0.0},
+            pipeline_config=object(),
+            parameterization_factory=lambda variables: variables,
+        )

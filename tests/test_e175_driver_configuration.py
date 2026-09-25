@@ -223,3 +223,111 @@ def test_e175_dafoam_result_mesh_motion_is_optional():
         mesh_motion=None, flow_outputs={}, cl=None, cd=None
     )
     assert result.mesh_motion is None
+
+
+def test_geometry_factory_parity_between_the_two_entry_points():
+    """Prove both E175 geometry entry points declare the same model.
+
+    ``create_geometry_model`` registers the six driver-owned design variables;
+    ``create_geometry_parameterization_from_variables`` registers none and uses
+    the caller's expressions. The components and intersections must match, and
+    the external variables must survive as the objects the caller supplied.
+    """
+    import csdl_alpha as csdl
+
+    from bsm3.core.boundary_surface_movement.cfd_mesh_dafoam_analysis import (
+        GEOMETRY_VARIABLE_NAMES,
+        create_geometry_model,
+        create_geometry_parameterization_from_variables,
+    )
+
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    try:
+        registered = create_geometry_model()
+        external = {
+            name: csdl.Variable(name=f"external_{name}", value=1.0)
+            for name in GEOMETRY_VARIABLE_NAMES
+        }
+        supplied = create_geometry_parameterization_from_variables(external)
+    finally:
+        recorder.stop()
+
+    # Same components, in the same order, with the same declared roles.
+    left_components = {c.name: c for c in registered._components}
+    right_components = {c.name: c for c in supplied._components}
+    assert [c.name for c in registered._components] == [
+        c.name for c in supplied._components
+    ]
+    assert set(left_components) == {"wing", "tail", "fuselage"}
+    for name, left in left_components.items():
+        right = right_components[name]
+        assert left.search_name == right.search_name
+        assert left.projection_name == right.projection_name
+        assert left.projection_mode == right.projection_mode
+
+    # Same intersections, in the same order, with the same endpoints.
+    assert [i.name for i in registered._intersections] == [
+        i.name for i in supplied._intersections
+    ]
+    for left, right in zip(registered._intersections, supplied._intersections):
+        assert left.driving_component == right.driving_component
+        assert left.query_component == right.query_component
+        assert left.solver_name == right.solver_name
+        assert left.bisection_search_direction == right.bisection_search_direction
+
+    # The registered entry point owns design variables; the other owns none.
+    assert set(registered.design_variables) == set(GEOMETRY_VARIABLE_NAMES)
+    assert not supplied.design_variables
+
+    # The caller's expressions are captured by identity, not re-created.
+    def _captured(component):
+        builder = component.coefficient_builder
+        return [cell.cell_contents for cell in (builder.__closure__ or ())]
+
+    wing_captured = _captured(right_components["wing"])
+    for key in (
+        "wing_translation_x",
+        "wing_rotation_degrees",
+        "wing_area",
+        "wing_aspect_ratio",
+    ):
+        assert any(value is external[key] for value in wing_captured), key
+    assert any(
+        value is external["tail_rotation_degrees"]
+        for value in _captured(right_components["tail"])
+    )
+    assert any(
+        value is external["fuselage_diameter_scale"]
+        for value in _captured(right_components["fuselage"])
+    )
+
+
+def test_geometry_parameterization_rejects_wrong_variable_names():
+    """Report missing and unexpected keys instead of ignoring them."""
+    import csdl_alpha as csdl
+
+    from bsm3.core.boundary_surface_movement.cfd_mesh_dafoam_analysis import (
+        GEOMETRY_VARIABLE_NAMES,
+        create_geometry_parameterization_from_variables,
+    )
+
+    recorder = csdl.Recorder(inline=True)
+    recorder.start()
+    try:
+        good = {
+            name: csdl.Variable(name=f"v_{name}", value=1.0)
+            for name in GEOMETRY_VARIABLE_NAMES
+        }
+    finally:
+        recorder.stop()
+
+    missing = dict(good)
+    missing.pop("wing_area")
+    with pytest.raises(KeyError, match="missing wing_area"):
+        create_geometry_parameterization_from_variables(missing)
+
+    unexpected = dict(good)
+    unexpected["wing_sweep_degrees"] = unexpected["wing_area"]
+    with pytest.raises(KeyError, match="unexpected wing_sweep_degrees"):
+        create_geometry_parameterization_from_variables(unexpected)

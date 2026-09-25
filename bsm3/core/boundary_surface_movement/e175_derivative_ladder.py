@@ -118,7 +118,7 @@ def _make_geometry_backend(comm) -> MeshMotionVolumeBackend | None:
     if not is_root(comm):
         return None
     return MeshMotionVolumeBackend(
-        model_files=MODEL_FILES,
+        input_files=MODEL_FILES,
         geometry_values=GEOMETRY_VALUES,
         pipeline_config=MESH_MOTION,
         parameterization_factory=(
