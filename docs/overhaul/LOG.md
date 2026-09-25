@@ -4424,3 +4424,91 @@ without executing E175, DAFoam, VortexAD, or MPI. M3 remains next after final
 documentation acceptance.
 
 Status:    closed
+
+---
+
+## Turn 61 — Claude, implementer, 2026-09-25
+Scope:     M2.1 — replace the inherited template with a buildable BSM3 docs site
+Base:      TURN61_BASE = 33ffbf70f4ff3d07a4e6dfb633e4171af9b627d4
+Commits:   4ca0435 (site, configuration, CI, test), docs commit follows
+Status:    M2.1 ready for Codex review — NOT accepted by the implementer
+
+### What changed
+
+The scaffold was replaced rather than layered over. Nine obsolete template
+pages were deleted — `welcome`, `custom_1`, `custom_2`, `tutorials` and its two
+children, `examples/basic`, `examples/advanced`, and `references.bib` — so no
+misleading page survives in the navigation. The site is now a landing page plus
+Installation, E175 example, External parameterization, API reference,
+Background, and Integrations.
+
+### Design decision: no autodoc
+
+The API page is hand-written and verified against source rather than generated.
+Autodoc would require the whole validated geometry stack (CSDL_alpha,
+lsdo_function_spaces, JAX, gmsh) in the documentation environment and on Read
+the Docs, purely to render a reference. Writing it by hand keeps
+`docs/requirements.txt` to four pinned packages, keeps the build hermetic and
+fast, and directly satisfies the requirement that the build not expose a wall
+of private modules. `conf.py` reads `bsm3.__version__` from
+`bsm3/__init__.py` with a regex, so the real version appears without importing
+the package. `tests/test_documentation.py` guards both halves: every name in
+`bsm3.mesh_motion.__all__` must be documented, no `mm.` name may be promised
+that the namespace does not export, and the version regex must still match.
+
+### Facts resolved from source rather than assumed
+
+- `bsm3.mesh_motion.__all__` is the 13-name public surface; `run` is
+  keyword-only with `inputs`, `geometry`, `motion`, `recorder`,
+  `aerodynamic_analysis`, and `aerodynamic_volume_method`.
+- `run` never starts or stops the recorder and reattaches it to the result.
+  The example creates, starts, and stops it, opening its `try` immediately.
+- `add_component` is the general boundary; `add_lifting_surface` and
+  `add_body` build their own private records rather than calling through it,
+  so they are documented as optional conveniences, not the mechanism.
+- Coefficient shapes and patch IDs are validated **after** the STEP component
+  is imported, not at the `add_component` call. The external guide says so,
+  because a caller otherwise expects declaration-time errors.
+- `MeshMotionResult` carries three inversion reports using the same metric,
+  plus fold, cell, and n-gon mode counts. The quad-panel path is a filename
+  substitution, and `PolygonRegularization` is inactive on a triangle-only
+  mesh because triangles carry no affine hourglass mode.
+- Tracked example assets are the STEP body, the R1 triangle wall, the
+  quad-dominant panel, and `wall_surface.npz`. The R4 wall and the volume
+  meshes are untracked, so the docs do not imply they exist.
+
+### Verification
+
+| Gate | Result |
+| --- | --- |
+| `git diff --check` pre-commit and `TURN61_BASE..HEAD` | both empty |
+| Template identity / quartic grep outside `docs/overhaul` | **clean**; 3 files inside `docs/overhaul` still carry them, as expected |
+| Docs environment | disposable `/tmp` venv, Python **3.12.14**, Sphinx **9.1.0** |
+| `python -m sphinx -W --keep-going -b html docs …` | **build succeeded**, 9 pages |
+| `pytest -q tests/test_documentation.py` | **10 passed** |
+| Fast E175 example tests (`-m "not integration"`, discovered from `pytest.ini`) | **13 passed, 5 deselected** |
+| Default Ruff on `docs/conf.py` and `tests/test_documentation.py` | All checks passed |
+| Five literal workflow Ruff commands | all All checks passed |
+| Fresh clone of `4ca0435`: docs build + documentation test | **build succeeded**, **10 passed**, clone status empty afterwards |
+| 8 pre-existing modified files | 8/8 byte-identical |
+| Original 394 untracked entries | 394/394 intact, none removed or adopted |
+| Build output inside the repository | none |
+
+`docs/requirements.txt` pins `sphinx==9.1.0`, `myst-parser==5.1.0`,
+`sphinx-rtd-theme==3.1.0`, and `sphinx-copybutton==0.5.2`, and the structural
+test asserts it names none of the runtime stack.
+
+### Deviations
+
+- `docs/src/images/` and `docs/make.bat` are outside the allowlist, so they
+  were left untouched. The images are now unreferenced by any page and
+  `make.bat` is generic Sphinx boilerplate with no template identity; neither
+  affects the build or the identity grep. Codex may want them removed under a
+  later allowlist.
+- No other deviation. Nothing outside the implementation allowlist changed, no
+  production Python, example, packaging metadata, or other test was touched,
+  and no library change proved necessary.
+
+M2.1 is **ready for Codex review** and is not accepted by the implementer.
+
+Status:    closed
