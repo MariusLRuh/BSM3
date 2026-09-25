@@ -4360,3 +4360,67 @@ M1.7 and M1 are **ready for Codex acceptance** and are not accepted by the
 implementer.
 
 Status:    closed
+
+---
+
+## Turn 60 — Codex, reviewer/planner, 2026-09-25
+Scope:     Accept M1.7 and M1; open M2 user documentation
+Reviewed:  e47d07f, 188ab48
+Status:    M1 COMPLETE; M2.1 issued to Claude
+
+**M1.7 and M1 are ACCEPTED.** The Turn-59 correction is exactly contained to
+the eight implementation paths and three collaboration documents, with a clean
+scoped whitespace diff. Codex read the production changes and independently
+reproduced:
+
+- **156 passed** across the five focused modules;
+- **exactly 6 passed** in the derivative/N-gon guard;
+- default Ruff over the complete 50-path retained production manifest; and
+- `--select D` over the union of all four documentation-lint path sets.
+
+The repaired tests exercise the actual failure boundaries. The E175 external
+factory and driver-owned model share one population helper; the external path
+owns no recorder or design-variable registrations. `MeshMotionVolumeBackend`
+now accepts `input_files` and calls the current `run_mesh_motion` keyword
+contract. The derivative ladder uses the same restored factory. The rank-0
+builder test reaches real backend construction before mocking the downstream
+operation, and the backend test executes a current-signature fake pipeline.
+The optional communicator protocol resolves at runtime without importing
+`mpi4py`. The expanded critical-static workflow makes the escaped F821 class a
+CI failure across the retained production manifest.
+
+The clean-clone **208 passed / 1 skipped** result and Turn-58 numerical evidence
+complete the acceptance record. No real DAFoam solve was required by the user;
+the STEP-to-aerodynamic construction boundary is supported and tested without
+DAFoam. VortexAD remains a specifically evidenced deferral: the future work is
+a tracked adapter against a pinned clean checkout, not resurrection of the
+stale untracked driver. M1.9's previously technical acceptance is final as
+part of M1 closure.
+
+### M2 documentation baseline and ruling
+
+The user's requested Read-the-Docs-style guide now opens before M3. The
+repository has a tracked `.readthedocs.yaml` and Sphinx scaffold, but it is not
+a BSM3 documentation site yet:
+
+- `docs/conf.py` names `lsdo_project_template`, credits the template author,
+  and points AutoAPI at nonexistent `../lsdo_project_template/core`;
+- `docs/src/getting_started.md` installs the template repository rather than
+  BSM3;
+- welcome, example, tutorial, custom, API, and bibliography pages contain
+  template placeholders and quartic/example paths;
+- `.readthedocs.yaml` selects Python 3.11 while the validated stack is 3.12 and
+  installs `requirements.txt`, which intentionally contains no active
+  dependencies, so it cannot supply Sphinx;
+- `bsm3_py312_main` currently has no Sphinx installation; and
+- CI has no documentation-build step.
+
+M2.1 replaces the scaffold rather than layering BSM3 pages beside misleading
+template content. It covers validated installation, the five-stage E175
+example, the external-coefficient contract, the compact `bsm3.mesh_motion`
+surface, assets/caches, and honest optional-integration status. The build must
+be warning-clean in an isolated `/tmp` documentation environment and in CI,
+without executing E175, DAFoam, VortexAD, or MPI. M3 remains next after final
+documentation acceptance.
+
+Status:    closed
