@@ -3560,7 +3560,10 @@ not taken on the review's word:
   `MPI.COMM_WORLD` whenever `mpi4py` imports, falling back to `SerialComm`
   only when it does not. `build_cfd_analysis_rank0` sets `mesh_motion` from
   `geometry_backend.last_mesh_motion_result if geometry_backend is not None
-  else None`, so it is `None` on every non-root rank.
+  else None`, so it is `None` on every non-root rank. *Corrected in Turn 56:*
+  that snapshot can also still be `None` on the **root** rank when the custom
+  operation has not executed inline before the result is built, so root alone
+  does not guarantee a populated value.
 - **`e175_derivative_ladder.py`** — Level 6 calls
   `_baseline_coordinates_and_direction(comm, geometry_backend)` with no seed
   and exposes no seed argument, so it matches Level 3 only at Level 3's
@@ -3572,8 +3575,11 @@ not taken on the review's word:
   rejected.
 - **`rbf.py`** — `__post_init__` performs eleven distinct validations, now all
   documented, including the non-negative counts and weights, the positive
-  optional support width, the per-intersection sequence resolution, and the
-  all-or-none `distances` rule. `_rbf_evaluation_operator` adds
+  optional support width, the per-intersection sequence lengths, and the
+  all-or-none `distances` rule. *Corrected in Turn 56:* the two
+  per-intersection resolvers also enforce value ranges, which "resolution"
+  alone did not cover — `seam_neighbor_blend_radius` must be non-negative and
+  `seam_neighbor_component_blend` must lie in `[0, 1]`. `_rbf_evaluation_operator` adds
   `regularization * I` to the training kernel in the `exact_interpolation`
   branch, so that fit is exact only at zero regularization.
   `DisplacementSurrogate.evaluate` computes
@@ -3589,14 +3595,21 @@ not taken on the review's word:
   corrected to the visible validation, including the `ValueError` for a
   missing or ambiguous `endTime`, the `KeyError` propagated from
   `find_patch_block`, and the `FileNotFoundError` when `gmshToFoam` produces
-  no boundary file.
+  no boundary file. *Corrected in Turn 56:* `set_openfoam_patch_types` also
+  raises `ValueError` when a patch block exists but has no `type` entry, and
+  `convert_and_check_mesh` raises `FileExistsError` on two distinct paths, not
+  only the taken-backup one. Turn 54's `make_parser` claim that its defaults
+  come wholly from `FlowConfig` was also too broad; see Turn 56.
 - **`volume_mesh_motion.py`** — percentiles are `np.quantile` of the metric
   values, so they describe the lower tail of those values rather than counting
   cells. `inverted_tetrahedra` counts `relative_jacobian <= 0`, an orientation
   reversal relative to each cell's own baseline, not a non-positive raw signed
   volume. `_tetrahedron_mean_ratio` uses only the deformed cell's edges and
   volume, normalized so a regular tetrahedron scores one, so it is an absolute
-  shape metric and not similarity to the baseline.
+  shape metric and not similarity to the baseline. *Corrected in Turn 56:* its
+  **sign** follows the raw deformed determinant rather than the relative
+  Jacobian, so Turn 54's conclusion that an inverted cell scores negative held
+  only under a positive-baseline-orientation convention.
 - **`weighting_functions.py`** — the truncated Gaussian leaves a jump of
   `exp(-sharpness)` at `d == 1`, nonzero for every finite `sharpness`.
 - **`plotting.py`** — `_broadcast(None, n, ...)` reaches `list(None)` and
@@ -3636,7 +3649,8 @@ documentation-only turn:
 1. `DerivativeComparison.best` can return `None` as the best step while its
    annotation says `tuple[float, float]`.
 2. `E175DAFoamResult.mesh_motion` is annotated non-optional but is `None` on
-   non-root ranks in the rank-0 path.
+   non-root ranks in the rank-0 path, and can also be `None` on root when the
+   custom operation has not executed inline before the snapshot is taken.
 3. `FlowConfig.nu_tilda_m2_per_s` and `FlowConfig.use_wall_functions` are
    carried by configuration and the CLI but never consumed by
    `build_da_options`, whose `useWallFunction` is hardcoded `False`. The CLI
@@ -3690,5 +3704,90 @@ Turn 56 is restricted to five source docstrings and the three collaboration
 documents. No executable change is authorized. Its exact eight-path allowlist,
 corrections, gates, and stop rule are in `CODEX_NEXT.md`. M1.8 remains next
 after M1.6 acceptance.
+
+Status:    closed
+
+---
+
+## Turn 56 — Claude, implementer, 2026-09-24
+Scope:     Final M1.6 semantic residue — seven narrow docstring inaccuracies
+Base:      139f35c (source comparisons); TURN56_BASE = deb225e (turn-local paths and whitespace)
+Commits:   b999476 (five source files), docs commit follows
+Status:    M1.6 ready for Codex acceptance — NOT accepted by the implementer
+
+Documentation only. Stripped-docstring ASTs are identical to `139f35c` for all
+five changed files, in both the working tree and the committed blobs. The
+completed lint sweep was not reopened and no behavior changed.
+
+Each defect was confirmed in the implementation before the prose was rewritten:
+
+1. **Regular package, not namespace package** — `bsm3/core/projections/__init__.py`
+   exists and is tracked, so `bsm3.core.projections` is a regular subpackage
+   whose `__init__` re-exports nothing. Only the terminology changed; the
+   concrete-module guidance is preserved.
+2. **`mesh_motion` can also be absent on root** — `MeshMotionVolumeBackend` is
+   constructed in `build_cfd_analysis_rank0` without `build_eagerly`, so the
+   model is built lazily. `mesh_motion` is a snapshot of
+   `last_mesh_motion_result` taken while the result object is constructed: it
+   is `None` on every non-root rank, which holds no backend, and can also still
+   be `None` on root if the custom operation has not executed inline by then.
+   Being on root is documented as no guarantee. The annotation is untouched and
+   remains the recorded M1.7 carry-in.
+3. **Two omitted RBF value constraints** — `_resolve_seam_neighbor_radii`
+   rejects any negative radius and `_resolve_per_intersection_fractions`
+   rejects any blend outside `[0, 1]`, both separately from the length rule.
+   Stated separately in the class prose and in the `__post_init__` prose;
+   "cannot be resolved" covered only the lengths.
+4. **Parser defaults** — `make_parser`'s blanket consistency claim is replaced
+   by the boundary: the numerical flow and solver options default from
+   `FlowConfig`, the case, path, and patch-name options carry their own parser
+   defaults, and the wall-function flag is inverted by `--no-wall-functions`,
+   leaving its effective default at odds with the dataclass.
+5. **Missing `ValueError`** — `set_openfoam_patch_types` raises `ValueError`
+   when a named patch's block exists but contains no `type` entry to rewrite;
+   the `KeyError` remains the absent-block case.
+6. **Both `FileExistsError` paths** — `convert_and_check_mesh` raises it either
+   when `polyMesh` exists and `overwrite_existing` is `False`, or when
+   overwriting is permitted but the timestamped backup destination is taken.
+7. **Raw mean-ratio sign is not relative inversion** —
+   `_tetrahedron_mean_ratio` applies `np.where(determinant >= 0, q, -q)` on the
+   **raw** deformed determinant, while `inverted_tetrahedra` uses the
+   deformed-to-baseline ratio. The unconditional "inverted cell scores
+   negative" is gone; the signs are documented as coinciding only under a
+   positive-baseline-orientation convention, with the counterexample of a
+   negative-oriented baseline cell that is unchanged.
+
+The Turn-54 entry and the M1.7 carry-in wording now carry inline corrections so
+they no longer assert the rejected claims. Every other Turn-54 correction is
+preserved.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| Four `actions.yml` `--select D` steps | **all pass** |
+| Workflow default critical-static step | **pass** |
+| Stripped-AST identity vs `139f35c`, working tree | **5/5** |
+| Stripped-AST identity vs `139f35c`, committed blobs | **5/5** |
+| Slice-3 coverage audit | 17/17 modules, 167/167 definitions, 132 callables / 293 params at 0/0, 22 dataclasses / 148 fields at 0/0 |
+| `pytest` suite 1 | **82 passed, 3 deselected** |
+| `pytest` suite 2 | **89 passed** |
+| `pytest` suite 3 | **6 passed** |
+| `git diff --check deb225e HEAD` | empty |
+| Changed paths after `TURN56_BASE` | subset of the eight-path allowlist |
+
+### Deviations
+
+None. No executable change was required and the allowlist was not widened.
+
+### Process note
+
+The first attempt to batch these edits aborted midway: one search span assumed
+a line began with a token that actually sat mid-line after a wrap, so the
+strict replacer refused the batch and the two files after it in the same call
+were never written. Caught by diffing the working tree before continuing. The
+corrections were then applied per file against spans read out of the file.
+
+M1.6 is **ready for Codex acceptance** and is not accepted by the implementer.
 
 Status:    closed

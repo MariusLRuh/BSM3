@@ -1,15 +1,21 @@
-# Turn 56 — Claude correction prompt: final M1.6 semantic residue
+# Codex acceptance checklist — M1.6 closure (Turn 56)
 
-Codex reproduced every structural and numerical gate from Turn 54, but M1.6 is
-**not accepted yet**. Five source docstrings retain seven narrow inaccuracies.
-Correct those only; do not reopen the completed lint sweep or change behavior.
+Claude was the implementer. M1.6 is **ready for Codex acceptance and is not
+accepted by the implementer**.
 
-Base source comparisons on `139f35c`. Before editing, record the current
-review commit as `TURN56_BASE=$(git rev-parse HEAD)` and use that exact hash for
-turn-local path and whitespace comparisons. Do not amend, reset, rebase,
-rewrite, push, clean, or touch pre-existing dirty files.
+## Commits
 
-## Literal allowlist (8 paths)
+| Hash | Contents |
+| --- | --- |
+| Source comparison base | `139f35c` |
+| `TURN56_BASE` | `deb225e` (turn-local path and whitespace comparisons) |
+| `b999476` | five source files — docstrings only |
+| *(docs commit)* | `PLAN.md`, `LOG.md`, `CODEX_NEXT.md` |
+
+No amend, reset, rebase, rewrite, push, or clean. No pre-existing dirty file
+touched. Paths staged literally through a Python list.
+
+## Changed paths
 
 ```text
 bsm3/__init__.py
@@ -22,106 +28,62 @@ docs/overhaul/LOG.md
 docs/overhaul/CODEX_NEXT.md
 ```
 
-No other path may change. If accurate documentation requires executable code,
-stop and report it; these defects can all be corrected in prose.
+## The seven corrections, each verified in the body first
 
-## Required corrections
+| # | File | Correction |
+| --- | --- | --- |
+| 1 | `bsm3/__init__.py` | `bsm3.core.projections` is a **regular subpackage** whose `__init__` re-exports nothing — its `__init__.py` exists and is tracked. Concrete-module guidance preserved. |
+| 2 | `cfd_mesh_dafoam_analysis.py` | `mesh_motion` is a snapshot of `last_mesh_motion_result` taken as the result is built. `None` on every non-root rank, and **also possibly `None` on root** when the custom operation has not executed inline by then. The backend is constructed without `build_eagerly`, so the model is lazy. Root is documented as no guarantee; annotation untouched. |
+| 3 | `rbf.py` | Stated separately, in both the class and `__post_init__` prose: `seam_neighbor_blend_radius` must be scalar or one-per-intersection **and non-negative**; `seam_neighbor_component_blend` must be scalar or one-per-intersection **and lie in `[0, 1]`**. The old "cannot be resolved" covered only lengths. |
+| 4 | `run_dafoam_gmsh.py` | `make_parser`: numerical flow and solver options default from `FlowConfig`; case, path, and patch-name options do not; the wall-function flag is inverted by `--no-wall-functions`, so its effective default disagrees with the dataclass. |
+| 5 | `run_dafoam_gmsh.py` | Added the `ValueError` from `set_openfoam_patch_types`: block exists but has no `type` entry. `KeyError` remains the absent-block case. |
+| 6 | `run_dafoam_gmsh.py` | `convert_and_check_mesh` raises `FileExistsError` on **both** paths: `polyMesh` exists with `overwrite_existing=False`, or overwrite permitted but the timestamped backup destination is taken. |
+| 7 | `volume_mesh_motion.py` | Mean-ratio sign follows the **raw** deformed determinant, while inversion is the deformed-to-baseline ratio. The unconditional "inverted cell scores negative" is removed; the signs coincide only under a positive-baseline-orientation convention, with the negative-oriented-baseline counterexample stated. |
 
-1. **Regular package, not namespace package — `bsm3/__init__.py`.**
-   `bsm3/core/projections/__init__.py` exists, so
-   `bsm3.core.projections` is a regular subpackage. It re-exports no helper
-   names. Replace only the incorrect “namespace package” terminology; preserve
-   the accurate concrete-module guidance.
+## Verification
 
-2. **`mesh_motion` can also be absent on root —
-   `cfd_mesh_dafoam_analysis.py`.** `build_cfd_analysis_rank0` snapshots
-   `geometry_backend.last_mesh_motion_result` while constructing its return
-   object. It is always `None` on non-root ranks because no backend exists
-   there, and it can also still be `None` on root when the custom operation has
-   not executed inline before that snapshot. Do not promise that root alone
-   guarantees a populated value. Keep the non-optional annotation as the
-   already-recorded M1.7 carry-in.
+| Gate | Result |
+| --- | --- |
+| M0 public surface (`--select D`) | **All checks passed** |
+| Surface-motion core (`--select D`) | **All checks passed** |
+| Projection and preprocessing (`--select D`) | **All checks passed** |
+| Drivers, volume motion, and MPI (`--select D`) | **All checks passed** |
+| Critical static checks (default selection) | **All checks passed** |
+| Stripped-AST identity vs `139f35c`, working tree | **5/5 identical** |
+| Stripped-AST identity vs `139f35c`, committed blobs | **5/5 identical** |
+| Slice-3 coverage audit | 17/17 modules, 167/167 definitions, 132 callables / 293 params **0 missing / 0 extra**, 22 dataclasses / 148 fields **0 missing / 0 extra** |
+| `pytest` suite 1 | **82 passed, 3 deselected** |
+| `pytest` suite 2 | **89 passed** |
+| `pytest` suite 3 | **6 passed** |
+| `git diff --check deb225e HEAD` | empty |
+| Changed paths after `TURN56_BASE` | subset of the eight-path allowlist |
 
-3. **State the two omitted RBF value constraints — `rbf.py`.** In both the
-   class and `__post_init__` validation prose, state separately that
-   `seam_neighbor_blend_radius` must be scalar or one-per-intersection **and
-   non-negative**, while `seam_neighbor_component_blend` must be scalar or
-   one-per-intersection **and lie in `[0, 1]`**. “Cannot be resolved” documents
-   only the length rule and does not cover the explicit value checks at
-   `_resolve_seam_neighbor_radii` and `_resolve_per_intersection_fractions`.
+## Historical records updated
 
-4. **Parser defaults — `run_dafoam_gmsh.py`.** `make_parser` still says its
-   option defaults come from a default `FlowConfig` “so the two stay
-   consistent.” That remains false: many numerical defaults do come from the
-   dataclass, but case/path/patch options do not, and the wall-function flag has
-   the already-documented contradictory effective default. Replace the blanket
-   claim with the precise boundary.
+The Turn-54 `LOG.md` entry and the M1.7 carry-in wording now carry inline
+corrections so they no longer assert the rejected claims: the root-rank caveat
+on `mesh_motion`, the RBF value checks beyond the length rule, the two further
+`run_dafoam_gmsh` exception paths and the over-broad `make_parser` claim, and
+the mean-ratio sign caveat. Every other Turn-54 correction is preserved as
+accepted.
 
-5. **Missing `ValueError` — `run_dafoam_gmsh.py`.** Add the explicit
-   `ValueError` from `set_openfoam_patch_types`: a named patch block exists but
-   contains no `type` entry. Its `KeyError` remains the absent-block case.
+## Carry-ins still open for M1.7
 
-6. **Both `FileExistsError` paths — `run_dafoam_gmsh.py`.** In
-   `convert_and_check_mesh`, document that `FileExistsError` is raised either
-   when `polyMesh` exists and `overwrite_existing` is false, or when overwrite
-   is allowed but the timestamped backup destination already exists.
+1. `DerivativeComparison.best` can return `None` despite its
+   `tuple[float, float]` annotation.
+2. `E175DAFoamResult.mesh_motion` is annotated non-optional but is `None` on
+   non-root ranks **and** can be `None` on root before inline execution.
+3. `FlowConfig.nu_tilda_m2_per_s` and `FlowConfig.use_wall_functions` are never
+   consumed by `build_da_options`, which hardcodes `useWallFunction=False`;
+   the CLI default for the latter also disagrees with the dataclass default.
+4. `plot_components(colors=None)` raises `TypeError` rather than preserving
+   component colors.
 
-7. **Raw mean-ratio sign is not relative inversion —
-   `volume_mesh_motion.py`.** The mean-ratio sign follows the raw deformed
-   determinant. Remove the unconditional conclusion that an “inverted cell”
-   scores negative: inversion elsewhere in this report is defined by the
-   deformed-to-baseline determinant ratio. With a negative-oriented baseline,
-   an unchanged cell has positive relative Jacobian but negative mean ratio.
-   State that the signs coincide only under a positive-baseline-orientation
-   convention.
+## Deviations
 
-Update the Turn-54 checklist/table and the M1.7 carry-in wording so they no
-longer repeat the rejected claims. Preserve every other accepted correction.
+None. No executable change was required and the allowlist was not widened.
 
-## Required verification
+## Decision requested
 
-1. All five literal Ruff commands from `actions.yml` pass: the four
-   `--select D` documentation steps and the default critical-static step.
-2. Stripped-AST comparison against `139f35c` is identical for every changed
-   Python file, for both the working tree and committed blobs.
-3. The slice-3 audit remains 17/17 modules, 167/167 definitions, 132 callables
-   / 293 parameters at 0 missing and 0 extra, and 22 dataclasses / 148 fields
-   at 0 missing and 0 extra.
-4. Run exactly:
-
-```bash
-conda run -n bsm3_py312_main python -m pytest -q \
-  tests/test_function_set_projection_numpy.py \
-  tests/test_warm_start_retry_regression.py \
-  tests/test_preprocessing_plotting.py \
-  tests/test_curated_assets.py \
-  tests/test_boundary_surface_movement.py -m "not integration"
-
-conda run -n bsm3_py312_main python -m pytest -q \
-  tests/test_dafoam_csdl.py \
-  tests/test_geometry_volume_mpi.py \
-  tests/test_volume_mesh_motion.py \
-  tests/test_preprocessing_plotting.py \
-  tests/test_e175_driver_configuration.py
-
-conda run -n bsm3_py312_main python -m pytest -q \
-  tests/test_derivative_gate.py \
-  tests/test_ngon_affine_operator.py \
-  tests/test_ngon_affine_load_step.py
-```
-
-   Expected results remain **82 passed / 3 deselected**, **89 passed**, and
-   **6 passed**.
-5. `git diff --check "$TURN56_BASE" HEAD` is empty, and the paths changed after
-   `TURN56_BASE` are a subset of the eight-path allowlist.
-
-## Commit and handoff
-
-Create two commits without rewriting history:
-
-1. the five source docstring corrections only;
-2. `PLAN.md`, `LOG.md`, and `CODEX_NEXT.md` only.
-
-Stage paths literally. Hand the result back as **M1.6 ready for Codex
-acceptance, not self-accepted**. Report the exact changed paths, all five Ruff
-results, AST result, coverage audit, three test counts, and any deviation.
+Accept M1.6. On acceptance, M1.8 is next, with the four carry-ins above folded
+into M1.7.
