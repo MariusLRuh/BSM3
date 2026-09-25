@@ -4,8 +4,10 @@ Codex reproduced every structural and numerical gate from Turn 54, but M1.6 is
 **not accepted yet**. Five source docstrings retain seven narrow inaccuracies.
 Correct those only; do not reopen the completed lint sweep or change behavior.
 
-Base source comparisons on `139f35c`. Starting `HEAD` is `7777b0f`. Do not
-amend, reset, rebase, rewrite, push, clean, or touch pre-existing dirty files.
+Base source comparisons on `139f35c`. Before editing, record the current
+review commit as `TURN56_BASE=$(git rev-parse HEAD)` and use that exact hash for
+turn-local path and whitespace comparisons. Do not amend, reset, rebase,
+rewrite, push, clean, or touch pre-existing dirty files.
 
 ## Literal allowlist (8 paths)
 
@@ -110,8 +112,8 @@ conda run -n bsm3_py312_main python -m pytest -q \
 
    Expected results remain **82 passed / 3 deselected**, **89 passed**, and
    **6 passed**.
-5. `git diff --check 7777b0f HEAD` is empty, and the changed paths are a subset
-   of the eight-path allowlist.
+5. `git diff --check "$TURN56_BASE" HEAD` is empty, and the paths changed after
+   `TURN56_BASE` are a subset of the eight-path allowlist.
 
 ## Commit and handoff
 
