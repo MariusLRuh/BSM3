@@ -5203,3 +5203,152 @@ Turn 68's M4.2 prompt is not discarded. It remains recoverable verbatim with
 and documentation-publication turns.
 
 Status:    closed
+
+---
+
+## Turn 70 — Claude, planner, 2026-09-25
+Scope:     GAMMA identity and first Read the Docs alpha — rulings only
+Base:      c3be7ff
+Status:    Rulings recorded; M4.1a/M4.1b prompt issued. Nothing renamed,
+           tagged, reserved, published, or pushed.
+
+### 1. Display name and expansion — accepted
+
+**GAMMA — Geometry Adaptation for Multidisciplinary Modeling and Analysis.**
+
+Turn 66 raised that `GAMMA` is overloaded in exactly this domain: γ is both
+flight-path angle and the ratio of specific heats, and `gamma` is occupied on
+PyPI (version 0.0.1, confirmed HTTP 200). That objection is answered rather
+than ignored by splitting the two roles: the **human-facing display name stays
+unqualified** (`GAMMA`), and every **technical identifier is qualified**
+(`GAMMA-MDO`, `gamma-mdo`). This is the normal resolution and it costs nothing.
+
+### 2. Identifiers, with the evidence and its limits
+
+| Role | Ruling | Evidence | Strength |
+| --- | --- | --- | --- |
+| Display / docs | `GAMMA` | — | ruling |
+| Repository slug | `GAMMA-MDO` | GitHub code search for repos named GAMMA-MDO: `total_count: 0` | **public only** |
+| Distribution | `gamma-mdo` | `pypi.org/pypi/gamma-mdo/json` → 404; `gamma_mdo`, `gammamdo` → 404 | good |
+| Import namespace | **`bsm3`, unchanged** | see ruling 3 | ruling |
+| RTD slug | `gamma-mdo` | RTD API v3 → `{"detail":"No Project matches the given query."}` | **public only** |
+
+Two limits are recorded rather than glossed:
+
+- The GitHub check **cannot** confirm availability inside the owner's own
+  namespace. `api.github.com/repos/MariusLRuh/BSM3` also returns 404 because
+  that repository is private, so 404 there means "invisible", not "free". The
+  user must confirm `GAMMA-MDO` is unused in their account.
+- PyPI and RTD 404s mean **unoccupied, not reserved**. This turn reserved
+  nothing. A name is only secured when the user publishes or imports it.
+- `gamma_mdo` and `gamma-mdo` normalize to the same PyPI name under PEP 503,
+  so one registration covers both spellings.
+
+### 3. Import namespace — **retain `import bsm3`**
+
+This is the substantive ruling and it goes against the leading proposal.
+
+Measured in the live checkout:
+
+| Fact | Count |
+| --- | ---: |
+| Untracked entries beneath `bsm3/` | **304 of 393** |
+| Modified tracked files beneath `bsm3/` | **6 of 8** |
+| Untracked user `.py` files importing `bsm3` | **57 of 144** |
+| Modified tracked files importing `bsm3` | **5 of 8** |
+| Tracked `.py` files referencing the namespace | 53 |
+
+Renaming the import package would break 57 untracked user scripts and 5
+user-modified tracked files, **none of which either agent is permitted to
+edit**. A `git mv bsm3 gamma_mdo` also renames the directory on disk, silently
+relocating 304 untracked user files into a namespace their own imports no
+longer match. There is no version of that operation that is both complete and
+safe while the dirty tree is live.
+
+This is **not** a compatibility shim, which the user rules out; it is declining
+to perform a rename. A distribution name that differs from its import name is
+ordinary: `scikit-learn`/`sklearn`, `pillow`/`PIL`, `beautifulsoup4`/`bs4`.
+`pip install gamma-mdo` then `import bsm3` is coherent and honest.
+
+The migration is recorded as **M5.2, blocked**, and starts only when the user
+resolves the dirty work. Splitting public branding from namespace migration is
+what makes the alpha shippable now.
+
+Consequence worth stating plainly: the alpha ships with a public name that does
+not match its import name. That is a real discoverability cost, accepted
+deliberately in exchange for not destroying user work.
+
+### 4. Version — **v0.2.0a1**, not v0.1.0a1
+
+Established facts: `pypi.org/pypi/bsm3/json` → **404**, so the project was
+never published. `git tag` is empty and `git ls-remote --tags origin` returns
+nothing, so **no release was ever tagged**, locally or on `origin`. `0.1.4`
+therefore has no public history, and `v0.1.0a1` would create no *public*
+regression — it is permissible under the stated test.
+
+It is still the worse choice. The source has claimed `0.1.4` throughout the
+project's life, `setup.py` derives from it and `docs/conf.py` reads it, so every
+source install in the user's own environments reports `0.1.4` today. Publishing
+`0.1.0a1` would leave working installations reporting a version *newer* than
+the first published release, and `pip install --upgrade` would read as a
+downgrade. `v0.2.0a1` is strictly forward-moving, costs nothing, and removes
+that anomaly.
+
+This is a product decision. If the user prefers `v0.1.0a1`, the evidence
+supports it and the prompt needs only that one substitution.
+
+### 5. Dirty-tree-safe implementation
+
+Ruling 3 removes the entire risk class: **because `bsm3/` does not move, there
+is no directory operation to make safe.** No worktree gymnastics are required.
+
+The rename surface is 19 tracked files — root metadata and the published docs —
+and it was checked against the dirty set directly:
+
+```text
+branding files: 19    dirty files: 8    overlap: 0
+```
+
+Zero. Every user-dirty file lives under `bsm3/core/...` or
+`examples/basic_examples/`, and neither appears in the branding surface. A
+literal per-path allowlist is therefore sufficient, with a pre/post count of
+8 modified and 393 untracked as the proof.
+
+### 6. Read the Docs alpha — HTML only, and one real config defect
+
+`.readthedocs.yaml` currently declares:
+
+```yaml
+formats:
+  - pdf
+  - htmlzip
+```
+
+**Neither has ever been built.** Only strict HTML has been verified, repeatedly,
+including from clean clones. With `fail_on_warning: true` in the same file, the
+first hosted build would apply warnings-as-errors to an unverified LaTeX
+toolchain. This is not merely a policy preference for HTML-first — it is a
+change the repository actually needs before any hosted build is attempted.
+
+The build stays hermetic: `docs/conf.py` reads `__version__` by regex without
+importing the package, so no CSDL_alpha, lsdo_function_spaces, JAX, gmsh,
+DAFoam, MPI, or VortexAD is required to build the site.
+
+**Actions Codex may prepare in the repository:** `setup.py` name/url,
+`bsm3/__init__.py` version, `docs/conf.py` project/author/title,
+`.readthedocs.yaml` formats and comments, README badge and links, and the
+remaining prose in the published docs.
+
+**Actions requiring explicit user authorization — no agent performs them:**
+renaming the GitHub repository, creating the Read the Docs project and its
+webhook, setting the default version and activating the tag, creating and
+pushing the `v0.2.0a1` tag, and any PyPI reservation or publication.
+
+### Ordering
+
+M4.1 accepted → **M5 (identity)** → **M6 (RTD alpha)** → M4.2 → M3 last. The
+complete M4.2 prompt is preserved verbatim at `38cd0bf` and is recoverable with
+`git show 38cd0bf:docs/overhaul/CODEX_NEXT.md`; it was not rewritten or
+weakened. M3 archive/history pruning remains last.
+
+Status:    closed
