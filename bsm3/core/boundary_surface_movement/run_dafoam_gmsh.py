@@ -92,9 +92,9 @@ class FlowConfig:
     temperature_k
         Freestream static temperature in kelvin.
     nu_tilda_m2_per_s
-        Spalart-Allmaras working variable in square metres per second.
-        Carried by the configuration and exposed on the CLI, but **not
-        currently consumed** by :func:`build_da_options`.
+        Spalart-Allmaras working variable in square metres per second, applied
+        as the farfield ``nuTilda0`` primal boundary condition. Must be finite
+        and non-negative.
     reference_area_m2
         Reference area in square metres, normalizing the force coefficients.
     gas_constant_j_per_kg_k
@@ -103,12 +103,10 @@ class FlowConfig:
         Axis label, ``"y"`` or ``"z"``, spanning the lift direction together
         with the flow direction.
     use_wall_functions
-        Intended to select wall functions instead of resolving the near-wall
-        layer. It is **not currently consumed** by :func:`build_da_options`,
-        which hardcodes ``primalBC/useWallFunction`` to ``False``. The CLI also
-        derives it from ``--no-wall-functions``, so the parser's effective
-        default is ``True`` and does not match this dataclass default of
-        ``False``.
+        Select wall functions instead of resolving the near-wall layer. It sets
+        ``primalBC/useWallFunction`` in the DAFoam options. On the CLI it is
+        controlled by ``--wall-functions`` / ``--no-wall-functions``, whose
+        default is this dataclass default.
     primal_min_res_tol
         Residual the steady primal must reach. Must be positive.
     primal_min_iterations
@@ -162,14 +160,17 @@ class FlowConfig:
     adjoint_gmres_restart: int = 1_000
 
     def __post_init__(self) -> None:
-        """Validate the convergence and adjoint solver settings.
+        """Validate the freestream, convergence, and adjoint solver settings.
 
         Raises
         ------
         ValueError
-            If any tolerance is non-positive, an iteration count is below one,
-            or ``primal_max_iterations`` is below ``primal_min_iterations``.
+            If ``nu_tilda_m2_per_s`` is non-finite or negative, any tolerance is
+            non-positive, an iteration count is below one, or
+            ``primal_max_iterations`` is below ``primal_min_iterations``.
         """
+        if not math.isfinite(self.nu_tilda_m2_per_s) or self.nu_tilda_m2_per_s < 0.0:
+            raise ValueError("nu_tilda_m2_per_s must be finite and non-negative")
         if self.primal_min_res_tol <= 0.0:
             raise ValueError("primal_min_res_tol must be positive")
         if self.primal_min_iterations < 1:
@@ -965,7 +966,12 @@ def build_da_options(
                 "patches": farfield_patches,
                 "value": [config.temperature_k],
             },
-            "useWallFunction": False,
+            "nuTilda0": {
+                "variable": "nuTilda",
+                "patches": farfield_patches,
+                "value": [config.nu_tilda_m2_per_s],
+            },
+            "useWallFunction": bool(config.use_wall_functions),
         },
         "primalVarBounds": {
             "pMin": max(1.0, 0.05 * config.pressure_pa),
@@ -1143,12 +1149,11 @@ def make_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for this driver.
 
     The numerical flow and solver options take their defaults from a
-    default-constructed :class:`FlowConfig`. The case, path, and patch-name
-    options do **not**: they carry their own parser defaults, independent of the
-    dataclass. The wall-function flag is a further exception, since
-    ``--no-wall-functions`` inverts it and leaves the parser's effective default
-    disagreeing with the dataclass default. So the two are consistent only for
-    the numerical options, not across the whole surface.
+    default-constructed :class:`FlowConfig`, as does the ``--wall-functions``
+    flag, which uses :class:`argparse.BooleanOptionalAction` so both
+    ``--wall-functions`` and ``--no-wall-functions`` are accepted. The case,
+    path, and patch-name options do **not** come from the dataclass: they carry
+    their own parser defaults.
 
     This is the CLI surface of a standalone driver script; it is unrelated to
     the no-CLI user example.
@@ -1264,9 +1269,14 @@ def make_parser() -> argparse.ArgumentParser:
         help="Aerodynamic lift/angle-of-attack axis (default: z)",
     )
     parser.add_argument(
-        "--no-wall-functions",
-        action="store_true",
-        help="Set primalBC/useWallFunction to False",
+        "--wall-functions",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.use_wall_functions,
+        help=(
+            "Use wall functions instead of resolving the near-wall layer; "
+            "sets primalBC/useWallFunction "
+            f"(default: {defaults.use_wall_functions})"
+        ),
     )
     parser.add_argument(
         "--primal-tolerance",
@@ -1419,7 +1429,7 @@ def main() -> int:
         nu_tilda_m2_per_s=args.nu_tilda,
         reference_area_m2=args.reference_area,
         normal_axis=args.normal_axis,
-        use_wall_functions=not args.no_wall_functions,
+        use_wall_functions=args.wall_functions,
         primal_min_res_tol=args.primal_tolerance,
         primal_min_iterations=args.primal_min_iterations,
         primal_max_iterations=args.primal_max_iterations,

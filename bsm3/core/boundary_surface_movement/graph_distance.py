@@ -33,12 +33,49 @@ graph matrix stays SPD.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypedDict
 
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.csgraph import dijkstra
 
 from bsm3.preprocessing.mesh_io import _as_mesh_data
+
+
+class GraphDistanceSummary(TypedDict):
+    """Setup-time statistics returned by :meth:`GraphDistanceWeighting.summary`.
+
+    Every value is a plain Python scalar, so the summary is directly
+    JSON-serializable. The decay *kind* is intentionally not included: it is a
+    configuration choice rather than a measured statistic, and callers read it
+    from the configuration object that built the weighting.
+
+    Attributes
+    ----------
+    beta
+        Secondary-weight strength actually in force. ``0.0`` makes every edge
+        multiplier exactly one.
+    length
+        Decay length scale ``L`` in model length units.
+    cap
+        Upper bound applied to each edge multiplier.
+    num_reachable_vertices
+        Number of vertices with a finite distance from the enabled seam seeds.
+        Vertices in a disconnected component stay infinite and are excluded.
+    max_finite_distance
+        Largest finite seed distance, or ``0.0`` when no vertex is reachable.
+    multiplier_min, multiplier_median, multiplier_max
+        Minimum, median, and maximum edge multiplier over the queried edges.
+    """
+
+    beta: float
+    length: float
+    cap: float
+    num_reachable_vertices: int
+    max_finite_distance: float
+    multiplier_min: float
+    multiplier_median: float
+    multiplier_max: float
 
 
 @dataclass(frozen=True)
@@ -145,7 +182,7 @@ class GraphDistanceWeighting:
         multipliers = self.edge_multipliers(np.asarray(keys, dtype=np.int64))
         return {tuple(int(v) for v in key): float(m) for key, m in zip(keys, multipliers)}
 
-    def summary(self, edge_vertices: np.ndarray) -> dict[str, float | int | str]:
+    def summary(self, edge_vertices: np.ndarray) -> GraphDistanceSummary:
         """Summarize distance multipliers over a set of edges.
 
         Parameters
@@ -155,8 +192,10 @@ class GraphDistanceWeighting:
 
         Returns
         -------
-        dict[str, float | int | str]
-            Configuration and reachable-distance/multiplier statistics.
+        GraphDistanceSummary
+            Configuration scalars together with reachable-distance and
+            multiplier statistics. The decay *kind* is deliberately absent; read
+            it from the configuration that built this weighting.
         """
         multipliers = self.edge_multipliers(edge_vertices)
         finite = self.vertex_distance[np.isfinite(self.vertex_distance)]
@@ -164,7 +203,6 @@ class GraphDistanceWeighting:
             "beta": float(self.beta),
             "length": float(self.length),
             "cap": float(self.cap),
-            "decay": self.decay,
             "num_reachable_vertices": int(finite.size),
             "max_finite_distance": float(np.max(finite)) if finite.size else 0.0,
             "multiplier_min": float(np.min(multipliers)),

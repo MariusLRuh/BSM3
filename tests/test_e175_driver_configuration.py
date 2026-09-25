@@ -196,3 +196,30 @@ def test_end_to_end_cl_constraint_cd_objective_uses_py_simulator():
     checks = run_end_to_end_derivative_check(recorder, config)
     assert checks
     assert max(float(entry["rel_error"]) for entry in checks.values()) < 1.0e-5
+
+
+def test_e175_dafoam_result_mesh_motion_is_optional():
+    """Require the optional annotation the rank-0 snapshot actually needs."""
+    import dataclasses
+    import typing
+
+    from bsm3.core.boundary_surface_movement.cfd_mesh_dafoam_analysis import (
+        E175DAFoamResult,
+    )
+    from bsm3.core.boundary_surface_movement.mesh_motion_config import (
+        MeshMotionResult,
+    )
+
+    field = {f.name: f for f in dataclasses.fields(E175DAFoamResult)}[
+        "mesh_motion"
+    ]
+    assert field.type == "MeshMotionResult | None"
+
+    hints = typing.get_type_hints(E175DAFoamResult)
+    assert hints["mesh_motion"] == typing.Optional[MeshMotionResult]
+
+    # A non-root or lazy-root construction stores None without a type error.
+    result = E175DAFoamResult(
+        mesh_motion=None, flow_outputs={}, cl=None, cd=None
+    )
+    assert result.mesh_motion is None

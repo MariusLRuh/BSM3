@@ -458,3 +458,66 @@ def test_live_backend_total_vjp_has_correct_discrete_adjoint_sign():
         derivatives["volume_coordinates"], expected_volume
     )
     np.testing.assert_allclose(derivatives["patch_velocity"], expected_flow)
+
+
+def test_flow_config_validates_nu_tilda():
+    """Reject a non-finite or negative Spalart-Allmaras freestream value."""
+    import dataclasses
+    import math
+
+    for bad in (math.nan, math.inf, -1.0e-6):
+        with pytest.raises(ValueError, match="nu_tilda_m2_per_s"):
+            dataclasses.replace(FlowConfig(), nu_tilda_m2_per_s=bad)
+
+    assert dataclasses.replace(
+        FlowConfig(), nu_tilda_m2_per_s=0.0
+    ).nu_tilda_m2_per_s == 0.0
+
+
+def test_build_da_options_applies_both_previously_dead_flow_fields():
+    """Propagate nu_tilda and the wall-function flag into the DAFoam options."""
+    import dataclasses
+
+    farfield = ("inlet", "outlet", "farfield")
+    config = dataclasses.replace(
+        FlowConfig(), nu_tilda_m2_per_s=1.5e-4, use_wall_functions=True
+    )
+    options = build_da_options(config, ["aircraft"], list(farfield))
+    primal_bc = options["primalBC"]
+
+    assert primal_bc["nuTilda0"] == {
+        "variable": "nuTilda",
+        "patches": list(farfield),
+        "value": [1.5e-4],
+    }
+    # DAFoam requires native containers, not tuples or NumPy arrays.
+    assert type(primal_bc["nuTilda0"]["patches"]) is list
+    assert type(primal_bc["nuTilda0"]["value"]) is list
+    assert all(type(name) is str for name in primal_bc["nuTilda0"]["patches"])
+    assert type(primal_bc["nuTilda0"]["value"][0]) is float
+
+    assert primal_bc["useWallFunction"] is True
+
+    resolved = build_da_options(
+        dataclasses.replace(config, use_wall_functions=False),
+        ["aircraft"],
+        list(farfield),
+    )
+    assert resolved["primalBC"]["useWallFunction"] is False
+
+
+def test_wall_function_cli_flag_defaults_to_the_dataclass_value():
+    """Accept both flag forms and default to FlowConfig's own value."""
+    from bsm3.core.boundary_surface_movement.run_dafoam_gmsh import make_parser
+
+    parser = make_parser()
+    required = ["--reuse-openfoam-mesh"]
+
+    assert parser.parse_args(required).wall_functions is (
+        FlowConfig().use_wall_functions
+    )
+    assert parser.parse_args(required + ["--wall-functions"]).wall_functions is True
+    assert (
+        parser.parse_args(required + ["--no-wall-functions"]).wall_functions
+        is False
+    )

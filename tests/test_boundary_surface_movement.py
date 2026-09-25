@@ -20,6 +20,7 @@ from bsm3.core.boundary_surface_movement import (
     DisplacementInterpolationParameters,
     DisplacementInterpolator,
     ElasticityMotionSolver,
+    GraphDistanceSummary,
     GraphDistanceWeighting,
     GraphLaplacianAssembler,
     GraphLoadStepResult,
@@ -2093,3 +2094,53 @@ def test_identify_reevaluated_vertices_still_returns_kept_vertices():
     )
     assert len(metadata) == 1
     assert metadata[0].vertex_ids.tolist() == [1, 2]
+
+
+def test_graph_distance_summary_exposes_exact_typed_keys():
+    """Pin the summary contract and prove the dead decay entry is gone."""
+    mesh, _points = _two_quad_mesh()
+    weighting = build_graph_distance_weighting(
+        mesh, np.array([0]), beta=1.5, length=1.0, cap=3.0
+    )
+    edges = np.array([[0, 1], [1, 4], [3, 4]], dtype=np.int64)
+
+    summary = weighting.summary(edges)
+
+    assert set(summary) == {
+        "beta",
+        "length",
+        "cap",
+        "num_reachable_vertices",
+        "max_finite_distance",
+        "multiplier_min",
+        "multiplier_median",
+        "multiplier_max",
+    }
+    # The decay kind is configuration, not a measured statistic.
+    assert "decay" not in summary
+    assert set(GraphDistanceSummary.__annotations__) == set(summary)
+
+    assert isinstance(summary["beta"], float)
+    assert isinstance(summary["length"], float)
+    assert isinstance(summary["cap"], float)
+    assert isinstance(summary["num_reachable_vertices"], int)
+    assert not isinstance(summary["num_reachable_vertices"], bool)
+    for key in ("max_finite_distance", "multiplier_min", "multiplier_median",
+                "multiplier_max"):
+        assert isinstance(summary[key], float)
+
+    assert summary["beta"] == pytest.approx(1.5)
+    assert summary["length"] == pytest.approx(1.0)
+    assert summary["cap"] == pytest.approx(3.0)
+    assert summary["num_reachable_vertices"] == mesh.vertices.shape[0]
+    assert summary["max_finite_distance"] > 0.0
+    assert 1.0 <= summary["multiplier_min"] <= summary["multiplier_median"]
+    assert summary["multiplier_median"] <= summary["multiplier_max"] <= 3.0
+
+
+def test_graph_distance_summary_is_exported_from_the_package():
+    """Require the typed summary beside the weighting it describes."""
+    import bsm3.core.boundary_surface_movement as package
+
+    assert "GraphDistanceSummary" in package.__all__
+    assert package.GraphDistanceSummary is GraphDistanceSummary

@@ -413,8 +413,8 @@ class E175DAFoamResult:
         built, so it is ``None`` on every non-root rank, which holds no
         backend, and can **also** be ``None`` on the root rank when the custom
         operation has not executed inline before that snapshot. Being on root
-        is therefore not a guarantee that it is populated. The annotation is
-        not currently optional; see the M1.7 carry-in.
+        is therefore not a guarantee that it is populated, which is why the
+        annotation is optional.
     flow_outputs
         Every aerodynamic function DAFoam produced, keyed by function name.
     cl
@@ -423,7 +423,7 @@ class E175DAFoamResult:
         Drag-coefficient variable, the ``"CD"`` entry of ``flow_outputs``.
     """
 
-    mesh_motion: MeshMotionResult
+    mesh_motion: MeshMotionResult | None
     flow_outputs: dict[str, csdl.Variable]
     cl: csdl.Variable
     cd: csdl.Variable
@@ -739,8 +739,8 @@ def build_cfd_analysis_rank0(
         ``last_mesh_motion_result`` taken as the result is constructed, so it is
         ``None`` on every non-root rank, which builds no backend, and may still
         be ``None`` on the root rank if the custom operation has not executed
-        inline by then. The field's annotation does not yet express either
-        case; see the carry-in recorded for M1.7.
+        inline by then. The field is annotated ``MeshMotionResult | None`` to
+        express both cases.
 
     Raises
     ------

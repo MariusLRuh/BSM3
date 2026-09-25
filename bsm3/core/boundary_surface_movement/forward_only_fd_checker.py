@@ -394,7 +394,7 @@ class DerivativeComparison:
         default_factory=dict
     )
 
-    def best(self) -> dict[tuple[str, str], tuple[float, float]]:
+    def best(self) -> dict[tuple[str, str], tuple[float | None, float]]:
         """Return the best step and error for each derivative entry.
 
         "Best" means the smallest recorded relative error across the swept
@@ -405,10 +405,12 @@ class DerivativeComparison:
         -------
         dict
             Keyed by ``(output_name, design_variable_name)``, each value the
-            tuple ``(best_eta, best_relative_error)``. An entry with no
-            recorded error yields ``(None, inf)``.
+            tuple ``(best_eta, best_relative_error)``. The step is ``float |
+            None``: an analytical key with no recorded finite error yields
+            ``(None, inf)``, which happens when no swept step produced a
+            comparable finite value for that entry.
         """
-        result: dict[tuple[str, str], tuple[float, float]] = {}
+        result: dict[tuple[str, str], tuple[float | None, float]] = {}
         keys = self.analytical.keys()
         for key in keys:
             best_eta = None

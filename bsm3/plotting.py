@@ -48,12 +48,10 @@ def plot_components(
         :exc:`TypeError`.
     colors
         A single color applied to every component, or one color per component.
-        The empty string means "leave the component's own color alone". A
+        The empty string and ``None`` both mean "leave the component's own color
+        alone", so no color keyword is passed for that component. A
         per-component sequence whose length does not match ``components``
-        raises :exc:`ValueError`. ``None`` is **not** accepted and currently
-        raises :exc:`TypeError` whenever at least one component is given,
-        because it reaches the broadcast helper before the per-component check;
-        pass ``""`` instead.
+        raises :exc:`ValueError`.
     show
         When ``True``, render the accumulated elements in a blocking window
         before returning them.
@@ -77,7 +75,11 @@ def plot_components(
     """
     component_list = [] if components is None else list(components)
     elements = _normalize_plotting_elements(plotting_elements)
-    color_values = _broadcast(colors, len(component_list), "colors")
+    # None is the same "leave the component's own color alone" request as the
+    # empty-string sentinel; broadcasting it directly would fail on list(None).
+    color_values = _broadcast(
+        "" if colors is None else colors, len(component_list), "colors"
+    )
     opacity_values = _broadcast(opacity, len(component_list), "opacity")
 
     for component, color, component_opacity in zip(component_list, color_values, opacity_values):

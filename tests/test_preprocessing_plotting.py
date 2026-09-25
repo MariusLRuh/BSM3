@@ -1008,3 +1008,42 @@ def test_import_trusted_polygon_pickle_remains_an_opt_in_boundary(tmp_path):
     # It is reachable only on purpose: suffix dispatch still refuses pickles.
     with pytest.raises(ValueError, match="Unsupported mesh format"):
         preprocessing.import_mesh(path)
+
+
+def test_plot_components_none_colors_preserves_component_colors():
+    """Treat ``colors=None`` like the empty-string no-override sentinel."""
+
+    class _Component:
+        def __init__(self):
+            self.kwargs = None
+
+        def plot(self, **kwargs):
+            self.kwargs = kwargs
+            return kwargs["additional_plotting_elements"]
+
+    first, second = _Component(), _Component()
+    elements = plotting.plot_components([first, second], colors=None)
+
+    assert elements == []
+    # No color keyword means each component keeps its own color.
+    assert "color" not in first.kwargs
+    assert "color" not in second.kwargs
+    assert first.kwargs["opacity"] == 1.0
+    assert first.kwargs["show"] is False
+
+    # The empty string behaves identically.
+    empty = _Component()
+    plotting.plot_components([empty], colors="")
+    assert "color" not in empty.kwargs
+
+    # An explicit color is still forwarded.
+    explicit = _Component()
+    plotting.plot_components([explicit], colors="red")
+    assert explicit.kwargs["color"] == "red"
+
+    # Per-component lists and their length rule are unchanged.
+    left, right = _Component(), _Component()
+    plotting.plot_components([left, right], colors=["red", "blue"])
+    assert (left.kwargs["color"], right.kwargs["color"]) == ("red", "blue")
+    with pytest.raises(ValueError, match="colors"):
+        plotting.plot_components([left, right], colors=["red", "blue", "green"])

@@ -33,6 +33,7 @@ from bsm3.core.boundary_surface_movement.geometry_volume_operation import (
 )
 from bsm3.core.boundary_surface_movement.forward_only_fd_checker import (
     ADJOINT_MARKER,
+    DerivativeComparison,
     check_derivatives_forward_first,
     degree_radian_relative_error,
     guard_against_adjoint_output,
@@ -637,3 +638,40 @@ def test_level6_rejects_invalid_controls(monkeypatch):
     monkeypatch.setenv("LADDER_PRIMAL_ETA", "not_a_number")
     with pytest.raises(ValueError, match="LADDER_PRIMAL_ETA"):
         ladder.level6_primal_only_deformation(SerialComm())
+
+
+def test_derivative_comparison_best_step_is_none_without_a_recorded_error():
+    """Return ``(None, inf)`` when an analytical key has no finite error."""
+    import math
+    import typing
+
+    key = ("CD", "wing_area")
+    comparison = DerivativeComparison(
+        analytical={key: np.array([1.25])},
+        fd_by_eta={},
+    )
+    # No step was swept, so nothing populated relative_error_by_eta.
+    assert comparison.relative_error_by_eta == {}
+
+    best = comparison.best()
+    assert set(best) == {key}
+    best_eta, best_error = best[key]
+    assert best_eta is None
+    assert math.isinf(best_error)
+
+    hints = typing.get_type_hints(DerivativeComparison.best)
+    assert hints["return"] == dict[tuple[str, str], tuple[float | None, float]]
+
+
+def test_derivative_comparison_best_step_is_a_float_when_errors_exist():
+    """Keep the populated-comparison selection behaviour unchanged."""
+    key = ("CD", "wing_area")
+    comparison = DerivativeComparison(
+        analytical={key: np.array([1.0])},
+        fd_by_eta={1e-2: {key: np.array([2.0])}, 1e-4: {key: np.array([1.0])}},
+        relative_error_by_eta={1e-2: {key: 0.5}, 1e-4: {key: 1e-9}},
+    )
+
+    best_eta, best_error = comparison.best()[key]
+    assert best_eta == pytest.approx(1e-4)
+    assert best_error == pytest.approx(1e-9)

@@ -49,6 +49,7 @@ from .geometry import (
     stack_component_coefficients_numpy,
 )
 from .graph_distance import (
+    GraphDistanceSummary,
     GraphDistanceWeighting,
     build_graph_distance_weighting,
     compute_multisource_geodesic_distance,
@@ -193,6 +194,7 @@ __all__ = [
     "DerivativeCheck",
     "GeometryModel",
     "GeometryVolumeBackend",
+    "GraphDistanceSummary",
     "GraphDistanceWeighting",
     "GraphVolumeSystem",
     "GraphLaplacianAssembler",
