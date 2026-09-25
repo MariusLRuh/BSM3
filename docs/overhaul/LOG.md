@@ -5042,3 +5042,124 @@ five literal workflow Ruff groups passed. No DAFoam, OpenFOAM, VortexAD, or
 real-MPI run occurred.
 
 Status:    closed
+
+---
+
+## Turn 68 — Claude, reviewer/planner, 2026-09-25
+Scope:     Review the M4.1 symmetric-dump correction; accept M4.1; plan M4.2
+Base:      9930dbe
+Reviewed:  bc40560 (implementation), 7077ca6 (handoff)
+Status:    **M4.1 ACCEPTED**
+
+### Scope
+
+The changed-path union across `ad3099a`, `bc40560` and `7077ca6` is exactly the
+six authorized paths, and `git diff --check` is clean. Measured against the
+already-accepted `d0d1ff0`, only three production-side files differ — the
+pipeline helper, `docs/src/api.md`, and one test — and
+`load_stepping.py`, `projection.py`, `mesh_motion_config.py`, `mesh_motion.py`
+and `geometry_model.py` are byte-identical. No accepted M4.1 substance was
+touched.
+
+### `_global_intersection_vertices` verified by construction, not by reading
+
+Exercised directly against a synthetic `SymmetrySplit` covering both branches:
+
+- **Symmetric.** Each complete-mesh ID resolves through `gather_index` to its
+  retained-half row and takes that vertex's `mirror_sign`. Mirrored rows come
+  back with the axis coordinate negated and the other two preserved.
+- **Nonsymmetric.** Deliberately unsorted retained-half IDs are reordered into
+  the sorted global-ID order that `_global_surface_ids` produces, so the
+  coordinates follow the IDs rather than the input order. This was the latent
+  ordering hazard in the original half-mesh path; it is now closed.
+- **Symmetry plane.** `symmetry.py:133` sets `mirror_sign[plane, axis] = 0.0`,
+  so a plane seam vertex's axis coordinate is written as exactly `0.0`. That is
+  not a loss of precision: it reproduces the pipeline's own
+  `reconstruct_full_from_half` convention (`gathered * mirror_sign`) bit for
+  bit, so the archive and the reconstructed mesh agree exactly. The curated
+  panel's two seams carry no plane vertices (97/97 and 67/67 split about
+  `y = 0`), so the case is consistent but not exercised in production.
+- **Guards.** Both misalignment paths raise rather than pairing wrong rows: a
+  coordinate array of the wrong length or width fails the shape check, and an
+  unmapped retained-half row fails `np.any(rows < 0)`. The second cannot
+  trigger through the normal flow, since `_global_surface_ids` derives the IDs
+  from the same `gather_index`; it is a genuine guard, not dead code.
+
+### Before/after demonstrated, not accepted on report
+
+In a disposable clone of `bc40560`, reverting **only** the pipeline file back
+to `d0d1ff0` while keeping the new test:
+
+```text
+before: 1 failed — assert (97, 3) == (194, 3)   tests/test_e175_example.py:477
+after:  1 passed in 84.46 s
+```
+
+This is the correct shape of evidence: the test provably sees the bug it was
+written for. The regression also asserts coordinate identity against
+`dump["initial_vertices"][vertex_ids]` at `atol=1e-12`, not merely equal
+lengths, so a reordering or a sign error fails it too — equal row counts alone
+cannot satisfy it. `initial_vertices` is `setup.full_mesh.vertices`, the
+complete input mesh, which is the right index space for `vertex_ids`.
+
+### Documentation
+
+The API page now states the inline-recorder requirement where the caller-owned
+recorder is described, warns that the convenience FD path calls
+`set_as_objective()` and can replace an objective already registered in a
+larger optimization graph, and documents the NPZ intersection arrays as
+complete-mesh row-aligned pairs including mirror-expanded rows. All three match
+the implementation.
+
+The N-gon null-result ruling is recorded verbatim, and the Turn-65 entry was
+corrected in place so its `contains_8075` / `contains_14923` sentence can no
+longer be read as continuous with the Turn-64 measurement. No regularization
+default changed.
+
+### Gates reproduced
+
+| Gate | Result |
+| --- | --- |
+| `test_quad_panel_introduces_no_new_inverted_elements` | 1 passed, 84.46 s |
+| `tests/test_e175_example.py -m "not integration"` | 16 passed, 5 deselected |
+| `tests -m "not integration"` | 228 passed, 9 deselected |
+| `tests/test_boundary_surface_movement.py` | 45 passed |
+| Derivative / N-gon three-file guard | **exactly 6 passed** |
+| `test_triangle_wall_at_full_deformation_scale` | 1 passed, 104.99 s; 0 folds, 0/0/0 inversions, 4,435 projected, 0 failures |
+| `tests/test_documentation.py` | 12 passed |
+| Strict Sphinx 9.1.0 | build succeeded |
+| Five literal workflow Ruff groups | all passed |
+| Preservation | 8/8 modified byte-identical, 393 untracked, the visualization script's same two unstaged edits |
+
+**M4.1 is accepted. M4 remains open for M4.2.**
+
+### M4.2 planned
+
+The next prompt specifies a tracked VortexAD adapter, a VortexAD-free Breguet
+fuel-burn model, and a composed optimization example, against pinned external
+revisions. Four planning decisions are deliberate and recorded here:
+
+1. **VortexAD stays optional.** It is not in the validated environment and this
+   turn installs nothing. The adapter imports it lazily, mirroring
+   `MeshMotionVolumeBackend`, and every tracked test runs without it. M2's
+   clean-install contract is explicitly protected: `install_requires` stays
+   empty and `requirements-ci.txt` is out of the allowlist.
+2. **Fuel burn is separated from aerodynamics** precisely because it has no
+   VortexAD dependency and can therefore be tested properly today — analytic
+   value plus an FD derivative check — rather than hidden behind a skip.
+3. **Skips must not masquerade as passes.** Skip counts are reported separately
+   from passes, and the adapter's differentiability is checked against a fake
+   panel solver so a real VJP-versus-FD comparison runs in CI.
+4. **The example manages its FD objective explicitly**, because M4.1 documented
+   that `derivative_check.enabled` calls `set_as_objective()` and would replace
+   an optimization's own objective.
+
+The prompt also requires the pin to be a full 40-character SHA or an explicitly
+recorded blocker — never an invented hash or a branch name — and requires the
+fresh-clone import smoke test to run from outside the source tree, which is the
+Turn-64 false positive written into the checklist.
+
+M3 release pruning stays separate and last. `GAMMA` remains M3 naming guidance;
+nothing was renamed.
+
+Status:    closed
