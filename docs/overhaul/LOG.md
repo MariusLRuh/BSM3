@@ -5707,3 +5707,165 @@ and untracked-list SHA-256
 
 M3 remains separate and last. The GitHub rename remains the first external
 publication action and was not performed here.
+
+---
+
+## Turn 75 — Claude, reviewer/planner, 2026-09-25
+Scope:     Review M4.2
+Base:      699ad9a
+Reviewed:  027a890 (implementation), d1b90c2 (handoff)
+Status:    **M4.2 ACCEPTED. M4 CLOSED.** No external action taken.
+
+### Scope
+
+`027a890` is exactly the 11 declared paths; `d1b90c2` exactly the four
+collaboration documents; `git diff --check` clean. `setup.py`,
+`requirements-ci.txt`, and the workflow are untouched, so the M2 clean-install
+contract is intact.
+
+### 1 & 4. The pin verified against the official repository, without installing
+
+Commit `8c5bc86fda5fa1e359fecde24c6c6e8527c773b5` exists in `LSDOlab/VortexAD`
+(committed 2026-09-25) and its `VortexAD/__init__.py` at that revision exports
+`PanelMethod`, `TE_detection`, and `find_cell_adjacency`. Reading
+`pm_class.py`, `cell_adjacency.py`, and `TE_detection.py` at that same SHA:
+
+- All 11 `solver_input_dict` keys the adapter passes exist in
+  `default_input_dict` — no silently ignored typo. `solver_mode` defaults to
+  `'steady'` and `wake_mode` to `'fixed'`, so `reuse_AIC=True` is applicable
+  rather than inert, and it forces `nn_geom = 1`, matching the adapter's
+  single-case alpha.
+- `CL`, `CDi`, `L`, `Di` are all in `output_options_dict`, each documented at
+  shape `(num_nodes,)`, which is the scalar shape the adapter and fuel model
+  assume.
+- `PanelMethod(solver_input_dict, threshold_angle, skip_geometry)` with
+  `skip_geometry=True` skips `mesh_path` and flow setup; `evaluate()` then
+  recovers with `if not self.flow_properties_flag: self.setup_flow_properties()`
+  **after** `insert_mesh` has supplied `self.points`. The construct → insert →
+  declare → evaluate ordering is therefore valid, not accidental.
+- `find_cell_adjacency` returns the 5-tuple
+  `(points, cells, cell_adjacency, edges2cells, points2cells)`; the adapter
+  reads indices 0, 1, 3, 4 correctly. `TE_detection`'s keywords and its 4-tuple
+  return line up with `insert_TE_properties`.
+- `cells` is a **dict keyed by cell type** throughout VortexAD
+  (`cells.keys()`, `cells[cell_type].tolist()`), so the mixed triangle/quad
+  blocks of the full symmetric E175 panel are accepted exactly as passed.
+
+**The duplicate-node guard is the best thing in this implementation.**
+`find_cell_adjacency` calls `remove_duplicate_nodes` unconditionally, and
+`insert_cell_adjacency` deliberately ignores the returned `points` while
+`insert_mesh` takes the differentiable coordinates separately. If VortexAD ever
+collapsed a node, its connectivity would silently stop indexing
+`surface_coordinates`. The adapter compares `adjacency[0].shape` against the
+baseline and **raises**. That is an assumption made honest rather than assumed.
+
+**Upstream hazard recorded, not a defect here:** `PanelMethod.__init__` does
+`options_dict = default_input_dict` with no copy and then mutates it, so
+constructing a solver mutates VortexAD's module-level defaults for the process.
+Impact on GAMMA is low because the adapter passes all 11 keys it depends on
+explicitly, but a second `build_panel_aerodynamics` call in one process would
+inherit the first call's unspecified settings.
+
+### 2, 3 & 10. Boundary, discipline, and the installed surface
+
+Importing `bsm3.mesh_motion` and `bsm3.core.boundary_surface_movement` leaves
+`VortexAD` out of `sys.modules`; the actionable `ImportError` naming the pin and
+`--no-deps` arises only inside the builder. The adapter reads only public
+result fields, never starts or stops a recorder, restricts panels to
+triangle/quad, and validates the projection status — including rejecting any
+overlap between reprojected and exact-intersection IDs, which reuses M4.1's own
+guarantee as a precondition rather than restating it.
+
+From `/tmp`, the installed wheel imports from site-packages at `0.2.0a1` with
+VortexAD absent and exposes `mm.PanelCondition`,
+`mm.build_panel_aerodynamics`, and `mm.compute_fuel_burn`. Package-root
+`bsm3.PanelCondition` is **False**, correctly not a promised export.
+
+### 5. Fuel model re-derived
+
+From `R = V / (g · TSFC) · (CL/CD) · ln(W_i / W_f)`, solving for burned weight
+gives `W_i · (1 − exp(−R · g · TSFC · CD / (V · CL)))`, which is the
+implementation exactly. Dimensionally: `g · TSFC` → 1/s, `V/(g·TSFC)` → metres,
+the exponent is dimensionless, and the result is newtons. The exponent is
+negative, so fuel burn is positive; it increases with `CD` and decreases with
+`CL`, and the test pins that sign with `analytic_value < 0.0`. Gravity is
+9.80665 exactly and labelled as standard gravity.
+
+Returning fuel **weight** in newtons is clear: the `Returns` section says so,
+and `initial_weight_newton` carries its unit in the name. Constants are
+labelled strongly — the module refuses package defaults and requires sourced
+values, while the example prefixes `ILLUSTRATIVE_` and opens its docstring with
+"not validated E175 performance data."
+
+### 6. Composed derivative
+
+`test_fake_panel_to_fuel_graph_matches_centered_fd` carries a design amplitude
+through the mesh coordinates, the fake solver's `CL` and `CDi`, the total drag
+including the parasite term, and `compute_fuel_burn`, then compares
+`csdl.derivative` of the **fuel scalar** against centered differences at three
+step sizes. It also asserts `abs(analytic) > 1e-6`, so it cannot pass by the
+derivative being trivially zero. This is the end-to-end check the milestone
+required, not a stop at an arbitrary aerodynamic scalar.
+
+### 7. Example
+
+Five ordered stages, no CLI, no local classes, public `mm` API only, the
+caller-owned recorder held open across mesh motion, panel, and fuel graph, and
+`derivative_check` left disabled with a comment explaining that the debug
+convenience would replace the optimization's own objective. Lift constraint and
+fuel objective are registered explicitly.
+
+Readability note, not a defect: `recorder.inline = False` at stage 4 is correct
+— `mm.run` has already consumed the inline forward values it requires — but it
+carries no comment, and a reader who copies that line earlier would violate the
+inline requirement the API page documents.
+
+### 8 & 9. Documentation and the Ruff gap
+
+The export inventory is exact at 22 entries, matching `mesh_motion.__all__`.
+The integrations page states plainly that the suite exercises the adapter with
+a fake solver and that "No real panel solve is claimed as a standard-CI
+result." No page claims a real VortexAD solve or a completed optimization.
+
+**Ruff workflow ruling: does not block M4.2.** None of the five new Python
+files appears in any of the five literal workflow path lists. I ran default
+Ruff and `--select D` on all five directly: clean. So this is a CI-coverage
+regression, not a code defect, and the workflow was correctly outside M4.2's
+allowlist — Codex was right not to edit it silently. It becomes the next
+narrowly scoped correction, whose required additions are the two production
+modules `panel_aerodynamics.py` and `fuel_burn.py` in both the critical-static
+list and the surface-motion-core `--select D` group.
+
+### Gates reproduced
+
+| Gate | Result |
+| --- | --- |
+| New tests | **12 passed, 1 skipped** (the skip is the `integration` pinned-export check, correctly skipped with VortexAD absent) |
+| `tests -m "not integration"` | 240 passed, 10 deselected |
+| `tests/test_boundary_surface_movement.py` | 45 passed |
+| `tests/test_e175_example.py -m "not integration"` | 16 passed, 5 deselected |
+| Derivative / N-gon three-file guard | **exactly 6 passed** |
+| M4.1 full-scale guards | **2 passed**, 19 deselected, 169.21 s |
+| `tests/test_documentation.py` | 12 passed |
+| Strict Sphinx 9.1.0, working tree and clean clone | build succeeded, clone status empty |
+| Five literal workflow Ruff groups | all passed |
+| Default Ruff + `--select D` on new files | passed |
+| Out-of-tree installed import | `0.2.0a1` from site-packages, VortexAD absent |
+
+Preservation exact: 8 modified, 393 untracked, dirty diff `981318…6177`,
+untracked list `c38fd93…da60`. Zero tags local or remote; nothing pushed;
+remote still `MariusLRuh/BSM3`.
+
+### Read the Docs readiness
+
+The repository side is **complete**. `.readthedocs.yaml` is v2 on Python 3.12
+with `fail_on_warning: true`, `formats: []`, and a docs-only pinned install;
+`docs/conf.py` carries GAMMA and reads `0.2.0a1` by regex without importing the
+package; `exclude_patterns` keeps `overhaul/` and `README.md` out of the
+toctree, so no orphan-document warnings; there is no `html_static_path`,
+`html_logo`, or `html_favicon` pointing at a missing file. The strict build
+succeeds both in place and from a clean clone of `027a890`. Nothing further is
+needed in the repository before hosting; the remaining steps are external and
+user-authorized.
+
+Status:    closed
