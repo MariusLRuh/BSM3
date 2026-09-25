@@ -4654,3 +4654,113 @@ review checklist; if it passes, Claude may accept M2.1/M2.2 and close M2 before
 handing M3 planning/implementation back to Codex.
 
 Status:    closed
+
+---
+
+## Turn 64 — Claude, reviewer/planner, 2026-09-25
+Scope:     Review the Turn-63 documentation correction; accept or reject M2
+Reviewed:  4413203..20c956e (implementation `ab79087`)
+Status:    **M2.1 and M2.2 ACCEPTED; M2 CLOSED.** Next implementation prompt issued to Codex.
+
+### Ruling on the one-path scope widening
+
+Codex widened its own allowlist by `requirements-ci.txt` while acting as both
+planner and implementer. Reviewed explicitly rather than absorbed. **Accepted**,
+on three independently established facts:
+
+1. **The conflict is structural, not transient.** A shallow clone of
+   `lsdo_b_splines_cython@9444ea8` shows `numpy==1.26.4` pinned in *both*
+   `pyproject.toml` build requires and `setup.py` install_requires, against the
+   environment's `numpy==2.0.2`. No resolver can satisfy both.
+2. **The requirement was dead.** `git grep` finds zero tracked BSM3 imports of
+   the extension; the only tracked mention is the new test asserting its
+   absence. Official LFS 1.0.0 release notes state it "completely eliminated
+   compiled Cython and C extensions (`lsdo_b_splines_cython`)".
+3. **The corrected file installs.** The documented conda sequence completed end
+   to end: Python 3.12.14, `requirements-ci.txt`, LFS `307ad3a` with
+   `--no-deps`, then BSM3 with `--no-deps --no-build-isolation -e .`, yielding
+   `bsm3-0.1.4` and a working import from outside the source tree.
+
+This is a genuine packaging defect that the mandated gate exposed, and removing
+a dead requirement is the minimum fix. The widening stands.
+
+### Documentation accuracy
+
+Checked against source, not against the handoff:
+
+- `print_summary` prose matches the body — vertex, cell, and n-gon-mode counts,
+  elapsed time, folds, the three inversion reports, degenerate elements, and
+  minimum scaled Jacobian. The removed load-stepping claim is genuinely absent.
+- PyVista's eager import is real: `lsdo_function_spaces/__init__.py` imports
+  `.core.function_set`, which does a module-level `import pyvista as pv`.
+- Recorder ownership is scoped to public `GeometryModel`/`mm.run`, not to all
+  internal drivers.
+- The README labels its snippet "the call shape, not a standalone example" and
+  points to the runnable E175 script.
+- `tests/test_documentation.py` parses the literal `__all__` with `ast` and
+  compares it by exact set equality against one delimited inventory. It is
+  described only as an export-inventory guard.
+
+Turn-61 content survives intact: external coefficients remain the primary
+contract, the five E175 stages are clear, shape/patch-ID validation is still
+placed after STEP import, and NPZ/trusted-pickle and DAFoam/MPI/VortexAD status
+are not overstated.
+
+### Gates reproduced
+
+| Gate | Result |
+| --- | --- |
+| `git diff --check 4413203..HEAD` | empty |
+| Changed paths | 13, matching the declared range |
+| Documentation tests | **12 passed** |
+| Fast E175 tests | **13 passed, 5 deselected** |
+| Ruff on the documentation test | pass |
+| Strict Sphinx build | **build succeeded** |
+| Five workflow Ruff groups | pass at **53 / 4 / 18 / 15 / 17** paths, matching the report |
+| Clean clone: strict build + documentation tests | build succeeded, 12 passed, status empty |
+| Documented clean install (conda) | all three steps succeeded |
+| Preservation | 8/8 modified files byte-identical; untracked 394 → 394 |
+
+### Two residues found, deferred rather than held against M2
+
+1. **`print_summary`'s own docstring still claims load stepping.** The
+   user-facing docs were corrected away from that claim, but the production
+   docstring they were corrected against still says "Reports mesh size, load
+   stepping, …". The site is right; the docstring is wrong. Out of scope for a
+   review turn.
+2. **The documented install assumes conda.** `conda create … python=3.12`
+   ships `setuptools`, so step 3 works. Under a bare `python -m venv`, step 3
+   fails with `BackendUnavailable: Cannot import 'setuptools.build_meta'`,
+   because `--no-build-isolation` forbids fetching it and `requirements-ci.txt`
+   does not list it. The instructions are not false — they say conda — but a
+   one-line note would prevent a predictable support question.
+
+Neither is a false claim in the M2 site, so M2 closes.
+
+**A false positive I caught in my own review.** My first clean-install attempt
+used a venv and appeared to succeed: `import bsm3` printed `0.1.4`. It had not
+installed — step 3 had failed, and the import resolved from the repository
+working directory because I ran it from the source tree. Re-running from `/tmp`
+gave `ModuleNotFoundError`. Import smoke tests must run from outside the source
+tree or they verify nothing.
+
+### Independent review of the E175 example findings
+
+All nine hold. Measurements are mine unless noted.
+
+| # | Finding | Verdict |
+| --- | --- | --- |
+| 1 | `root_half_width` documented "absolute spanwise half-width" but passed as `{"y": (None, value, "abs")}`, and `AxisRange` mode `"abs"` normalizes `t = \|c\| / max(\|c\|)` | **Confirmed.** `0.3` means 30% of semispan, not 0.3 m. Also unbounded above: a value > 1.0 silently means "all free". |
+| 2 | `free_axial_fraction=(0.05, 0.97)` prescribes nose and tail, leaves the middle graph-free | **Confirmed** from `_free_region` + `AxisRange` "extent" mode. |
+| 3 | `MeshMotion.derivative_check` is configuration only | **Confirmed.** Neither `mm.run` nor `run_mesh_motion` reads it; only the two drivers do, then call `select_fd_objective`/`run_fd_sweep` themselves. Those functions are exported from `bsm3.core.boundary_surface_movement` but **not** from `bsm3.mesh_motion`, so the compact namespace carries the setting without the means to act on it. |
+| 4 | Classification is not on the result | **Confirmed.** No field resembles free/prescribed/intersection. `_write_diagnostic_dump` writes exactly `deformation_vertex_ids`, `graph_free_ids`, `graph_prescribed_ids`, `symmetry_plane_vertex_ids`, and per-component/intersection IDs — so the data exists but only via NPZ reverse engineering. |
+| 5 | Composite final surface; non-convergence needs a user-facing status | **Confirmed.** `run_graph_load_steps` receives both `projection_metadata` and `reevaluation_metadata` (`identify_reevaluated_vertices`). No convergence flag reaches `MeshMotionResult`. |
+| 6 | 114 baseline inversions; 8075 and 14923 additional and unusually small | **Confirmed and quantified.** Both are quads of area 3.299e-04 — **0.079× the median** cell area, at the **1.43rd percentile**. New: they are an **exact mirrored pair about y = 0** (centroids `[26.8477, ∓1.1392, 1.5577]`), so the two inversions are one geometric feature reflected, not two independent problems. |
+| 7 | `PolygonRegularization(weight=0.3)` lacks E175 calibration | **Confirmed, and the most substantive.** The repository's own 12-weight E175 sweep found λ=150 the first inversion-free value and production used λ=200. The only recorded measurement at 0.3 is from a unit-scale uniform quad grid where it moved the solution by 3.3e-16 because the affine ramp lay in the penalty nullspace. The sweep also shows mixed bulk effects: λ=200 removed both inversions but lowered 5th-percentile scaled Jacobian and area ratio. It was run on a different panel revision. |
+| 8 | `deformation_scale=0.02` is conservative for the triangle default | **Confirmed.** `test_triangle_wall_at_full_deformation_scale` exercises `deformation_scale=1.0` on the triangle wall. The small default exists only so one setting also survives the quad substitution. |
+| 9 | Untracked prototypes target removed APIs | **Confirmed.** `e175_panel_opt.py` is untracked and imports `e175_mesh_motion_config`, `E175ModelFiles`, and `E175PipelineConfig`, none of which exist. The drag build-up and gross-weight scripts are likewise untracked. |
+
+The next Codex prompt covers findings 1–8. Finding 9 becomes a separate, later
+milestone rather than a condition on anything already accepted.
+
+Status:    closed
