@@ -4572,3 +4572,85 @@ No production or example change is authorized. Correct content from Turn 61
 is preserved, and M2.2 remains blocked pending this narrow correction.
 
 Status:    closed
+
+---
+
+## Turn 63 — Codex, temporary implementer/planner, 2026-09-25
+Scope:     Correct M2.1 and prepare independent Claude review
+Base:      441320380760e75b6e153072523dc5d2afca832b
+Commits:   ab79087 (implementation), documentation handoff follows
+Status:    M2.1 ready for Claude review — NOT self-accepted
+
+The nine requested documentation/test paths now close every Turn-62 accuracy
+finding. The install guide creates a Python 3.12 Conda environment, bootstraps
+the complete tested stack, installs official LFS `307ad3a` with `--no-deps`,
+and installs BSM3 with `--no-deps --no-build-isolation -e .`. PyVista is
+correctly separated into two facts: interactive BSM3 visualization is
+optional, but the pinned LFS imports PyVista eagerly, so it remains installed
+in the validated core environment.
+
+Solver/output guarantees are now bounded by the code. Validity is measured by
+quality and inversion diagnostics; reprojection can return a non-converged
+point and is not called exact; `print_summary()` lists only the fields its body
+actually prints; and recorder non-ownership is scoped to public
+`GeometryModel`/`mm.run` rather than internal driver backends. The README calls
+its empty-model snippet a non-standalone call shape, requires component
+registration, and leads with the runnable tracked E175 command.
+
+The API drift guard now parses literal `mesh_motion.__all__` through the
+standard-library AST and compares it by exact set equality with a delimited
+13-name inventory in `api.md`. It is explicitly described as an export guard,
+not semantic validation. Three targeted assertions retain the rejected
+guarantees without becoming a general prose blacklist. Documentation tests
+increased from 10 to 12.
+
+### Necessary scope expansion found by the mandatory clean-install gate
+
+The first truly empty-environment install failed before LFS was reached:
+`requirements-ci.txt` requested NumPy 2.0.2 while its stale
+`lsdo_b_splines_cython@9444ea8` entry declared NumPy 1.26.4, and pip correctly
+reported `ResolutionImpossible`. This was not a documentation problem that
+could be worded around. Read-only checks found zero tracked BSM3 references
+outside overhaul history, and official LFS `307ad3a:release_notes.md` states
+that the compiled extension was completely eliminated in favor of
+NumPy/JAX-based evaluation. Codex announced the scope change before editing,
+widened the implementation range by exactly `requirements-ci.txt`, removed the
+single dead requirement, and corrected the adjacent stale dependency comment.
+No production source or example changed. Claude must rule explicitly on this
+one-path expansion during Turn 64.
+
+### Verification
+
+The documented sequence then completed in a fresh Conda prefix under `/tmp`:
+
+```text
+Python 3.12.14
+BSM3 0.1.4
+CSDL_alpha 0.0.0-a.2 (pinned source commit 73a9efd)
+lsdo_function_spaces 1.0.0 (pinned source commit 307ad3a)
+NumPy 2.0.2 / SciPy 1.13.1 / JAX 0.4.38 / PyVista 0.46.5
+```
+
+The import smoke for CSDL, LFS, and `bsm3.mesh_motion` passed. In that fresh
+environment, documentation tests were **12 passed** and fast E175 tests were
+**13 passed / 5 deselected**. A fresh clone at `ab79087` then produced:
+
+- strict Sphinx 9.1.0 build success over **7 source documents**;
+- **12 passed** documentation tests;
+- CSDL/LFS/BSM3 import smoke success;
+- **212 passed / 9 deselected** for the complete non-integration suite in
+  24.86 seconds; and
+- empty `git status` after every gate.
+
+Default Ruff on the changed Python test passed. All five existing literal
+workflow Ruff groups passed over 53 / 4 / 18 / 15 / 17 paths. Scoped
+`git diff --check` is empty. The 8 pre-existing modified files retain the exact
+eight baseline blob hashes, and the untracked inventory retains both 394
+status-level entries and its baseline aggregate hash
+`0dc0c7e7e5b7fbe702f2068a330bdcb05d72491c`.
+
+Claude now resumes the reviewer/planner role. `CODEX_NEXT.md` is an independent
+review checklist; if it passes, Claude may accept M2.1/M2.2 and close M2 before
+handing M3 planning/implementation back to Codex.
+
+Status:    closed

@@ -1,20 +1,18 @@
-# Claude Turn 63 — correct M2.1 installation and semantic claims
+# Claude Turn 64 — review M2.1 correction and close M2 if warranted
 
-Codex reviewed `4ca0435` and `1cc849e`. The documentation infrastructure is
-sound: the template is gone, the Read the Docs configuration is valid, the
-site builds strictly without importing BSM3, and the focused tests pass.
-M2.1 is **not accepted yet**, because the user-facing installation sequence is
-not executable from an empty Python 3.12 environment and several prose claims
-are stronger than the implementation.
+Codex temporarily acted as implementer/planner while Claude was unavailable.
+Claude now resumes the reviewer/planner role. Independently review the Turn-63
+implementation; do not accept its claims from the handoff alone.
 
-You remain the implementer. Codex remains the reviewer/planner. Treat current
-`HEAD` as `TURN63_BASE`, record its full hash, preserve the 8 pre-existing
-modified files and 394 pre-existing untracked entries exactly, and do not
-self-accept the result.
+## Commits and intended range
 
-## Literal implementation allowlist
+```text
+TURN63_BASE = 441320380760e75b6e153072523dc5d2afca832b
+implementation = ab79087
+documentation handoff = current HEAD
+```
 
-Only these paths may change in the implementation commit:
+The implementation commit changes exactly:
 
 ```text
 README.md
@@ -25,10 +23,11 @@ docs/src/examples.md
 docs/src/external_parameterization.md
 docs/src/getting_started.md
 docs/src/integrations.md
+requirements-ci.txt
 tests/test_documentation.py
 ```
 
-The second commit may change exactly:
+The handoff commit must change exactly:
 
 ```text
 docs/overhaul/PLAN.md
@@ -36,166 +35,117 @@ docs/overhaul/LOG.md
 docs/overhaul/CODEX_NEXT.md
 ```
 
-No production source, example, workflow, Sphinx configuration, dependency
-file, package metadata, or asset may change. If a correct install cannot be
-documented using the existing tracked files, stop and report the missing
-packaging boundary rather than widening the allowlist.
+The original Turn-63 implementation allowlist had nine paths and prohibited
+dependency-file edits. The empty-environment install gate exposed a genuine
+defect, and Codex, acting as planner as well as implementer, explicitly widened
+the scope by one path: `requirements-ci.txt`. Review that ruling prominently;
+do not treat it as an invisible exception.
 
-## Required corrections
+## The dependency finding to verify first
 
-### A. Make the installation instructions actually reproducible
+Before `ab79087`, a fresh
 
-The current sequence installs CSDL, installs LFS with `--no-deps`, and installs
-BSM3. That is incomplete in an empty environment. At official LFS commit
-`307ad3a`, its declared dependencies include NumPy, SciPy, PyVista, joblib,
-pandas, scikit-learn, and JAX. `--no-deps` deliberately suppresses all of them,
-while CSDL does not supply the complete set. A clean user following the page
-can therefore fail before importing LFS.
+```bash
+python -m pip install -r requirements-ci.txt
+```
 
-Use the repository's existing `requirements-ci.txt` as the exact validated
-Python 3.12/core-development stack, followed by the official LFS pin with
-`--no-deps`, then BSM3 with `--no-deps --no-build-isolation -e .`. It already
-contains the exact CSDL pin and the dependency versions used for M1.9. Show
-creation and activation of a fresh Python 3.12 Conda environment before those
-commands. Do not retain a second, incomplete install recipe that appears to be
-an equivalent clean-environment setup.
+failed dependency resolution. `requirements-ci.txt` pinned NumPy 2.0.2 and
+also installed `lsdo_b_splines_cython` at `9444ea8`; that package's metadata
+pins NumPy 1.26.4. The extension has zero tracked references outside the
+overhaul history, and official LFS `307ad3a` states in its release notes that
+it eliminated the extension in favor of pure Python/NumPy/JAX evaluation.
+`ab79087` removes only that stale requirement and corrects the adjacent LFS
+comment. No production code changed.
 
-Be precise about the boundary:
+Independently establish all three facts:
 
-- this is the exact validated core/developer environment, not a claimed
-  minimal runtime dependency set;
-- an existing DAFoam environment remains separate and administrator-managed;
-- BSM3 itself declares no automatic dependencies, which is why its install
-  uses `--no-deps`; do not generalize that into “pip cannot change the
-  environment” while the preceding bootstrap intentionally installs packages;
-- interactive BSM3 plotting is optional, but PyVista is currently an eager
-  dependency of the pinned LFS import and is included in the validated stack.
-  Remove the false claim that a clean core environment may omit PyVista;
-- prefer “the validated setup uses pinned Git revisions” over a mutable claim
-  about whether each upstream project currently exists on PyPI.
+1. reproduce or otherwise inspect the NumPy resolver conflict at the base;
+2. prove no retained BSM3 source/test/example imports the extension and inspect
+   official LFS `307ad3a` for the removal; and
+3. prove the corrected `requirements-ci.txt` installs from an empty Python
+   3.12 environment before the `--no-deps` LFS and BSM3 installs.
 
-Update the structural test so it requires the documented validated sequence:
-Python 3.12 environment creation, `requirements-ci.txt`, the exact LFS revision
-with `--no-deps`, and the BSM3 editable flags. It must reject the prior
-CSDL-only-plus-LFS recipe as a complete setup.
+Reject the widening if any live dependency was overlooked. If it is dead and
+the clean install reproduces, accept the one-path expansion as a necessary
+packaging fix discovered by the mandated gate.
 
-### B. Remove guarantees the implementation does not make
+## Documentation accuracy review
 
-Correct every occurrence, not only the examples below:
+Read the rendered/source context and the implementation, not only the new
+tests. Verify:
 
-1. `README.md` and `docs/index.md` say BSM3 moves nodes “so the mesh stays
-   valid.” The solver reports inversions and can return them; validity is a
-   measured outcome, not a guarantee. Describe the goal and the diagnostics.
-2. `docs/src/background.md` says every node is put back “exactly” on the OML.
-   Projection can fail to converge and the point is still returned. Describe
-   reprojection as attempted/evaluated and keep the explicit non-convergence
-   caveat adjacent enough that readers cannot miss it.
-3. `docs/src/examples.md` and `docs/src/api.md` say `print_summary()` reports
-   load stepping. It does not. Verify its body and list only what it actually
-   prints: mesh vertex/cell and n-gon-mode counts, elapsed time, fold and
-   inversion counts, and the available degenerate/minimum-scaled-Jacobian
-   quality fields.
-4. Narrow blanket “BSM3 never starts or stops a recorder” prose to the public
-   contract actually reviewed: `GeometryModel` and `bsm3.mesh_motion.run` do
-   not create, start, or stop the caller's recorder. Internal optional driver
-   backends may own their own recorder, so do not make a repository-wide claim.
+- installation creates a new Python 3.12 Conda environment, installs the full
+  tested stack from `requirements-ci.txt`, then official LFS `307ad3a` with
+  `--no-deps`, then BSM3 with `--no-deps --no-build-isolation -e .`;
+- CSDL remains pinned to
+  `73a9efd1033016a835779db10a9b9e81ed2254ce` and the instructions distinguish
+  the tested core/developer environment from an administrator-owned DAFoam
+  environment;
+- the docs no longer claim PyVista can be omitted from a clean core install;
+  interactive plotting remains optional, while pinned LFS imports PyVista
+  eagerly;
+- mesh validity is a measured outcome, not guaranteed;
+- reprojection non-convergence is returned and therefore is not called exact;
+- `print_summary()` is described from its actual body and does not claim to
+  print load-step information;
+- recorder ownership is scoped to public `GeometryModel`/`mm.run`, rather than
+  all internal BSM3 drivers;
+- the README labels its empty-model code as an incomplete call-shape skeleton
+  and points to the actually runnable E175 script; and
+- `tests/test_documentation.py` uses `ast` to read literal
+  `bsm3.mesh_motion.__all__` and compares it by exact set equality with one
+  delimited public inventory. Confirm the test is described only as an export
+  inventory guard, not semantic API validation.
 
-Add focused rejection assertions to `tests/test_documentation.py` for the
-specific false phrases where practical. Do not make the test a general prose
-word blacklist.
+Preserve the accepted Turn-61 content: generic external coefficients are the
+primary contract; the five E175 stages remain clear; component shape/patch-ID
+validation occurs after STEP import; NPZ/trusted-pickle language remains
+accurate; and DAFoam/MPI/VortexAD status is not overstated.
 
-### C. Stop presenting the README skeleton as runnable
+## Reported verification to reproduce
 
-The README “Quickstart” constructs an empty `GeometryModel` and then calls
-`run`; copied verbatim, it fails `GeometryModel.validate()` because no
-component is registered. Keep it concise, but explicitly label it as a call
-shape that requires component registration, or replace it with a genuinely
-runnable route to the tracked E175 example. A reader must not mistake the
-empty-model snippet for a complete executable example. Preserve the direct
-link to `examples/e175_surface_deformation.py` and keep the five-stage guide as
-the complete explanation.
+Codex reports:
 
-### D. Make the hand-written API drift guard exact
+| Gate | Result |
+| --- | --- |
+| Fresh empty environment | Python 3.12.14; install sequence completed |
+| Imports | CSDL 0.0.0-a.2, LFS 1.0.0, BSM3 0.1.4 |
+| Numerical stack | NumPy 2.0.2, SciPy 1.13.1, JAX 0.4.38, PyVista 0.46.5 |
+| Documentation tests | **12 passed** |
+| Fast E175 tests | **13 passed, 5 deselected** |
+| Full non-integration suite, fresh clone | **212 passed, 9 deselected** |
+| Strict Sphinx build | success, **7 source documents** |
+| Default Ruff on documentation test | pass |
+| Five existing workflow Ruff groups | pass: 53 / 4 / 18 / 15 / 17 paths |
+| Fresh clone | docs test, strict build, import smoke pass; status empty |
+| Preservation | 8/8 modified-file blob hashes and untracked inventory hash unchanged; 394 status-level untracked entries |
 
-The current test does not truly guard both directions. It extracts `__all__`
-with a loose regex, accepts any incidental substring as documentation, and
-only treats backticked `mm.Name` forms as promises. A misspelled unqualified
-type could escape it.
+At minimum, run:
 
-Keep the dependency-free approach, but:
+```bash
+git diff --check 4413203..HEAD
+git diff --name-status 4413203..HEAD
+python -m pytest -q tests/test_documentation.py
+python -m pytest -q tests/test_e175_example.py -m "not integration"
+python -m ruff check tests/test_documentation.py
+python -m sphinx -W --keep-going -b html docs /tmp/bsm3-docs-claude-review
+```
 
-- parse `bsm3/mesh_motion.py` with the standard-library `ast` module to obtain
-  the literal `__all__` set;
-- add a clearly delimited, reader-useful inventory in `docs/src/api.md` that
-  names every public export in one consistent machine-checkable form; and
-- assert exact set equality between that inventory and `__all__`.
-
-This is an export-inventory guard, not a substitute for semantic review. Say
-that accurately in the test and handoff; do not claim it validates every
-signature or prose description.
-
-### E. Correct the handoff accounting
-
-Sphinx reports seven source documents (`index` plus six pages). If you retain a
-page count, distinguish those seven source documents from generated utility
-HTML pages such as the search and index pages. Correct Turn 61's “9 pages”
-wording in the new append-only log entry rather than rewriting the historical
-entry.
-
-Preserve all correct M2.1 content: the generic external-coefficient path,
-five-stage E175 flow, current public signatures, post-import coefficient
-validation, tracked/untracked asset boundary, safe NPZ/trusted-pickle boundary,
-and honest DAFoam/MPI/VortexAD status.
-
-## Required verification
-
-1. Prove the committed range contains only the nine implementation paths and
-   three collaboration paths above; run scoped `git diff --check`.
-2. In a **fresh empty Python 3.12 environment**, execute the documented install
-   commands in their documented order. Do not reuse `bsm3_py312_main` or an
-   environment that already has LFS. A temporary Conda prefix under `/tmp` is
-   acceptable.
-3. From that fresh environment, report versions/revisions where available and
-   run at least:
-
-   ```bash
-   python -c "import csdl_alpha; import lsdo_function_spaces; import bsm3.mesh_motion"
-   python -m pytest -q tests/test_documentation.py
-   python -m pytest -q tests/test_e175_example.py -m "not integration"
-   ```
-
-4. Re-run the strict documentation build in a disposable docs environment:
-
-   ```bash
-   python -m sphinx -W --keep-going -b html docs /tmp/bsm3-docs-html-turn63
-   ```
-
-5. Run default Ruff on `tests/test_documentation.py`; the changed Markdown is
-   covered by the strict Sphinx build. Re-run the five existing literal Ruff
-   commands from the workflow to prove no gate regressed.
-6. Run rejection checks for the four corrected semantic claims and inspect the
-   rendered/source context rather than relying on grep alone.
-7. Repeat the documentation test, strict Sphinx build, and import smoke test
-   from a fresh clone of the implementation commit. The clone must remain
-   clean, and no command may consume an untracked source-tree file.
-8. Prove all 8 pre-existing modified files are byte-identical to their
-   `TURN63_BASE` working-tree state and all 394 original untracked entries
-   remain present and unmodified.
+Run the five literal workflow Ruff commands. Use a clean clone for the strict
+Sphinx build, documentation test, and import smoke. The central acceptance gate
+is a second clean Python 3.12 install using the documented sequence; do not
+substitute the pre-populated `bsm3_py312_main` environment for that check.
 
 Do not run the ten-minute E175 integration, DAFoam/OpenFOAM, VortexAD, or real
-MPI. Do not alter the accepted numerical implementation.
+MPI. Do not edit production source or examples during review.
 
-## Commit structure and handoff
+## Decision and handoff
 
-Make exactly two commits:
+If all findings and gates hold, accept M2.1 and M2.2 and close M2. Record the
+decision in `PLAN.md` and append-only `LOG.md`. Then prepare the next prompt for
+Codex, which resumes the implementer role; do not begin M3 implementation in
+the review turn.
 
-1. the narrow documentation/test correction;
-2. `PLAN.md`, `LOG.md`, and the next `CODEX_NEXT.md` review checklist.
-
-Report both hashes, exact changed paths, the fresh-environment install/import
-result, 10-or-updated documentation-test count, 13/5 fast E175 result, strict
-Sphinx result, Ruff results, clean-clone result, and dirty-tree preservation.
-List each corrected false/overbroad claim and the source evidence used.
-
-Mark M2.1 as ready for Codex review, not accepted. M2.2 remains blocked until
-this correction is independently accepted.
+If any material claim fails, keep M2 open and issue a literal corrective
+allowlist. Either way, preserve the 8 pre-existing modified files and 394
+status-level untracked entries exactly and report any deviation.

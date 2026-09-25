@@ -1280,17 +1280,17 @@ No DAFoam. No new binary assets — the hexagon constructions are synthetic.
 
 ## 5a. M2 — Buildable user documentation
 
-Created by the user's post-M1 documentation request. The repository already
-contains Sphinx/Read-the-Docs scaffolding, but it is still the generic
-`lsdo_project_template`, points API generation at a nonexistent package, uses
-Python 3.11 instead of the validated 3.12 stack, and cannot build from its
+Created by the user's post-M1 documentation request. At milestone opening, the
+repository contained Sphinx/Read-the-Docs scaffolding, but it was still the generic
+`lsdo_project_template`, pointed API generation at a nonexistent package, used
+Python 3.11 instead of the validated 3.12 stack, and could not build from its
 declared requirements. M2 turns that scaffold into the actual BSM3 user guide
 before release pruning begins.
 
 | ID | Task | Owner | Status | Acceptance |
 |----|------|-------|--------|------------|
-| M2.1 | Replace the template site with a buildable BSM3 Sphinx/Read-the-Docs site: validated installation, five-stage E175 quickstart, external-parameterization contract, compact public API reference, optional-integration boundaries, troubleshooting/assets, and concise README links. | Claude implements; Codex plans/reviews | **CORRECTION REQUIRED — Turn 62 review of `4ca0435` / `1cc849e`.** The site/configuration/build portion passes independently, including a fresh-clone warning-clean Sphinx build, 10 structural tests, and 13 fast E175 tests. Acceptance is withheld because the clean-environment install recipe suppresses LFS dependencies without first installing them; PyVista is incorrectly described as omittable despite the pinned LFS importing it eagerly; three output/solver guarantees overstate the implementation; the README's empty-model “Quickstart” fails if copied; and the claimed bidirectional API guard is loose substring matching rather than exact inventory equality. A narrow docs/test correction is issued for Turn 63. | Fresh Python 3.12 docs environment builds HTML with warnings as errors; **the documented core install executes successfully from an empty Python 3.12 environment**; CI carries the docs gate; no template prose, broken toctree target, unsupported guarantee, or incomplete public export inventory remains; docs do not require DAFoam, VortexAD, MPI, or local untracked assets to build. |
-| M2.2 | Final documentation accuracy and clean-clone acceptance. | Codex reviews; Claude corrects if needed | blocked on M2.1 | Every command/path/public name is checked against the implementation; clean clone builds docs and runs the documentation tests; no unsupported integration or hosting claim. |
+| M2.1 | Replace the template site with a buildable BSM3 Sphinx/Read-the-Docs site: validated installation, five-stage E175 quickstart, external-parameterization contract, compact public API reference, optional-integration boundaries, troubleshooting/assets, and concise README links. | Claude implemented initial site; Codex implemented correction; Claude reviews | **READY FOR CLAUDE REVIEW, not self-accepted** (`4ca0435`, `ab79087`). Turn 63 corrected the install and semantic findings, made the export inventory exact, and proved the sequence in an empty Python 3.12 environment. The mandatory clean-install gate also exposed a stale `lsdo_b_splines_cython` requirement whose NumPy 1.26.4 pin made the NumPy 2.0.2 environment unresolvable. Zero retained references and official LFS's removal note justified widening the implementation range by `requirements-ci.txt`; review must rule on that explicitly. Reported gates: 12 documentation tests, 13/5 fast E175, 212/9 full non-integration in a fresh clone, strict Sphinx over 7 source documents, all Ruff groups, and clean clone/status. | Fresh Python 3.12 docs environment builds HTML with warnings as errors; **the documented core install executes successfully from an empty Python 3.12 environment**; CI carries the docs gate; no template prose, broken toctree target, unsupported guarantee, or incomplete public export inventory remains; docs do not require DAFoam, VortexAD, MPI, or local untracked assets to build. |
+| M2.2 | Final documentation accuracy and clean-clone acceptance. | Claude reviews | **OPEN — Turn 64 review checklist issued.** | Every command/path/public name is checked against the implementation; clean clone builds docs and runs the documentation tests; no unsupported integration or hosting claim. |
 
 M2 changes documentation, documentation build configuration, and its focused
 tests only. It does not reopen the accepted numerical implementation or absorb
@@ -1305,7 +1305,7 @@ in the manifest has an end-to-end test.
 
 | ID | Task | Owner | Status | Acceptance |
 |----|------|-------|--------|------------|
-| M3.1 | Prove the M0.2 manifest: every retained file is reached by a passing end-to-end test from at least one declared root. | TBD | blocked on M1 | No file in the manifest is unreached; no test imports a file outside it. |
+| M3.1 | Prove the M0.2 manifest: every retained file is reached by a passing end-to-end test from at least one declared root. | TBD | blocked on M2 | No file in the manifest is unreached; no test imports a file outside it. |
 | M3.2 | Push the full current repository to a **separate archive remote**. Not a tag in the release repository. | TBD | blocked on M3.1 | Archive remote holds the complete pre-overhaul history; release clones do not fetch it. |
 | M3.3 | Build the clean release repository from the proven manifest. | TBD | blocked on M3.2 | Fresh clone is small, `pytest` passes on it with no untracked-asset dependencies, and every declared root runs. |
 
