@@ -5907,3 +5907,123 @@ Open:
 - Claude must review the Part-B policy ruling and decide whether M7.1 closes.
 - External publication remains user-authorized; M5.2 remains blocked on the
   dirty namespace, and M3 remains last.
+
+---
+
+## Turn 77 — Claude, reviewer/planner, 2026-09-25
+Scope:     Review M7.1 CI lint coverage
+Base:      fb833d5 (prompt `d6c2b87`)
+Reviewed:  b5e14f6 (implementation), b5409e9 (handoff)
+Status:    **M7.1 ACCEPTED. M7 CLOSED.** No external action taken.
+
+### The change is four lines and nothing else
+
+`b5e14f6` touches only `.github/workflows/actions.yml`; the handoff touches
+only the three collaboration documents. `git diff --check fb833d5..HEAD` clean.
+
+Verified by parsing both YAML revisions rather than reading the diff:
+
+| Ruff step | Before | After |
+| --- | ---: | ---: |
+| Critical static checks | 53 | **55** |
+| Numpydoc — M0 public surface | 4 | 4 |
+| Numpydoc — surface-motion core | 18 | **20** |
+| Numpydoc — projection and preprocessing | 15 | 15 |
+| Numpydoc — drivers, volume motion, and MPI | 17 | 17 |
+
+`fuel_burn.py` and `panel_aerodynamics.py` each occur exactly **twice** in the
+entire file — once per intended step, nowhere else. No pre-existing path was
+lost from any step. Comparing the parsed step objects one by one, only those
+two steps differ; every other step, including `Documentation build`,
+`Fast derivative gate`, and `Test suite`, is byte-identical. The file parses as
+valid YAML with the same **11 ordered step names** as `fb833d5`, and zero
+comment lines changed.
+
+Placement respects each list's local convention: the critical-static list is
+alphabetical and the insertions land correctly between `free_region`/`geometry`
+and `ngon_affine`/`projection`; the surface-motion-core list is grouped by
+concern rather than alphabetised, and the insertions sit beside related
+entries. Backslash continuation style is preserved.
+
+All five Ruff blocks were **extracted from the edited file and executed
+verbatim** rather than retyped: five steps found, all clean.
+
+### Part-B ruling upheld — on the workflow's own stated policy
+
+I did not take this on assertion. The Critical static checks step already
+carries a comment, **pre-existing at `fb833d5` and untouched this turn**:
+
+> Default Ruff selection over the complete retained production manifest —
+> every bsm3 path the four documentation steps below cover — plus the M0 test
+> files. Kept literal and auditable; the dirty/untracked research tree is
+> deliberately excluded.
+
+That is the policy Codex applied. The three test files in the lists
+(`test_derivative_gate.py`, `test_curated_assets.py`,
+`test_e175_driver_configuration.py`) are exactly the M0-era ones;
+`test_panel_aerodynamics.py` and `test_fuel_burn.py` are M4.2 tests and fall
+outside it, and `examples/` is not production package code and appears in no
+step. The ruling is argued from established policy, not invented after the
+fact, so it stands.
+
+Codex's supporting claims also check out: `Test suite` runs `pytest -q tests`
+unfiltered, so both new test files do execute in CI, and
+`test_optimization_example_keeps_the_five_stage_public_workflow` AST-parses the
+example.
+
+**Residual stated plainly so nobody later thinks M7.1 closed it:** the two new
+test files and the tracked example have execution coverage but no lint or
+docstring coverage. That is the same exposure every non-M0 test file already
+carries — a deliberate pre-existing boundary, not a gap M4.2 introduced. If the
+user ever wants lint parity across `tests/` and `examples/`, that is a
+standalone policy change, not a correction to this milestone.
+
+### Upstream hazard carried, not worked around
+
+The pinned VortexAD `PanelMethod.__init__` aliasing and mutating the
+module-level `default_input_dict` is recorded accurately in `LOG.md`, both in
+the Turn-75 review and as an open item in Codex's Turn-76 entry. No
+production, test, or example file changed since M4.2 acceptance, so nothing was
+worked around in code.
+
+### Gates reproduced
+
+| Gate | Result |
+| --- | --- |
+| `tests -m "not integration"` | 240 passed, 10 deselected |
+| `tests/test_documentation.py` | 12 passed |
+| Strict Sphinx 9.1.0 | build succeeded, warning-free |
+| Five workflow Ruff steps, executed from the edited file | all passed |
+| YAML validity and step structure | valid, 11 steps, names and order unchanged |
+
+Preservation exact: 8 modified, 393 untracked, dirty diff `981318…6177`,
+untracked list `c38fd93…da60`. Zero tags local and remote, nothing pushed,
+remote still `MariusLRuh/BSM3`.
+
+### The agent-side backlog is now empty
+
+With M7 closed, every milestone that either agent can act on is complete: M0,
+M1, M2, M4 (including the GAMMA identity and the HTML-only documentation
+alpha), and M7. Nothing remains that Codex could implement without either a
+user decision or a user action.
+
+What is left, and why no agent may start it:
+
+- **External publication** (GitHub rename, Read the Docs project and webhook,
+  the `v0.2.0a1` tag, any PyPI reservation) — user-authorized by standing
+  ruling. The repository side was confirmed complete in Turn 75.
+- **M5.2**, `bsm3` → `gamma_mdo` — blocked until the user resolves the 304
+  untracked entries and 8 modified tracked files under `bsm3/`. 57 untracked
+  user scripts import the namespace and no agent may edit them.
+- **M3** archive and history pruning — the user deferred it again this turn.
+  Worth recording: **M3's first gate has now cleared.** The section reads "Does
+  not start until M2 is complete and every root in the manifest has an
+  end-to-end test." M2 closed in Turn 64, so only the second condition remains,
+  and the M3.1/M3.2/M3.3 rows still read "blocked on M2", which is now stale.
+  Whether every manifest root has an end-to-end test is unverified; that check
+  is M3.1's own task and was not performed here.
+
+`CODEX_NEXT.md` therefore states that no implementation turn is available
+rather than inventing one.
+
+Status:    closed
