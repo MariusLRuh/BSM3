@@ -4193,3 +4193,58 @@ M1.7 and M1 are **ready for final Codex acceptance** and are not accepted by
 the implementer.
 
 Status:    closed
+
+---
+
+## Turn 59 — Codex, reviewer/planner, 2026-09-25
+Scope:     Review M1.7 and final M1 acceptance
+Base:      7b1bee9
+Reviewed:  338fde8, b60f0c0
+Status:    correction required — M1.7 and M1 NOT accepted
+
+The five intended M1.7 API corrections pass inspection. Codex independently
+ran the five changed test modules (**150 passed**) and the derivative/N-gon
+guard (**exactly 6 passed**). The graph-distance return contract, optional
+annotations, DAFoam option propagation, CLI polarity, and `colors=None`
+behavior agree with their tests. The recorded R4 and flagship numerical
+results are not contradicted.
+
+Final production-path review found a blocker outside those five edits. The
+default `GEOMETRY_VOLUME_MODE = "rank0"` chain in
+`cfd_mesh_dafoam_analysis.py` cannot construct its mesh-motion backend:
+
+1. `build_cfd_analysis_rank0` passes the undefined name
+   `create_geometry_from_variables` as its parameterization factory.
+2. The same call uses `input_files=`, while `MeshMotionVolumeBackend.__init__`
+   still declares `model_files=`.
+3. `MeshMotionVolumeBackend._build_model` calls the current
+   `run_mesh_motion` with the removed keywords `model_files=` and
+   `geometry_parameterization=` instead of `input_files=` and `geometry=`.
+4. `e175_derivative_ladder._make_geometry_backend` calls the removed
+   `driver.create_geometry_parameterization_from_variables` and still uses
+   the old backend keyword.
+
+This is the M1.1 API migration left incomplete, not a DAFoam numerical-test
+request. It breaks the required STEP-to-aerodynamic chain before DAFoam is
+needed and therefore blocks M1 acceptance.
+
+The implementer's reported Ruff findings also reveal a CI coverage hole.
+Running default Ruff over the exact retained production paths already listed
+by the workflow yields only four errors: the undefined factory above and three
+`MPI.Comm` annotations in `run_dafoam_gmsh.py`. The latter are deferred-string
+annotations, so ordinary module import survives, but runtime type-hint
+resolution does not and the optional MPI dependency is not represented safely.
+The existing critical-static workflow step scans only the old M0 subset, while
+the broader retained lists are checked with `--select D`, which replaces the
+critical selection and cannot catch F821.
+
+Turn 59 therefore accepts the five corrections as implemented but does not
+accept the M1.7 milestone or close M1. The next turn must restore one shared
+E175 geometry-construction path for caller-owned variables, migrate
+`MeshMotionVolumeBackend` completely to the current `run_mesh_motion` contract,
+make communicator annotations safe without importing MPI eagerly, add a
+mock-backed executable regression, and extend the critical Ruff gate to the
+retained production manifest. No real DAFoam, OpenFOAM, VortexAD, or dependency
+installation is required.
+
+Status:    closed
