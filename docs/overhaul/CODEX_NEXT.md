@@ -1,33 +1,59 @@
-# Claude Turn 64 — review M2.1 correction and close M2 if warranted
+# Codex Turn 65 — M4.1: E175 example ergonomics and vertex classification
 
-Codex temporarily acted as implementer/planner while Claude was unavailable.
-Claude now resumes the reviewer/planner role. Independently review the Turn-63
-implementation; do not accept its claims from the handoff alone.
+Claude reviewed Turn 63 and **accepted M2.1, M2.2, and M2** (Turn 64). Codex
+resumes the implementer role; Claude plans and reviews. Do not self-accept.
 
-## Commits and intended range
+Record `TURN65_BASE = $(git rev-parse HEAD)` before editing. Preserve the
+user's dirty tree exactly: 8 pre-existing modified files byte-for-byte and 394
+pre-existing untracked entries. Do not adopt, delete, format, or modify any of
+them.
+
+## Why this turn exists
+
+Claude verified nine findings against source. All hold. Four are user-facing
+defects in the flagship example and its public surface, and one is a
+credibility problem in a recommended setting. The measurements below are
+Claude's own and are reproducible read-only.
+
+| # | Verified finding |
+| --- | --- |
+| 1 | `add_lifting_surface(root_half_width=0.3)` is documented as an "absolute spanwise half-width" but is passed as `{"y": (None, value, "abs")}`, and `AxisRange` mode `"abs"` normalizes `t = \|c\| / max(\|c\|)`. It is a **semispan fraction**: `0.3` means 30% of semispan, not 0.3 m. It is validated `> 0.0` but not bounded above, so `> 1.0` silently means "all free". |
+| 2 | `add_body(free_axial_fraction=(0.05, 0.97))` leaves the middle graph-free and makes nose and tail parametrically prescribed. Correct, but undocumented as a *consequence*. |
+| 3 | `MeshMotion.derivative_check` is configuration only. Neither `mm.run` nor `run_mesh_motion` reads it; only the two drivers act on it, and `select_fd_objective`/`run_fd_sweep` are **not** exported from `bsm3.mesh_motion`. A user can set `enabled=True`, call `mm.run`, and silently get nothing. |
+| 4 | `MeshMotionResult` exposes no free / parametrically-prescribed / intersection classification, although `_write_diagnostic_dump` already writes `deformation_vertex_ids`, `graph_free_ids`, `graph_prescribed_ids`, `symmetry_plane_vertex_ids`, and per-component/intersection IDs. |
+| 5 | The final surface is a composite: differentiable closest-point reprojection over the deformation set, fixed-parametric reevaluation elsewhere (`run_graph_load_steps` takes both `projection_metadata` and `reevaluation_metadata`). No projection convergence status reaches the result. |
+| 6 | The quad baseline already has 114 inverted elements. IDs 8075 and 14923 are additional deformation-induced inversions. **Measured:** both are quads of area `3.299e-04` — `0.079x` the median cell area, at the **1.43rd percentile** — and they are an **exact mirrored pair about y = 0** (centroids `[26.8477, ∓1.1392, 1.5577]`). The two inversions are one geometric feature reflected. |
+| 7 | `PolygonRegularization(weight=0.3)` has **no E175 calibration evidence**. The repository's own 12-weight sweep found λ=150 the first inversion-free value and production used λ=200, on a *different* panel revision and with mixed bulk-quality effects. The only recorded measurement at 0.3 is a unit-scale uniform quad grid where it moved the solution by `3.3e-16`. |
+| 8 | `deformation_scale=0.02` is unnecessarily conservative for the tracked triangle default, which passes at `1.0` in `test_triangle_wall_at_full_deformation_scale`. The small value exists only so one setting also survives the quad substitution. |
+
+Finding 9 — the untracked `e175_panel_opt.py`, drag build-up, gross-weight, and
+legacy optimization scripts target removed APIs — is **deliberately out of
+scope** and is recorded as a separate later milestone. Do not adopt or repair
+those files in this turn.
+
+## Scope rule
+
+This turn is **A, B, and C only**. Part D is measurement that must *not* change
+any default. If a finding cannot be fixed inside the allowlist, stop and report
+the exact dependency rather than widening it.
+
+## Literal implementation allowlist
 
 ```text
-TURN63_BASE = 441320380760e75b6e153072523dc5d2afca832b
-implementation = ab79087
-documentation handoff = current HEAD
-```
-
-The implementation commit changes exactly:
-
-```text
-README.md
-docs/index.md
+bsm3/core/boundary_surface_movement/geometry_model.py
+bsm3/core/boundary_surface_movement/mesh_motion_config.py
+bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py
+bsm3/mesh_motion.py
+examples/e175_surface_deformation.py
+examples/e175_quad_panel_calibration.py          (new)
+tests/test_e175_example.py
+tests/test_boundary_surface_movement.py
 docs/src/api.md
-docs/src/background.md
 docs/src/examples.md
-docs/src/external_parameterization.md
-docs/src/getting_started.md
-docs/src/integrations.md
-requirements-ci.txt
-tests/test_documentation.py
+docs/src/background.md
 ```
 
-The handoff commit must change exactly:
+Documentation commit, separately:
 
 ```text
 docs/overhaul/PLAN.md
@@ -35,117 +61,136 @@ docs/overhaul/LOG.md
 docs/overhaul/CODEX_NEXT.md
 ```
 
-The original Turn-63 implementation allowlist had nine paths and prohibited
-dependency-file edits. The empty-environment install gate exposed a genuine
-defect, and Codex, acting as planner as well as implementer, explicitly widened
-the scope by one path: `requirements-ci.txt`. Review that ruling prominently;
-do not treat it as an invisible exception.
+Do not change packaging metadata, the workflow, `docs/conf.py`, curated assets,
+or any other test.
 
-## The dependency finding to verify first
+## Part A — public vertex classification
 
-Before `ab79087`, a fresh
+Expose the classification through a public result type rather than requiring
+NPZ reverse engineering.
 
-```bash
-python -m pip install -r requirements-ci.txt
-```
+- Add a public, documented type — for example `SurfaceVertexClassification` —
+  carrying at minimum the deformation set, the graph-free set, the
+  graph-prescribed set, the symmetry-plane set, per-component vertex IDs, and
+  per-intersection vertex IDs. Use the same global (full-mesh) index space
+  `_write_diagnostic_dump` already normalizes to, and say so in the docstring.
+- Attach it to `MeshMotionResult` as a documented field and re-export the type
+  from `bsm3.mesh_motion`.
+- `_write_diagnostic_dump` must then derive its arrays from this object rather
+  than recomputing them, so the NPZ and the public object cannot disagree.
+- Add a test asserting the public sets equal the arrays the dump writes, for a
+  configuration that produces both.
 
-failed dependency resolution. `requirements-ci.txt` pinned NumPy 2.0.2 and
-also installed `lsdo_b_splines_cython` at `9444ea8`; that package's metadata
-pins NumPy 1.26.4. The extension has zero tracked references outside the
-overhaul history, and official LFS `307ad3a` states in its release notes that
-it eliminated the extension in favor of pure Python/NumPy/JAX evaluation.
-`ab79087` removes only that stale requirement and corrects the adjacent LFS
-comment. No production code changed.
+Do not change any coordinate, weight, or solver behavior.
 
-Independently establish all three facts:
+## Part B — honest projection status
 
-1. reproduce or otherwise inspect the NumPy resolver conflict at the base;
-2. prove no retained BSM3 source/test/example imports the extension and inspect
-   official LFS `307ad3a` for the removal; and
-3. prove the corrected `requirements-ci.txt` installs from an empty Python
-   3.12 environment before the `--no-deps` LFS and BSM3 installs.
+Finding 5 is a correctness-of-claim issue, not a solver issue.
 
-Reject the widening if any live dependency was overlooked. If it is dead and
-the clean install reproduces, accept the one-path expansion as a necessary
-packaging fix discovered by the mandated gate.
+- Surface a projection convergence status on the result: at minimum a count of
+  non-converged reprojected vertices and their IDs, in the same global index
+  space. Derive it from the data the warm-start projection already produces; do
+  not add a new solve.
+- Document in `docs/src/background.md` and the `MeshMotionResult` docstring
+  that the final surface is a composite of differentiable closest-point
+  reprojection over the deformation set and fixed-parametric reevaluation
+  elsewhere, and that non-converged points are returned rather than raising.
+- Add a test that the status field exists and is consistent with the reported
+  vertex counts.
 
-## Documentation accuracy review
+## Part C — example ergonomics
 
-Read the rendered/source context and the implementation, not only the new
-tests. Verify:
+### C1. Rename `root_half_width` (clean break)
 
-- installation creates a new Python 3.12 Conda environment, installs the full
-  tested stack from `requirements-ci.txt`, then official LFS `307ad3a` with
-  `--no-deps`, then BSM3 with `--no-deps --no-build-isolation -e .`;
-- CSDL remains pinned to
-  `73a9efd1033016a835779db10a9b9e81ed2254ce` and the instructions distinguish
-  the tested core/developer environment from an administrator-owned DAFoam
-  environment;
-- the docs no longer claim PyVista can be omitted from a clean core install;
-  interactive plotting remains optional, while pinned LFS imports PyVista
-  eagerly;
-- mesh validity is a measured outcome, not guaranteed;
-- reprojection non-convergence is returned and therefore is not called exact;
-- `print_summary()` is described from its actual body and does not claim to
-  print load-step information;
-- recorder ownership is scoped to public `GeometryModel`/`mm.run`, rather than
-  all internal BSM3 drivers;
-- the README labels its empty-model code as an incomplete call-shape skeleton
-  and points to the actually runnable E175 script; and
-- `tests/test_documentation.py` uses `ast` to read literal
-  `bsm3.mesh_motion.__all__` and compares it by exact set equality with one
-  delimited public inventory. Confirm the test is described only as an export
-  inventory guard, not semantic API validation.
+**Ruling: rename to `free_span_fraction`.** The current name and its docstring
+both mislead: a user reading "absolute spanwise half-width" and passing `0.3`
+gets 30% of semispan. Consistent with this overhaul's practice, make it a clean
+break — no alias, no deprecation shim, no acceptance of both spellings. Update
+`add_lifting_surface`, every tracked caller, the docstring, and the API page.
+Add the missing upper-bound validation so a value outside `(0, 1]` raises
+instead of silently meaning "all free".
 
-Preserve the accepted Turn-61 content: generic external coefficients are the
-primary contract; the five E175 stages remain clear; component shape/patch-ID
-validation occurs after STEP import; NPZ/trusted-pickle language remains
-accurate; and DAFoam/MPI/VortexAD status is not overstated.
+While there, document finding 2 as a consequence: `free_axial_fraction` leaves
+the middle of a body graph-free and makes the nose and tail parametrically
+prescribed.
 
-## Reported verification to reproduce
+### C2. Split the example
 
-Codex reports:
+Keep `examples/e175_surface_deformation.py` as the **basic triangle** example.
+Raise its `deformation_scale` default to a value the tracked triangle wall
+genuinely supports, justified by the existing full-scale test rather than by a
+new claim, and remove the quad-substitution rationale from that default.
 
-| Gate | Result |
-| --- | --- |
-| Fresh empty environment | Python 3.12.14; install sequence completed |
-| Imports | CSDL 0.0.0-a.2, LFS 1.0.0, BSM3 0.1.4 |
-| Numerical stack | NumPy 2.0.2, SciPy 1.13.1, JAX 0.4.38, PyVista 0.46.5 |
-| Documentation tests | **12 passed** |
-| Fast E175 tests | **13 passed, 5 deselected** |
-| Full non-integration suite, fresh clone | **212 passed, 9 deselected** |
-| Strict Sphinx build | success, **7 source documents** |
-| Default Ruff on documentation test | pass |
-| Five existing workflow Ruff groups | pass: 53 / 4 / 18 / 15 / 17 paths |
-| Fresh clone | docs test, strict build, import smoke pass; status empty |
-| Preservation | 8/8 modified-file blob hashes and untracked inventory hash unchanged; 394 status-level untracked entries |
+Add `examples/e175_quad_panel_calibration.py` as the **advanced** example: the
+quad-dominant panel, the 114-element baseline, and the fact that IDs 8075 and
+14923 are a mirrored pair of 1.43rd-percentile cells. It should demonstrate
+reading the new classification and projection status, not just printing a
+summary. Update `docs/src/examples.md` to present basic and advanced clearly.
 
-At minimum, run:
+### C3. FD-check workflow
 
-```bash
-git diff --check 4413203..HEAD
-git diff --name-status 4413203..HEAD
-python -m pytest -q tests/test_documentation.py
-python -m pytest -q tests/test_e175_example.py -m "not integration"
-python -m ruff check tests/test_documentation.py
-python -m sphinx -W --keep-going -b html docs /tmp/bsm3-docs-claude-review
-```
+Resolve finding 3 without changing solver behavior. Either re-export
+`select_fd_objective` and `run_fd_sweep` from `bsm3.mesh_motion` and document
+the required call sequence, **or** make `mm.run` raise a clear error when
+`derivative_check.enabled` is set but the caller cannot act on it. Choose one,
+state the choice and its rationale in the handoff, and document it on the API
+page. Silently ignoring the setting is not acceptable.
 
-Run the five literal workflow Ruff commands. Use a clean clone for the strict
-Sphinx build, documentation test, and import smoke. The central acceptance gate
-is a second clean Python 3.12 install using the documented sequence; do not
-substitute the pre-populated `bsm3_py312_main` environment for that check.
+## Part D — N-gon weight sweep, measurement only
 
-Do not run the ten-minute E175 integration, DAFoam/OpenFOAM, VortexAD, or real
-MPI. Do not edit production source or examples during review.
+Before anyone changes the recommended weight, measure it on the **current
+tracked quad panel**.
 
-## Decision and handoff
+- Sweep `PolygonRegularization.weight` across a range spanning the current
+  `0.3` and the historical `150`/`200`, on
+  `embraer_175_quad_dominant_symmetric_no_winglets.msh`.
+- Record, per weight: post-projection inverted element IDs and count, whether
+  8075 and 14923 specifically survive, minimum and 5th-percentile scaled
+  Jacobian, 5th-percentile area ratio, and elapsed time.
+- Report the table in the handoff and write the raw data outside the
+  repository. **Do not change the default weight in this turn.** The point is
+  to replace an uncalibrated number with evidence; Claude will rule on the new
+  value from your table.
 
-If all findings and gates hold, accept M2.1 and M2.2 and close M2. Record the
-decision in `PLAN.md` and append-only `LOG.md`. Then prepare the next prompt for
-Codex, which resumes the implementer role; do not begin M3 implementation in
-the review turn.
+If the sweep is too expensive to complete, run what you can, report exactly
+which weights completed, and do not extrapolate.
 
-If any material claim fails, keep M2 open and issue a literal corrective
-allowlist. Either way, preserve the 8 pre-existing modified files and 394
-status-level untracked entries exactly and report any deviation.
+## Verification
+
+1. `git diff --check "$TURN65_BASE"..HEAD` and changed paths ⊆ the allowlist.
+2. `tests/test_e175_example.py -m "not integration"` and
+   `tests/test_boundary_surface_movement.py`; report counts and account for
+   every change against the current baselines.
+3. The derivative/N-gon guard remains **exactly 6**.
+4. `tests/test_documentation.py` still passes, and the strict Sphinx build
+   still succeeds.
+5. The five literal workflow Ruff commands, plus default Ruff on every changed
+   Python path.
+6. The tracked full-scale triangle integration test, because C2 changes the
+   example's default scale. This is the one integration run this turn
+   authorizes; do not run DAFoam, OpenFOAM, VortexAD, or real MPI.
+7. Fresh clone of the implementation commit: documentation test and strict
+   build, ending with empty clone status.
+8. 8/8 pre-existing modified files byte-identical and 394 untracked entries
+   unchanged.
+
+## Deferred: tracked VortexAD / fuel-burn optimization example
+
+Recorded as a **separate later milestone**, not a condition on M2 or on this
+turn. The untracked `e175_panel_opt.py`, drag build-up, and gross-weight
+scripts contain useful prototypes — panel-method coupling, a drag buildup, and
+a gross-weight/Breguet model — but they import `e175_mesh_motion_config`,
+`E175ModelFiles`, and `E175PipelineConfig`, none of which exist. That milestone
+should build a *tracked* adapter against a pinned clean VortexAD revision using
+the generalized `mm.run` result and a curated mesh, reusing those prototypes as
+reference rather than resurrecting them. M2 documentation already describes
+VortexAD as deferred and the untracked driver as unsupported, so no M2 claim
+depends on it.
+
+## Handoff
+
+Two commits: implementation (source, examples, tests, docs pages), then
+`PLAN.md`, `LOG.md`, `CODEX_NEXT.md`. Report both hashes, exact changed paths,
+the C3 choice and rationale, the Part D sweep table, all test and Ruff results,
+the fresh-clone result, and preservation proof. Mark M4.1 as ready for Claude
+review, never as self-accepted.
