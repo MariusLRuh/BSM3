@@ -1,3 +1,19 @@
+"""Differentiable projection returning points or parametric coordinates.
+
+This is the sibling of the closest-distance operation: it runs the same
+eager warm-started Newton projection but exposes the projected result rather
+than a scalar measure, which is what the mesh-motion pipeline needs when it
+has to place vertices back onto a deformed surface.
+
+Coefficients use the stacked convention, ordered by ``model.patch_ids``.
+Parametric output has shape ``(N, 3)`` with columns ``[patch_id, u, v]``; the
+patch-ID column is discrete and has zero derivative. Physical output has shape
+``(N, physical_dimension)``.
+
+Derivatives come from the forward state via the implicit-function theorem, so
+a point whose Newton solve did not converge carries no derivative guarantee.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -43,7 +59,7 @@ except Exception:
 import csdl_alpha as csdl
 import numpy as np
 
-from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory_patched import (
+from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory import (
     apply_basis_stencil_numpy,
     compute_basis_stencil_numpy,
 )
@@ -246,6 +262,13 @@ def _compute_projection_vjp(
 
 
 class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
+    """CSDL custom operation for the reverse product of the projection.
+
+    Reads the forward state cached in ``shared_state`` by the paired
+    :class:`FunctionSetProjectionOperation`, so it must run against the same
+    coefficients.
+    """
+
     def __init__(
         self,
         model: FunctionSetProjectionModel,
@@ -261,6 +284,26 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
         self.output_name = str(output_name)
 
     def evaluate(self, inputs, d_outputs):
+        """Declare the reverse seed and the cotangent outputs.
+
+        Parameters
+        ----------
+        inputs
+            Mapping of the forward operation's inputs, holding
+            ``"coefficients"`` and ``"points"``.
+        d_outputs
+            Mapping of reverse seeds, holding the forward operation's output
+            name: ``"parametric_coordinates"`` when the operation returns
+            parametric output, otherwise ``"projected_points"``.
+
+        Returns
+        -------
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by the differentiated input name:
+            ``"coefficients"`` with the stacked coefficient shape, and
+            ``"points"`` with shape ``(N, physical_dimension)``. The mapping is
+            keyed, not ordered.
+        """
         coefficients = inputs["coefficients"]
         points = inputs["points"].reshape(-1, self.model.physical_dimension)
         output_shape = (points.shape[0], 3) if self.return_parametric else (points.shape[0], self.model.physical_dimension)
@@ -279,6 +322,26 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
         }
 
     def compute(self, inputs, outputs):
+        """Compute the cotangents eagerly and populate ``outputs``.
+
+        Reuses the forward state cached by the forward operation when it
+        matches the current coefficients and points, and otherwise re-solves
+        the projection for them.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"``, ``"points"``, and the seed
+            ``"d_output"``.
+        outputs
+            Output buffer written in place with ``"d_points"`` and
+            ``"d_coefficients"``.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_output = np.asarray(inputs["d_output"], dtype=float)
@@ -297,6 +360,14 @@ class FunctionSetProjectionVJP(csdl.experimental.CustomExplicitOperationBeta):
 
 
 class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBeta):
+    """CSDL custom operation returning projected points or coordinates.
+
+    Wraps the same eager NumPy projection kernel as the closest-distance
+    operation, but exposes the projected result itself rather than a scalar
+    distance measure. ``evaluate`` declares the graph inputs, output, and
+    derivatives; ``compute`` performs the calculation.
+    """
+
     def __init__(
         self,
         model: FunctionSetProjectionModel,
@@ -310,6 +381,23 @@ class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBe
         self.shared_state: Dict[str, object] = {}
 
     def evaluate(self, coefficients, points):
+        """Declare the graph inputs and the projection output.
+
+        Parameters
+        ----------
+        coefficients
+            Stacked coefficient variable.
+        points
+            Query-point variable.
+
+        Returns
+        -------
+        csdl_alpha.Variable
+            Physical points of shape ``(N, physical_dimension)``, or, when the
+            operation was configured to return parametric output, an array of
+            shape ``(N, 3)`` with columns ``[patch_id, u, v]`` whose patch-ID
+            column has zero derivative.
+        """
         points = points.reshape(-1, self.model.physical_dimension)
 
         self.declare_input("coefficients", coefficients)
@@ -329,6 +417,23 @@ class FunctionSetProjectionOperation(csdl.experimental.CustomExplicitOperationBe
         return output
 
     def compute(self, inputs, outputs):
+        """Compute the projection eagerly and populate ``outputs``.
+
+        The forward state is cached in ``shared_state`` for the reverse pass.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"`` and ``"points"``.
+        outputs
+            Output buffer written in place under this operation's output name,
+            ``"parametric_coordinates"`` or ``"projected_points"``.
+
+        Returns
+        -------
+        None
+            The result is written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
 
@@ -386,6 +491,19 @@ if __name__ == "__main__":
     query_points = interior_surface_points + np.array([0.0, 0.0, 0.12])
 
     def run_mode_verification(return_parametric: bool) -> None:
+        """Print a forward and derivative check for one projection output mode.
+
+        Parameters
+        ----------
+        return_parametric
+            Verify the parametric output when ``True``, otherwise the physical
+            projected points.
+
+        Returns
+        -------
+        None
+            Results are printed.
+        """
         mode_name = "parametric" if return_parametric else "physical"
         output_shape = (query_points.shape[0], 3)
         weights = np.linspace(0.25, 1.25, np.prod(output_shape), dtype=float).reshape(output_shape)

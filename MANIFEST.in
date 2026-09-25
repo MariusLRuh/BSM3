@@ -1,0 +1,7 @@
+include README.md
+include LICENSE.txt
+include HPC_DAFOAM_INSTALL.md
+include bsm3/core/boundary_surface_movement/embraer_175_no_winglets.stp
+include bsm3/core/boundary_surface_movement/openvsp_euler_volume_mesh/e175_euler_volume.msh
+include bsm3/core/boundary_surface_movement/openvsp_euler_volume_mesh/e175_openvsp_aircraft_wall.msh
+include bsm3/core/boundary_surface_movement/openvsp_euler_volume_mesh/e175_openvsp_aircraft_wall.volume_map.npz

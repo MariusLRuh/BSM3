@@ -1,15 +1,17 @@
-"""
-pyvista_warmstart.py
+"""Per-patch triangulation and PyVista warm-start seeds for Newton projection.
 
-Build a per-patch structured triangulation from B-spline surface samples (with (patch_id,u,v)
-stored per vertex), then use PyVista's batched closest-cell query to produce warm-start
-Newton seeds (patch_id, u0, v0) via barycentric interpolation.
+Each patch is sampled on a structured parametric grid and triangulated
+independently, so no triangle ever bridges two patches. Every mesh vertex
+carries its ``(patch_id, u, v)``, which lets PyVista's batched closest-cell
+query produce Newton seeds by barycentric interpolation.
 
-Key guarantees:
-- Triangles never bridge patches (triangulate per patch only).
-- Every mesh vertex carries (patch_id, u, v).
-- Closest-point-on-triangulation gives you a robust broad-phase; barycentric interpolation
-  yields an excellent parametric warm-start for Newton on the underlying surface.
+Everything here is eager NumPy/PyVista: the functions execute when called.
+
+Notes
+-----
+Triangulating per patch is what keeps a seed's ``patch_id`` meaningful; a
+cross-patch triangle would interpolate coordinates that belong to no single
+patch.
 """
 
 from __future__ import annotations
@@ -22,21 +24,23 @@ import jax.numpy as jnp
 import numpy as np
 import pyvista as pv
 import pickle
-from pathlib import Path
 
-
-DEFAULT_FUN_SET_PATH = Path(__file__).with_name("refitted_fun_set.pkl")
+try:
+    import lsdo_function_spaces as lfs
+except Exception:  # pragma: no cover - optional research dependency
+    lfs = None
 
 # ----------------------------
 # Mesh construction
 # ----------------------------
 
 def _structured_tri_faces(Nu: int, Nv: int, vertex_offset: int) -> np.ndarray:
-    """
-    Returns faces in PyVista "faces" format: a flat array of [3, i0, i1, i2, 3, ...]
-    for a Nu x Nv structured grid (two triangles per quad cell).
+    """Build triangle faces for a structured grid in PyVista "faces" format.
 
-    Vertex indexing: idx(j,k) = vertex_offset + j*Nv + k
+    The result is a flat array of ``[3, i0, i1, i2, 3, ...]`` for an ``Nu`` by
+    ``Nv`` grid, with two triangles per quad cell.
+
+    Vertex indexing: ``idx(j, k) = vertex_offset + j * Nv + k``.
     """
     if Nu < 2 or Nv < 2:
         raise ValueError("Need Nu>=2 and Nv>=2 to form triangles.")
@@ -75,18 +79,32 @@ def build_sampled_patches_mesh(
     u_range: Tuple[float, float] = (0.0, 1.0),
     v_range: Tuple[float, float] = (0.0, 1.0),
 ) -> pv.PolyData:
-    """
-    Samples each patch on a structured (Nu x Nv) parametric grid and triangulates *per patch*.
-    Stores per-vertex:
-      - patch_id (int)
-      - u (float)
-      - v (float)
+    """Triangulate every patch on a structured parametric grid.
 
-    Assumes your API:
-      function_set.evaluate(parametric_coordinates=(i, uv))
-    where uv is (M,2) and returns (M,3).
+    Each patch is sampled on an ``Nu`` by ``Nv`` grid and triangulated on its own,
+    so the merged result contains no cross-patch triangles. Every vertex stores
+    its ``patch_id``, ``u``, and ``v``.
 
-    Returns a single merged PolyData containing all patches (but with no cross-patch triangles).
+    Parameters
+    ----------
+    function_set
+        Object whose ``evaluate(parametric_coordinates=(patch_id, uv))`` accepts
+        ``uv`` of shape ``(M, 2)`` and returns points of shape ``(M, 3)``.
+    patch_indices
+        Patches to sample, in the order given. Patches are triangulated
+        independently and then merged.
+    Nu, Nv
+        Number of grid samples along the u and v directions of every patch.
+        Each patch contributes ``Nu * Nv`` vertices.
+    u_range, v_range
+        Inclusive parametric sampling bounds as ``(start, stop)``, defaulting to
+        the full unit interval in each direction.
+
+    Returns
+    -------
+    pyvista.PolyData
+        Merged surface over all patches, carrying the per-vertex ``patch_id``,
+        ``u``, and ``v`` arrays.
     """
     patch_indices = list(patch_indices)
 
@@ -132,9 +150,9 @@ def build_sampled_patches_mesh(
 # ----------------------------
 
 def _faces_to_tris(mesh: pv.PolyData) -> np.ndarray:
-    """
-    Returns triangle vertex indices as (T,3) int64 array.
-    Assumes mesh is pure triangles.
+    """Return triangle vertex indices as a ``(T, 3)`` int64 array.
+
+    Assumes the mesh is pure triangles.
     """
     f = np.asarray(mesh.faces, dtype=np.int64)
     f = f.reshape(-1, 4)
@@ -146,11 +164,12 @@ def _faces_to_tris(mesh: pv.PolyData) -> np.ndarray:
 def _barycentric_coords_batch(
     p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray, eps: float = 1e-14
 ) -> np.ndarray:
-    """
-    Vectorized barycentric coordinates for many points:
-      p,a,b,c are (N,3). Returns w as (N,3) with rows [w0,w1,w2].
+    """Compute barycentric coordinates for many points at once.
 
-    Robust fallback for degenerate triangles: pick nearest vertex weights.
+    ``p``, ``a``, ``b``, and ``c`` are ``(N, 3)``; the result ``w`` is
+    ``(N, 3)`` with rows ``[w0, w1, w2]``.
+
+    Degenerate triangles fall back to the nearest-vertex weights.
     """
     v0 = b - a
     v1 = c - a
@@ -196,6 +215,23 @@ def _barycentric_coords_batch(
 
 @dataclass(frozen=True)
 class WarmStartResult:
+    """Newton seeds produced by the triangulation warm start.
+
+    Attributes
+    ----------
+    patch_id
+        Patch each query point should be projected onto, shape ``(N,)``.
+    uv0
+        Starting parametric coordinates on that patch, shape ``(N, 2)``.
+    closest_pts
+        Closest point found on the tessellation, shape ``(N, 3)``.
+    cell_ids
+        Tessellation cell that supplied the seed, shape ``(N,)``.
+    dist2
+        Squared distance to that tessellated point, shape ``(N,)``. This is a
+        seed distance, not the converged surface distance.
+    """
+
     patch_id: np.ndarray     # (N,) int32
     uv0: np.ndarray          # (N,2) float64
     closest_pts: np.ndarray  # (N,3) float64
@@ -207,11 +243,24 @@ def warm_start_from_triangulation(
     mesh: pv.PolyData,
     points: np.ndarray,
 ) -> WarmStartResult:
-    """
-    Batched closest-cell query + barycentric interpolation of (u,v).
+    """Produce Newton seeds by batched closest-cell query.
 
-    Returns:
-      patch_id[i], uv0[i] as Newton seed for projecting points[i] onto patch patch_id[i].
+    Each query point's closest tessellation cell is found, and the cell's vertex
+    coordinates are barycentrically interpolated to give a starting ``(u, v)`` on
+    that cell's patch.
+
+    Parameters
+    ----------
+    mesh
+        Triangulated surface from :func:`build_sampled_patches_mesh`.
+    points
+        Query points of shape ``(N, 3)``.
+
+    Returns
+    -------
+    WarmStartResult
+        Seed patch, starting coordinates, closest tessellated point, cell index,
+        and squared seed distance for each query point.
     """
     points = np.asarray(points, dtype=np.float64)
 
@@ -274,13 +323,20 @@ EdgeName = str  # "u0", "u1", "v0", "v1"
 
 @dataclass(frozen=True)
 class NeighborEdgeMap:
-    """
-    Maps (patch_id, edge) -> (neighbor_patch_id, neighbor_edge, reverse_param)
+    """Adjacency from one patch edge to the edge that meets it.
 
-    reverse_param means: along the shared edge, swap orientation:
-      - for u-edges, "along edge" parameter is v
-      - for v-edges, "along edge" parameter is u
+    Attributes
+    ----------
+    neighbor_patch
+        Patch on the other side of the shared edge.
+    neighbor_edge
+        That patch's edge name.
+    reverse_along_edge
+        ``True`` when the two edges run in opposite parametric directions, so the
+        along-edge parameter must be flipped when crossing. The along-edge
+        parameter is ``v`` for a ``u`` edge and ``u`` for a ``v`` edge.
     """
+
     neighbor_patch: int
     neighbor_edge: EdgeName
     reverse_along_edge: bool = False
@@ -339,18 +395,31 @@ def generate_edge_neighbor_seeds(
     edge_map: Dict[Tuple[int, EdgeName], NeighborEdgeMap],
     eps_edge: float = 1e-3,
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
-    """
-    Given primary seeds (patch_id, uv0), generate additional seeds across neighboring patches
-    when uv0 is near an edge.
+    """Add candidate seeds on neighbouring patches for near-edge points.
 
-    Returns a list of (patch_id_all, uv_all) candidate sets.
-    - First entry is the original seeds.
-    - Subsequent entries are neighbor seeds (same length N), but with patch_id set to neighbor
-      where an edge match exists; otherwise keeps original seed.
+    A seed close to a patch boundary may belong on the adjoining patch, so an
+    extra candidate set is emitted for each such crossing.
 
-    Typical usage:
-      candidates = generate_edge_neighbor_seeds(...)
-      run Newton for each candidate set; pick best result per point.
+    Parameters
+    ----------
+    patch_id
+        Seed patch per point, shape ``(N,)``.
+    uv0
+        Seed parametric coordinates, shape ``(N, 2)``, aligned with ``patch_id``.
+    edge_map
+        Patch adjacency keyed by ``(patch_id, edge_name)``. Edges absent from
+        the map produce no crossing candidate.
+    eps_edge
+        Parametric half-width of the band that counts as near an edge: a seed
+        within ``eps_edge`` of a bound is treated as a candidate for crossing
+        that edge.
+
+    Returns
+    -------
+    list of tuple
+        Candidate sets of ``(patch_id, uv)``, each the same length as the input.
+        The first entry is the original seeds; later entries carry the neighbour's
+        ``patch_id`` where an edge match exists and the original seed otherwise.
     """
     patch_id = np.asarray(patch_id, dtype=np.int32)
     uv0 = np.asarray(uv0, dtype=np.float64)
@@ -391,14 +460,25 @@ def pick_best_newton_result(
     candidates: List[Tuple[np.ndarray, np.ndarray]],
     newton_project_fn,
 ):
-    """
-    Runs your Newton projector for each candidate seed set and selects best per point.
+    """Run a Newton projector on each candidate set and keep the best per point.
 
-    newton_project_fn signature should be something like:
-      xproj, uv, dist2 = newton_project_fn(points, patch_id, uv0)
-    with batch support.
+    Parameters
+    ----------
+    points
+        Query points, shape ``(N, 3)``.
+    candidates
+        Candidate seed sets as ``(patch_id, uv0)`` pairs, each entry the same
+        length as ``points``; typically the output of
+        :func:`generate_edge_neighbor_seeds`.
+    newton_project_fn
+        Batched callable returning ``(xproj, uv, dist2)`` for a given
+        ``(points, patch_id, uv0)``.
 
-    Returns best (xproj, patch_id, uv, dist2).
+    Returns
+    -------
+    tuple
+        Best ``(xproj, patch_id, uv, dist2)`` per point, selected on squared
+        distance across the candidate sets.
     """
     points = np.asarray(points, dtype=np.float64)
     N = points.shape[0]
@@ -421,6 +501,24 @@ def pick_best_newton_result(
     return best_x, best_pid, best_uv, best_dist2
 
 def sample_bounding_box_faces(bbox_min, bbox_max, num_samples_per_face=10):
+    """Sample points on the faces and edges of an axis-aligned bounding box.
+
+    Used to generate off-surface query points for projection diagnostics.
+
+    Parameters
+    ----------
+    bbox_min, bbox_max
+        Opposite corners of the box, each an ``(x, y, z)`` sequence.
+    num_samples_per_face
+        Number of random samples drawn per face. Edge interpolants are added
+        on top of these.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sampled points. Face samples are drawn with :func:`numpy.random.uniform`,
+        so results vary between calls unless the global seed is fixed.
+    """
     x_min_face = np.random.uniform(bbox_min[1], bbox_max[1], num_samples_per_face)
     y_min_face = np.random.uniform(bbox_min[2], bbox_max[2], num_samples_per_face)
     z_min_face = np.random.uniform(bbox_min[0], bbox_max[0], num_samples_per_face)
@@ -505,13 +603,21 @@ def sample_bounding_box_faces(bbox_min, bbox_max, num_samples_per_face=10):
 
 
 def sort_by_patch(patch_id: np.ndarray, *arrays):
-    """
-    Sorts patch_id and any number of aligned arrays (same first dimension) by patch_id.
+    """Sort a patch-ID array and any aligned arrays by patch.
 
-    Returns:
-      order: permutation indices
-      inv_order: inverse permutation
-      patch_id_sorted, *arrays_sorted
+    Parameters
+    ----------
+    patch_id
+        Patch identifier per row.
+    *arrays
+        Further arrays sharing the same first dimension.
+
+    Returns
+    -------
+    tuple
+        ``(order, inv_order, patch_id_sorted, *arrays_sorted)``, where ``order``
+        is the permutation applied and ``inv_order`` restores the original
+        ordering.
     """
     patch_id = np.asarray(patch_id)
     order = np.argsort(patch_id, kind="stable")
@@ -528,13 +634,61 @@ def sort_by_patch(patch_id: np.ndarray, *arrays):
     return order, inv_order, *out
 
 def unsort(inv_order: np.ndarray, *arrays_sorted):
-    """
-    Applies inverse permutation to bring arrays back to original order.
+    """Restore arrays to their original order.
+
+    Parameters
+    ----------
+    inv_order
+        Inverse permutation produced by :func:`sort_by_patch`.
+    *arrays_sorted
+        Arrays in sorted order to restore, each indexed along its leading axis
+        by ``inv_order``.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        The arrays in their pre-sort order, one entry per array passed in and in
+        the same order. Always a list, even for a single array.
     """
     return [np.asarray(a)[inv_order] for a in arrays_sorted]
 
 
-def load_function_set(pickle_path) -> lfs.FunctionSet:
+def load_function_set_from_trusted_pickle(pickle_path) -> "lfs.FunctionSet":
+    """Rebuild a B-spline function set from a trusted local pickle.
+
+    Each pickled entry supplies a patch degree, coefficient shape, and
+    coefficients, which are reassembled into ``lfs`` spaces and functions.
+
+    This is the single retained function-set pickle entry point. It is an
+    explicitly opt-in compatibility path: ``pickle_path`` is **mandatory** and
+    there is no default, package-relative fallback, or implicit file lookup, so
+    nothing in the package loads a pickle unless a caller names one.
+
+    .. warning::
+       Python pickle executes arbitrary code on load. Use this only with a
+       trusted local file that you produced yourself. Never load a pickle
+       from an untrusted or remote source.
+
+    Parameters
+    ----------
+    pickle_path
+        Path to the pickled function-set description. Required.
+
+    Returns
+    -------
+    lsdo_function_spaces.FunctionSet
+        Function set keyed by integer patch ID.
+
+    Raises
+    ------
+    ImportError
+        If ``lsdo_function_spaces`` is unavailable.
+    """
+    if lfs is None:
+        raise ImportError(
+            "lsdo_function_spaces is required to load a FunctionSet from pickle."
+        )
+
     with open(pickle_path, "rb") as f:
         wing_fun_set_data = pickle.load(f)
 
@@ -570,7 +724,7 @@ if __name__ == "__main__":
     file_path = 'bsm3/core/projections/'
     file_name = 'swept_wing.stp'
     lpc = lfs.import_file_patched(file_path + file_name, parallelize=False)
-    # lpc = load_function_set(pickle_path=DEFAULT_FUN_SET_PATH)
+    # lpc = load_function_set_from_trusted_pickle("path/to/refitted_fun_set.pkl")
     
     # Create bounding box for lpc geom
     coefficients = []

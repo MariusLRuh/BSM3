@@ -1,3 +1,39 @@
+"""Differentiable closest-point projection onto a B-spline function set.
+
+This module owns the signed closest-distance projection used by the mesh-motion
+pipeline: given a stacked coefficient array describing a deformed function set
+and a batch of query points, it finds each point's closest parametric location
+on the surface and returns a differentiable scalar measure per point.
+
+The work is split deliberately:
+
+* :class:`FunctionSetProjectionModel` is the NumPy/PyVista kernel. Its
+  constructor caches patch metadata, B-spline space data, row spans, and the
+  initial tessellation; its :meth:`FunctionSetProjectionModel.project` and
+  reverse methods then run **eagerly** whenever called, whether directly or
+  from a CSDL custom operation's ``compute``. It is not a CSDL operation.
+* :class:`FunctionSetClosestDistanceOperation` and the two VJP classes wrap
+  that kernel for CSDL. They carry no geometry logic: ``evaluate`` declares
+  graph inputs, outputs, and derivatives, and ``compute`` performs the eager
+  calculation.
+
+Coefficients are passed in the stacked convention: patches concatenated by row
+in ``model.patch_ids`` order, which follows an explicit ``patch_indices``
+argument when one is supplied and otherwise defaults to ascending patch ID.
+The array has shape ``(total_control_points, physical_dimension)``, and
+:class:`PatchInfo` records the half-open ``start:stop`` row span each patch
+occupies inside it.
+
+The forward output is the configured ``output_mode`` measure — distance,
+squared distance, or regularized distance — optionally signed when an SDF sign
+mode is active. It is not signed unconditionally.
+
+Second-order reverse mode is available through
+:class:`FunctionSetClosestDistanceVJPVJP`. It differentiates the first VJP and
+is only as meaningful as the Newton state it is built from; a point whose
+projection did not converge carries no guarantee at either order.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -45,7 +81,7 @@ import csdl_alpha as csdl
 import numpy as np
 import pyvista as pv
 
-from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory_patched import (
+from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory import (
     apply_basis_stencil_numpy,
     compute_basis_stencil_numpy,
     make_bspline_evaluator_numpy,
@@ -74,6 +110,25 @@ except ImportError:
 
 @dataclass(frozen=True)
 class PatchInfo:
+    """Cached per-patch geometry and its row span in the stacked array.
+
+    Attributes
+    ----------
+    patch_id
+        Identifier of the patch inside the owning function set.
+    degrees, knot_vectors, coefficient_shape
+        B-spline space description for this patch.
+    start, stop
+        Half-open row range this patch occupies in the stacked coefficient array.
+    space_cache
+        Reusable basis-evaluation object for this space.
+    mesh_vertex_indices, mesh_cols, mesh_weights
+        Sparse map from patch control points to tessellated mesh vertices, used to
+        rebuild the surface when coefficients change.
+    edge_vertex_indices
+        Mesh vertex indices along each named parametric boundary edge.
+    """
+
     patch_id: int
     degrees: Tuple[int, ...]
     knot_vectors: Tuple[np.ndarray, ...]
@@ -106,6 +161,24 @@ class _FunctionView:
 
 
 def stack_function_set_coefficients(function_set, patch_ids: Optional[Iterable[int]] = None) -> np.ndarray:
+    """Stack a function set's coefficients into one array.
+
+    Parameters
+    ----------
+    function_set
+        Object exposing a ``functions`` mapping of patch ID to patch.
+    patch_ids
+        Patches to stack, in the order given. ``None`` uses every patch in
+        ascending patch-ID order, which is the convention the rest of this module
+        assumes.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of shape ``(total_control_points, physical_dimension)`` with each
+        patch's control points flattened and concatenated by row, in the order
+        given by ``patch_ids``.
+    """
     if patch_ids is None:
         patch_ids = sorted(int(idx) for idx in function_set.functions.keys())
     else:
@@ -308,6 +381,27 @@ class _MutableFunctionSetWrapper:
 
 
 class FunctionSetProjectionModel:
+    """Eager NumPy/PyVista projection kernel for one function set.
+
+    Construction caches patch metadata, B-spline space data, stacked row
+    spans, edge maps, solver tolerances, and the initial tessellation.
+    :meth:`project`, :meth:`compute_vjp`, and :meth:`compute_vjp_vjp` then
+    execute immediately whenever they are called.
+
+    This class is not a CSDL operation; the custom operations in this module
+    hold a reference to it and call it from their ``compute``.
+
+    Attributes
+    ----------
+    patch_ids
+        Patch order defining the stacked coefficient layout. Follows an
+        explicit ``patch_indices`` argument when supplied, otherwise ascending
+        patch ID.
+    output_mode
+        One of ``"distance"``, ``"squared_distance"``, or
+        ``"regularized_distance"``.
+    """
+
     def __init__(
         self,
         function_set,
@@ -992,6 +1086,35 @@ class FunctionSetProjectionModel:
         return normals
 
     def build_degenerate_edge_map(self, mesh: pv.PolyData) -> Dict[Tuple[int, str], float]:
+        """Identify the parametric boundary edges that have collapsed.
+
+        For each patch edge, the sampled tessellation boundary is walked and its
+        arc length summed. An edge is reported as collapsed when that arc length
+        is at or below a scale-aware threshold, ``max(degenerate_edge_length_atol,
+        degenerate_edge_length_rtol * bounding_box_diagonal)``, where the diagonal
+        is taken from ``mesh``. Edges above the threshold are omitted entirely, so
+        the returned mapping is a membership test for collapsed edges rather than
+        a length table for every edge.
+
+        The candidate builder uses that membership: for a listed edge it replaces
+        the one-dimensional solve along the edge with a single fixed-point
+        candidate, since a collapsed edge cannot support a solve along its length.
+        Nothing here rejects or reweights a candidate.
+
+        Parameters
+        ----------
+        mesh
+            Tessellated surface built from the current coefficients. Supplies
+            both the sampled edge polylines and the bounding-box diagonal that
+            makes the threshold scale-aware.
+
+        Returns
+        -------
+        dict
+            Maps ``(patch_id, edge_name)`` to the measured arc length, containing
+            an entry only for edges at or below the threshold. Empty when no edge
+            has collapsed.
+        """
         mesh_points = np.asarray(mesh.points, dtype=float)
         diag = float(np.linalg.norm(mesh_points.max(axis=0) - mesh_points.min(axis=0)))
         tol = max(self.degenerate_edge_length_atol, self.degenerate_edge_length_rtol * diag)
@@ -1006,6 +1129,20 @@ class FunctionSetProjectionModel:
         return degenerate_edge_map
 
     def build_mesh(self, stacked_coefficients: np.ndarray) -> pv.PolyData:
+        """Rebuild the tessellated surface for the given coefficients.
+
+        Parameters
+        ----------
+        stacked_coefficients
+            Coefficients in the stacked convention.
+
+        Returns
+        -------
+        pyvista.PolyData
+            Surface tessellation used for warm-start candidate search. Vertex
+            positions are recomputed from the cached sparse control-point map, so the
+            connectivity is unchanged from setup.
+        """
         points = np.zeros((self.mesh_patch_id.shape[0], self.physical_dimension), dtype=float)
 
         for patch_id in self.patch_ids:
@@ -1024,6 +1161,41 @@ class FunctionSetProjectionModel:
         return mesh
 
     def project(self, stacked_coefficients: np.ndarray, points: np.ndarray):
+        """Project points onto the surface and return the configured measure.
+
+        Runs eagerly: the warm-started Newton solve executes for every query
+        point, then the ``output_mode`` measure is formed and signed if an SDF
+        sign mode is active.
+
+        Parameters
+        ----------
+        stacked_coefficients
+            Coefficients in the stacked convention.
+        points
+            Query points, reshaped to ``(num_points, physical_dimension)``.
+
+        Returns
+        -------
+        output_measure : numpy.ndarray
+            One scalar per query point.
+        state : dict
+            Forward state reused by the reverse passes: the final parametric
+            coordinates selected for each point, projected points, raw and squared
+            distances, the sign and inside mask, reference normals, and the
+            degenerate edge map for this coefficient state. Convergence is carried
+            by three separate entries: ``converged`` is the solver's Boolean
+            decision per point, while ``residual`` and ``iterations`` are the
+            associated diagnostics. The coordinates are the selected candidate,
+            which for a point whose ``converged`` entry is ``False`` is the
+            minimum-residual fallback rather than a solution.
+
+        Notes
+        -----
+        Points whose Newton solve did not converge are still returned rather than
+        raising. Use ``state["converged"]`` to decide whether a point solved;
+        ``state["residual"]`` and ``state["iterations"]`` describe how the solve
+        behaved. Derivatives are not supported where ``converged`` is ``False``.
+        """
         stacked_coefficients = np.asarray(stacked_coefficients, dtype=float)
         points = np.asarray(points, dtype=float).reshape(-1, self.physical_dimension)
 
@@ -1127,6 +1299,31 @@ class FunctionSetProjectionModel:
         d_distances: np.ndarray,
         forward_state: Dict[str, object],
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Apply the first-order reverse-mode product for one seed.
+
+        Parameters
+        ----------
+        stacked_coefficients, points
+            Forward inputs, in the same conventions as :meth:`project`.
+        d_distances
+            Reverse seed, one value per query point.
+        forward_state
+            State returned by :meth:`project` for these same inputs.
+
+        Returns
+        -------
+        d_points : numpy.ndarray
+            Cotangent with respect to the query points.
+        d_coefficients : numpy.ndarray
+            Cotangent with respect to the stacked coefficients.
+
+        Notes
+        -----
+        Returned in the order ``(d_points, d_coefficients)``. Built from the
+        forward state via the implicit-function theorem, not by
+        differentiating the Newton iteration, so it carries no guarantee at
+        points that did not converge.
+        """
         stacked_coefficients = np.asarray(stacked_coefficients, dtype=float)
         points = np.asarray(points, dtype=float).reshape(-1, self.physical_dimension)
         d_distances = np.asarray(d_distances, dtype=float).reshape(-1)
@@ -1238,6 +1435,38 @@ class FunctionSetProjectionModel:
         d_coefficients_cotangent: np.ndarray,
         forward_state: Dict[str, object],
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Apply the second-order reverse-mode product.
+
+        Differentiates :meth:`compute_vjp` with respect to its own inputs and
+        seed.
+
+        Parameters
+        ----------
+        stacked_coefficients, points
+            Forward inputs, in the same conventions as :meth:`project`.
+        d_distances
+            First-order reverse seed.
+        d_points_cotangent, d_coefficients_cotangent
+            Second-order seeds on the two first-order outputs.
+        forward_state
+            State returned by :meth:`project` for these same inputs.
+
+        Returns
+        -------
+        dd_points : numpy.ndarray
+            Cotangent with respect to the query points.
+        dd_coefficients : numpy.ndarray
+            Cotangent with respect to the stacked coefficients.
+        dd_d_distances : numpy.ndarray
+            Cotangent with respect to the first-order seed.
+
+        Notes
+        -----
+        Returned in the order
+        ``(dd_points, dd_coefficients, dd_d_distances)``. Inherits the
+        first-order caveat: it is only meaningful where the forward projection
+        converged.
+        """
         stacked_coefficients = np.asarray(stacked_coefficients, dtype=float)
         points = np.asarray(points, dtype=float).reshape(-1, self.physical_dimension)
         d_distances = np.asarray(d_distances, dtype=float).reshape(-1)
@@ -1485,12 +1714,36 @@ class FunctionSetProjectionModel:
 
 
 class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBeta):
+    """CSDL custom operation for the first-order reverse product.
+
+    Pairs with :class:`FunctionSetClosestDistanceOperation` and reads the
+    forward state cached in ``shared_state``, so it must run against the same
+    coefficients.
+    """
+
     def __init__(self, model: FunctionSetProjectionModel, shared_state: Dict[str, object]):
         super().__init__()
         self.model = model
         self.shared_state = shared_state
 
     def evaluate(self, inputs, d_outputs):
+        """Declare the reverse inputs and cotangent outputs.
+
+        Parameters
+        ----------
+        inputs
+            Forward inputs the cotangents are taken with respect to.
+        d_outputs
+            Reverse seed on the output measure.
+
+        Returns
+        -------
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by the differentiated input name:
+            ``"coefficients"`` with the stacked coefficient shape, and
+            ``"points"`` with shape ``(N, physical_dimension)``. The mapping is
+            keyed, not ordered.
+        """
         coefficients = inputs["coefficients"]
         points = inputs["points"].reshape(-1, self.model.physical_dimension)
         d_closest_distance = d_outputs["closest_distance"].reshape(-1)
@@ -1514,6 +1767,22 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
         }
 
     def compute(self, inputs, outputs):
+        """Compute the first-order cotangents eagerly and populate ``outputs``.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"``, ``"points"``, and the seed
+            ``"d_closest_distance"``.
+        outputs
+            Output buffer written in place with ``"d_points"`` and
+            ``"d_coefficients"``.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
@@ -1530,12 +1799,39 @@ class FunctionSetClosestDistanceVJP(csdl.experimental.CustomExplicitOperationBet
 
 
 class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperationBeta):
+    """CSDL custom operation for the second-order reverse product.
+
+    Differentiates :class:`FunctionSetClosestDistanceVJP` and reads the same
+    cached forward state. It is only as reliable as that state: points that
+    did not converge carry no guarantee.
+    """
+
     def __init__(self, model: FunctionSetProjectionModel, shared_state: Dict[str, object]):
         super().__init__()
         self.model = model
         self.shared_state = shared_state
 
     def evaluate(self, inputs, d_outputs):
+        """Declare the second-order reverse inputs and outputs.
+
+        Parameters
+        ----------
+        inputs
+            Mapping of the first-order VJP's inputs, holding
+            ``"coefficients"``, ``"points"``, and ``"d_closest_distance"``.
+        d_outputs
+            Mapping of second-order seeds on the first-order cotangents,
+            holding ``"d_coefficients"`` and ``"d_points"``.
+
+        Returns
+        -------
+        dict of str to csdl_alpha.Variable
+            Cotangents keyed by the differentiated input name:
+            ``"coefficients"`` with the stacked coefficient shape, ``"points"``
+            with shape ``(N, physical_dimension)``, and
+            ``"d_closest_distance"`` with shape ``(N,)`` for the first-order
+            seed. The mapping is keyed, not ordered.
+        """
         coefficients = inputs["coefficients"]
         points = inputs["points"].reshape(-1, self.model.physical_dimension)
         d_closest_distance = inputs["d_closest_distance"].reshape(-1)
@@ -1559,6 +1855,23 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
         }
 
     def compute(self, inputs, outputs):
+        """Compute the second-order cotangents eagerly and populate ``outputs``.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"``, ``"points"``,
+            ``"d_closest_distance"``, and the second-order seeds
+            ``"d_d_coefficients"`` and ``"d_d_points"``.
+        outputs
+            Output buffer written in place with ``"dd_points"``,
+            ``"dd_coefficients"``, and ``"dd_d_closest_distance"``.
+
+        Returns
+        -------
+        None
+            Results are written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
         d_closest_distance = np.asarray(inputs["d_closest_distance"], dtype=float).reshape(-1)
@@ -1580,12 +1893,34 @@ class FunctionSetClosestDistanceVJPVJP(csdl.experimental.CustomExplicitOperation
 
 
 class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperationBeta):
+    """CSDL custom operation wrapping the forward projection.
+
+    Carries no geometry logic. ``evaluate`` declares the graph inputs, output,
+    and derivatives; ``compute`` performs the eager projection through
+    :meth:`FunctionSetProjectionModel.project` and caches the forward state in
+    ``shared_state`` for the reverse passes.
+    """
+
     def __init__(self, model: FunctionSetProjectionModel):
         super().__init__()
         self.model = model
         self.shared_state: Dict[str, object] = {}
 
     def evaluate(self, coefficients, points):
+        """Declare the graph inputs and the output measure.
+
+        Parameters
+        ----------
+        coefficients
+            Stacked coefficient variable.
+        points
+            Query-point variable.
+
+        Returns
+        -------
+        csdl_alpha.Variable
+            One value per query point, in the configured ``output_mode``.
+        """
         points = points.reshape(-1, self.model.physical_dimension)
 
         self.declare_input("coefficients", coefficients)
@@ -1602,6 +1937,24 @@ class FunctionSetClosestDistanceOperation(csdl.experimental.CustomExplicitOperat
         return closest_distance
 
     def compute(self, inputs, outputs):
+        """Compute the projection eagerly and populate ``outputs``.
+
+        The forward state is cached in ``shared_state`` so the reverse passes
+        can reuse it.
+
+        Parameters
+        ----------
+        inputs
+            Mapping holding ``"coefficients"`` and ``"points"``.
+        outputs
+            Output buffer written in place with ``"closest_distance"``, one
+            value per query point in the configured ``output_mode``.
+
+        Returns
+        -------
+        None
+            The result is written into ``outputs``.
+        """
         coefficients = np.asarray(inputs["coefficients"], dtype=float)
         points = np.asarray(inputs["points"], dtype=float).reshape(-1, self.model.physical_dimension)
 
@@ -1710,6 +2063,22 @@ if __name__ == "__main__":
     query_points = interior_surface_points + np.array([0.0, 0.0, 0.15])
 
     def run_mode_verification(output_mode: str, regularization_epsilon: float = 1e-8) -> None:
+        """Print a forward and derivative check for one output mode.
+
+        Parameters
+        ----------
+        output_mode
+            Measure to verify, one of the model's supported ``output_mode``
+            values.
+        regularization_epsilon
+            Smoothing used by the regularized-distance mode; ignored by the
+            other modes.
+
+        Returns
+        -------
+        None
+            Results are printed.
+        """
         print("")
         print(f"Output mode: {output_mode}")
 

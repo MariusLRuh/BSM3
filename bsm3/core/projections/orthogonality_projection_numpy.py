@@ -1,3 +1,16 @@
+"""NumPy Newton projection of points onto B-spline patches.
+
+Two solves live here: an interior solve on the orthogonality residual, and an
+edge solve with one parametric coordinate pinned to a patch boundary. Both are
+eager NumPy kernels that execute when called, either directly or from a CSDL
+custom operation's ``compute``.
+
+Neither solve raises on failure. Every point comes back inside a
+:class:`SurfaceProjectionResult` carrying its residual, step norm, iteration
+count, and convergence flag, so the caller can decide whether to retry, route
+the point to another patch, or accept it.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,7 +20,7 @@ import numpy as np
 
 
 try:
-    from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory_patched import (
+    from lsdo_function_spaces.core.spaces.non_cython_bsplines.compute_basis_matrix_numpy_factory import (
         make_bspline_evaluator_numpy,
     )
 except Exception:  # pragma: no cover
@@ -16,9 +29,32 @@ except Exception:  # pragma: no cover
 
 @dataclass(frozen=True)
 class OrthogonalityNewtonParams:
-    max_iter: int = 100
-    tol_res: float = 1e-12
-    tol_step: float = 1e-12
+    """Tolerances and iteration limits for the orthogonality Newton solve.
+
+    Attributes
+    ----------
+    max_iter
+        Maximum Newton iterations per point.
+    tol_res
+        Residual norm below which a point is accepted as converged.
+    tol_step
+        Parametric step norm below which iteration stops.
+    use_active_set
+        Clamp parameters to the unit square and mask outward residual components
+        at a clamped bound, instead of letting the step leave the patch.
+    bound_eps
+        Distance from 0 or 1 at which a parameter counts as on the boundary.
+    snap_eps
+        Distance within which a converged parameter is snapped exactly to 0 or 1.
+    zero_residual_tol
+        Residual treated as exactly zero, used for coincident query points.
+    det_eps, diag_eps
+        Floors guarding the 2x2 solve and its diagonal against singularity.
+    """
+
+    max_iter: int = 40
+    tol_res: float = 1e-9
+    tol_step: float = 1e-9
     use_active_set: bool = True
     bound_eps: float = 1e-8
     snap_eps: float = 1e-8
@@ -29,6 +65,38 @@ class OrthogonalityNewtonParams:
 
 @dataclass
 class SurfaceProjectionResult:
+    """Per-point outcome of a surface Newton projection.
+
+    Attributes
+    ----------
+    uv
+        Final parametric coordinates, shape ``(num_points, 2)``: the last
+        iterate, which for a point whose ``converged`` entry is ``False`` is not
+        a solution. ``converged`` records the solver's decision for each point,
+        and ``residual``, ``step_norm``, and ``iterations`` are the associated
+        diagnostics.
+    projected_points
+        Surface points at ``uv``.
+    residual
+        Final residual norm per point.
+    step_norm
+        Final parametric step norm per point.
+    dist2
+        Squared distance from each query point to its projection.
+    converged
+        Boolean per point.
+    iterations
+        Newton iterations actually taken per point.
+    boundary_clamped
+        ``True`` where the final parameter lies on a bound while the
+        **unmasked** residual still points outward. It is computed before the
+        active set is applied, so it is independent of ``converged`` and does
+        not by itself imply that the point converged. Such a point sits on an
+        edge and may belong on a neighbouring patch, so the warm-start driver
+        routes it into the retry path. ``None`` for candidates that lie on a
+        boundary by construction.
+    """
+
     uv: np.ndarray
     projected_points: np.ndarray
     residual: np.ndarray
@@ -36,13 +104,21 @@ class SurfaceProjectionResult:
     dist2: np.ndarray
     converged: np.ndarray
     iterations: np.ndarray
+    # True where the final parameter sits on a bound (u or v at 0/1) while the
+    # unmasked residual still points outward past it. Computed before the active
+    # set is applied, so it is independent of `converged` and does not by itself
+    # imply the point converged. Such points sit on a patch edge but may want to
+    # slide across it onto a neighbouring patch; the warm-start driver routes them
+    # into the retry path.
+    # None for edge/point candidates that are on a boundary by construction.
+    boundary_clamped: Optional[np.ndarray] = None
 
 
 def _require_numpy_bspline_factory() -> None:
     if make_bspline_evaluator_numpy is None:
         raise ImportError(
             "make_bspline_evaluator_numpy not found; ensure "
-            "compute_basis_matrix_numpy_factory_patched.py is on path."
+            "compute_basis_matrix_numpy_factory.py is on path."
         )
 
 
@@ -128,6 +204,26 @@ def make_surface_orthogonality_evaluator_numpy(
     degrees: Tuple[int, ...],
     knot_vectors: Tuple[np.ndarray, ...],
 ):
+    """Build an eager NumPy evaluator for the orthogonality residual and Jacobian.
+
+    The residual is the surface tangent basis dotted with the offset from the
+    query point, so it vanishes exactly when that offset is orthogonal to the
+    surface.
+
+    Parameters
+    ----------
+    degrees
+        Per-direction B-spline degrees, ordered ``(u, v)``. Exactly two
+        directions are supported; anything else raises ``ValueError``.
+    knot_vectors
+        Per-direction knot vectors, ordered to match ``degrees``.
+
+    Returns
+    -------
+    callable
+        Function of parametric coordinates and coefficients returning the residual
+        and the derivatives the Newton step needs.
+    """
     _require_numpy_bspline_factory()
 
     if len(degrees) != 2:
@@ -213,6 +309,35 @@ def project_points_orthogonality_newton_numpy(
     *,
     params: OrthogonalityNewtonParams = OrthogonalityNewtonParams(),
 ) -> SurfaceProjectionResult:
+    """Project points onto a patch interior by Newton on the orthogonality residual.
+
+    Runs eagerly when called.
+
+    Parameters
+    ----------
+    points
+        Query points, shape ``(M, physical_dimension)``.
+    u0s
+        Initial parametric guesses, shape ``(M, 2)``, one per query point. They
+        are clipped into the unit square and snapped to its bounds before the
+        first iteration.
+    coeffs
+        Control points for the single patch being solved on, with the trailing
+        axis holding the physical dimension.
+    degrees
+        Per-direction B-spline degrees, ordered ``(u, v)``.
+    knot_vectors
+        Per-direction knot vectors, ordered to match ``degrees``.
+    params
+        Solve tolerances; see :class:`OrthogonalityNewtonParams`.
+
+    Returns
+    -------
+    SurfaceProjectionResult
+        Final coordinates and per-point convergence evidence, including
+        ``boundary_clamped``. Points that did not converge are returned rather
+        than raising, so the caller decides what to do with them.
+    """
     points = np.asarray(points, dtype=float)
     u0s = np.asarray(u0s, dtype=float)
 
@@ -262,19 +387,26 @@ def project_points_orthogonality_newton_numpy(
             break
 
     S, Su, Sv, Suu, Suv, Svv = evaluate(u, coeffs)
-    residual, _, dist2 = _compute_residual_and_jacobian(points, S, Su, Sv, Suu, Suv, Svv)
-    if params.use_active_set:
-        active = _active_mask_numpy(u, residual, params)
-        residual = np.linalg.norm(residual * active, axis=1)
-    else:
-        residual = np.linalg.norm(residual, axis=1)
+    residual_vec, _, dist2 = _compute_residual_and_jacobian(points, S, Su, Sv, Suu, Suv, Svv)
 
-    # number of (u,v) that lie on an edge (i.e., u=0, u=1, v=0, or v=1)
-    on_edge = (u[:, 0] == 0) | (u[:, 0] == 1) | (u[:, 1] == 0) | (u[:, 1] == 1)
-    edge_count = np.sum(on_edge)
-    # print(f"Orthogonality Newton: {edge_count}/{points.shape[0]} points projected onto edges.")
-    # print(f"                      {points.shape[0] - edge_count}/{points.shape[0]} points projected onto interior.")
-    # print("uv on edge:", u[on_edge])
+    # Detect boundary clamping: a point pinned at a parametric bound (u or v at
+    # 0/1) whose *unmasked* residual still points outward past that bound. The
+    # active set (below) zeros that component, so the point reports converged
+    # with a near-zero masked residual even though its true closest point may
+    # lie across the edge on a neighbouring patch. Surfacing this is what lets
+    # the warm-start driver retry such points instead of silently pinning them.
+    # This mirrors the block_lower/block_upper logic in _active_mask_numpy.
+    lower_on_bound = u <= params.bound_eps
+    upper_on_bound = u >= (1.0 - params.bound_eps)
+    outward_lower = lower_on_bound & (residual_vec > 0.0)
+    outward_upper = upper_on_bound & (residual_vec < 0.0)
+    boundary_clamped = np.any(outward_lower | outward_upper, axis=1)
+
+    if params.use_active_set:
+        active = _active_mask_numpy(u, residual_vec, params)
+        residual = np.linalg.norm(residual_vec * active, axis=1)
+    else:
+        residual = np.linalg.norm(residual_vec, axis=1)
 
     return SurfaceProjectionResult(
         uv=u,
@@ -284,6 +416,7 @@ def project_points_orthogonality_newton_numpy(
         dist2=dist2,
         converged=converged,
         iterations=iterations,
+        boundary_clamped=boundary_clamped,
     )
 
 
@@ -298,6 +431,43 @@ def project_points_on_surface_edge_newton_numpy(
     fixed_value: float,
     params: OrthogonalityNewtonParams = OrthogonalityNewtonParams(),
 ) -> SurfaceProjectionResult:
+    """Project points onto one parametric boundary edge of a patch.
+
+    One parametric coordinate is held fixed at 0 or 1 and Newton runs on the
+    remaining coordinate. This supplies the edge warm-start candidates used when a
+    point's closest location may lie on or across a patch boundary.
+
+    Parameters
+    ----------
+    points
+        Query points, shape ``(M, physical_dimension)``.
+    t0s
+        Initial guesses for the free coordinate, flattened to shape ``(M,)``,
+        one per query point.
+    coeffs
+        Control points for the single patch being solved on, with the trailing
+        axis holding the physical dimension.
+    degrees
+        Per-direction B-spline degrees, ordered ``(u, v)``.
+    knot_vectors
+        Per-direction knot vectors, ordered to match ``degrees``.
+    fixed_axis
+        Which parametric axis is held fixed: ``0`` for u, ``1`` for v. Any other
+        value raises ``ValueError``.
+    fixed_value
+        The value that axis is held at, ``0.0`` or ``1.0``, selecting which of
+        the patch's four edges is solved on.
+    params
+        Solve tolerances; see :class:`OrthogonalityNewtonParams`.
+
+    Returns
+    -------
+    SurfaceProjectionResult
+        Final coordinates and per-point convergence evidence, with the fixed
+        axis written back into ``uv`` alongside the solved free coordinate.
+        ``boundary_clamped`` is ``None`` here, because these candidates are on a
+        boundary by construction.
+    """
     points = np.asarray(points, dtype=float)
     t0s = np.asarray(t0s, dtype=float).reshape(-1)
 

@@ -1,51 +1,124 @@
-# lsdo_project_template
+# GAMMA
 
-<!---
-[![Python](https://img.shields.io/pypi/pyversions/lsdo_project_template)](https://img.shields.io/pypi/pyversions/lsdo_project_template)
-[![Pypi](https://img.shields.io/pypi/v/lsdo_project_template)](https://pypi.org/project/lsdo_project_template/)
-[![Coveralls Badge][13]][14]
-[![PyPI version][10]][11]
-[![PyPI Monthly Downloads][12]][11]
--->
+**GAMMA — Geometry-Aware Mesh Movement Analysis** performs differentiable
+boundary-surface mesh motion. Given a CAD outer mould line and a surface mesh
+that must follow it, GAMMA moves every mesh node as the geometry deforms,
+carries analytic derivatives through the CSDL graph, and reports mesh-quality
+and inversion diagnostics so validity is a measured outcome rather than an
+assumption.
 
-[![GitHub Actions Test Badge](https://github.com/LSDOlab/lsdo_project_template/actions/workflows/actions.yml/badge.svg)](https://github.com/lsdo_project_template/lsdo_project_template/actions)
-[![Forks](https://img.shields.io/github/forks/LSDOlab/lsdo_project_template.svg)](https://github.com/LSDOlab/lsdo_project_template/network)
-[![Issues](https://img.shields.io/github/issues/LSDOlab/lsdo_project_template.svg)](https://github.com/LSDOlab/lsdo_project_template/issues)
+The installable distribution is `gamma-mdo`; the Python import namespace
+remains `bsm3`.
 
+It also provides tetrahedral volume-mesh motion and an optional CSDL/DAFoam
+coupling.
 
-A template repository for LSDOlab projects
+## Quickstart
 
-This repository serves as a template for all LSDOlab projects with regard to documentation, testing and hosting of open-source code.
-Note that template users need to edit the README badge definitions for their respective packages.
+The complete tracked E175 example is the quickest executable starting point:
 
-*README.md file contains high-level information about your package: it's purpose, high-level instructions for installation and usage.*
-
-# Installation
-
-## Installation instructions for users
-For direct installation with all dependencies, run on the terminal or command line
-```sh
-pip install git+https://github.com/LSDOlab/lsdo_project_template.git
-```
-If you want users to install a specific branch, run
-```sh
-pip install git+https://github.com/LSDOlab/lsdo_project_template.git@branch
+```bash
+python examples/e175_surface_deformation.py
 ```
 
-<!-- **Enabled by**: `packages=find_packages()` in the `setup.py` file. -->
+Its first uncached run can take several minutes. All high-level inputs are
+editable in the script's `main` function.
 
-## Installation instructions for developers
-To install `lsdo_project_template`, first clone the repository and install using pip.
-On the terminal or command line, run
-```sh
-git clone https://github.com/LSDOlab/lsdo_project_template.git
-pip install -e ./lsdo_project_template
+`bsm3.mesh_motion` is the intended library entry point and is deliberately
+small. The following is the call shape, not a standalone example: at least one
+component and its deformed coefficients or built-in motion must be registered
+on `geometry` before `run` is called.
+
+```python
+from pathlib import Path
+
+import csdl_alpha as csdl
+
+import bsm3.mesh_motion as mm
+
+recorder = csdl.Recorder(inline=True)
+recorder.start()
+try:
+    geometry = mm.GeometryModel()
+    # Required before run: register at least one component, either with
+    # geometry.add_component(...) and external deformed coefficients or with
+    # the optional built-in helpers demonstrated by the E175 example.
+
+    result = mm.run(
+        inputs=mm.InputFiles(
+            geometry_file=Path("geometry.stp"),
+            surface_mesh_file=Path("surface.msh"),
+            cache_directory=Path("/tmp/bsm3_cache"),
+        ),
+        geometry=geometry,
+        motion=mm.MeshMotion(quality=mm.QualityChecks(surface=True)),
+        recorder=recorder,
+    )
+finally:
+    recorder.stop()
+
+result.print_summary()
 ```
 
-# For Developers
-For details on documentation, refer to the README in `docs` directory.
+The caller owns the public mesh-motion recorder: `GeometryModel` and `mm.run`
+do not create, start, or stop it.
 
-For details on testing/pull requests, refer to the README in `tests` directory.
+A complete, runnable example is tracked at
+[`examples/e175_surface_deformation.py`](examples/e175_surface_deformation.py).
 
-# License
-This project is licensed under the terms of the **GNU Lesser General Public License v3.0**.
+## Documentation
+
+The documentation source is in [`docs/`](docs/). There is no hosted
+deployment yet. Build it locally:
+
+```bash
+python -m pip install -r docs/requirements.txt
+python -m sphinx -W --keep-going -b html docs /tmp/bsm3-docs-html
+```
+
+It covers installation, the E175 example, the external-parameterization
+contract, the public API, background, and integration status.
+
+## Installation
+
+The validated setup installs GAMMA from a checkout and pins its geometry
+dependencies to exact Git revisions. GAMMA deliberately declares no automatic
+dependencies, so its own editable install cannot replace packages in an
+externally managed DAFoam, MPI, or PETSc stack.
+
+The validated stack is Python 3.12 with NumPy 2.0.2, SciPy 1.13.1, and JAX
+0.4.38, against these exact revisions:
+
+```bash
+conda create -n bsm3_py312_main python=3.12
+conda activate bsm3_py312_main
+
+# Installs the exact tested dependency set, including CSDL_alpha at
+# 73a9efd1033016a835779db10a9b9e81ed2254ce.
+python -m pip install -r requirements-ci.txt
+
+# LFS is installed separately so it cannot replace the validated stack.
+python -m pip install --no-deps \
+  "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git@307ad3aabfff31c6fb44ddf51bc0dcc41a60c420"
+
+python -m pip install --no-deps --no-build-isolation -e .
+```
+
+See [docs/src/getting_started.md](docs/src/getting_started.md) for details, and
+[HPC_DAFOAM_INSTALL.md](HPC_DAFOAM_INSTALL.md) for the TSCC/DAFoam prerequisite
+audit.
+
+## Running
+
+```bash
+python examples/e175_surface_deformation.py
+python -m pytest tests -q
+```
+
+DAFoam, OpenFOAM, `mpi4py`, and real MPI are optional integrations that need an
+existing sourced solver environment and a case you supply. They are not run in
+the standard test suite.
+
+## License
+
+GAMMA is licensed under the GNU Lesser General Public License v3.0 or later.

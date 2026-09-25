@@ -1,43 +1,180 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-
 name: Tests
 
-# Whenever there is a pull request (PR) or push to the "main" branch, the jobs specified below will run.
-on: 
+on:
   push:
-    branches: [ "main" ]
+    branches: [main, production-ready-overhaul]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
 
-# Here, we specify the automatic cloud based testing that will be ran on pushes/PRs to "main"
 jobs:
-  build:
-
-    # The tests will run on ubuntu with python versions 3.8, 3.9, and 3.10.
-    # Add other OSes like windows and macOS if needed as well as other Python versions  
+  test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.8", "3.9", "3.10"]
+    timeout-minutes: 20
 
     steps:
-      # The steps here are essentially command-line arguments that will be ran on the cloud with the above configurations  
-    - uses: actions/checkout@v3
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
+      - uses: actions/checkout@v4
 
-      # Here we install the package of this repositories as well as other required packages 
-    - name: Install dependencies
-      run: | 
-        python -m pip install --upgrade pip
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-        pip install -e .
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
 
-      # Finally, we run the package unit-tests on the specified OS and python versions.
-    - name: Test with pytest
-      run: |
-        pytest
+      - name: Install the validated geometry stack
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-ci.txt
+          python -m pip install --no-deps \
+            "lsdo_function_spaces @ git+https://github.com/LSDOlab/lsdo_function_spaces.git@307ad3aabfff31c6fb44ddf51bc0dcc41a60c420"
+          python -m pip install --no-deps -e .
+
+      - name: Critical static checks
+        run: |
+          # Default Ruff selection over the complete retained production
+          # manifest -- every bsm3 path the four documentation steps below
+          # cover -- plus the M0 test files. Kept literal and auditable; the
+          # dirty/untracked research tree is deliberately excluded.
+          python -m ruff check \
+            bsm3/__init__.py \
+            bsm3/component_parameters.py \
+            bsm3/core/__init__.py \
+            bsm3/core/boundary_surface_movement/__init__.py \
+            bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py \
+            bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py \
+            bsm3/core/boundary_surface_movement/constraints.py \
+            bsm3/core/boundary_surface_movement/current_graph_solve.py \
+            bsm3/core/boundary_surface_movement/dafoam_csdl.py \
+            bsm3/core/boundary_surface_movement/e175_derivative_ladder.py \
+            bsm3/core/boundary_surface_movement/elasticity.py \
+            bsm3/core/boundary_surface_movement/forward_only_fd_checker.py \
+            bsm3/core/boundary_surface_movement/free_region.py \
+            bsm3/core/boundary_surface_movement/fuel_burn.py \
+            bsm3/core/boundary_surface_movement/geometry.py \
+            bsm3/core/boundary_surface_movement/geometry_model.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_backend.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_mpi.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_operation.py \
+            bsm3/core/boundary_surface_movement/graph_distance.py \
+            bsm3/core/boundary_surface_movement/intersections.py \
+            bsm3/core/boundary_surface_movement/load_stepping.py \
+            bsm3/core/boundary_surface_movement/mesh_motion_config.py \
+            bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
+            bsm3/core/boundary_surface_movement/motion.py \
+            bsm3/core/boundary_surface_movement/ngon_affine.py \
+            bsm3/core/boundary_surface_movement/panel_aerodynamics.py \
+            bsm3/core/boundary_surface_movement/projection.py \
+            bsm3/core/boundary_surface_movement/quadratic_distortion.py \
+            bsm3/core/boundary_surface_movement/quality.py \
+            bsm3/core/boundary_surface_movement/rbf.py \
+            bsm3/core/boundary_surface_movement/run_dafoam_gmsh.py \
+            bsm3/core/boundary_surface_movement/spd_solve_custom_op.py \
+            bsm3/core/boundary_surface_movement/volume_mesh_motion.py \
+            bsm3/core/projections/function_set_closest_distance_custom_op.py \
+            bsm3/core/projections/function_set_evaluation_custom_op.py \
+            bsm3/core/projections/function_set_projection_custom_op.py \
+            bsm3/core/projections/orthogonality_projection_numpy.py \
+            bsm3/core/projections/warm_start_candidate_projection_numpy.py \
+            bsm3/core/projections/warm_start_projections.py \
+            bsm3/core/weighting_functions.py \
+            bsm3/mesh_motion.py \
+            bsm3/plotting.py \
+            bsm3/preprocessing/__init__.py \
+            bsm3/preprocessing/components.py \
+            bsm3/preprocessing/gmsh.py \
+            bsm3/preprocessing/intersections.py \
+            bsm3/preprocessing/mesh_io.py \
+            bsm3/preprocessing/movement.py \
+            bsm3/preprocessing/quad_conversion.py \
+            bsm3/preprocessing/stl.py \
+            bsm3/preprocessing/symmetry.py \
+            tests/test_derivative_gate.py \
+            tests/test_curated_assets.py \
+            tests/test_e175_driver_configuration.py
+
+      - name: Numpydoc checks for the M0 public surface
+        run: |
+          python -m ruff check --select D \
+            bsm3/preprocessing/mesh_io.py \
+            bsm3/preprocessing/__init__.py \
+            tests/test_derivative_gate.py \
+            tests/test_curated_assets.py
+
+      - name: Numpydoc checks for the surface-motion core
+        run: |
+          python -m ruff check --select D \
+            bsm3/mesh_motion.py \
+            bsm3/core/boundary_surface_movement/geometry_model.py \
+            bsm3/core/boundary_surface_movement/mesh_motion_config.py \
+            bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
+            bsm3/core/boundary_surface_movement/motion.py \
+            bsm3/core/boundary_surface_movement/elasticity.py \
+            bsm3/core/boundary_surface_movement/load_stepping.py \
+            bsm3/core/boundary_surface_movement/current_graph_solve.py \
+            bsm3/core/boundary_surface_movement/ngon_affine.py \
+            bsm3/core/boundary_surface_movement/panel_aerodynamics.py \
+            bsm3/core/boundary_surface_movement/quadratic_distortion.py \
+            bsm3/core/boundary_surface_movement/projection.py \
+            bsm3/core/boundary_surface_movement/quality.py \
+            bsm3/core/boundary_surface_movement/graph_distance.py \
+            bsm3/core/boundary_surface_movement/free_region.py \
+            bsm3/core/boundary_surface_movement/fuel_burn.py \
+            bsm3/core/boundary_surface_movement/constraints.py \
+            bsm3/core/boundary_surface_movement/spd_solve_custom_op.py \
+            bsm3/core/boundary_surface_movement/geometry.py \
+            bsm3/core/boundary_surface_movement/intersections.py
+
+      - name: Numpydoc checks for projection and preprocessing
+        run: |
+          python -m ruff check --select D \
+            bsm3/core/projections/function_set_closest_distance_custom_op.py \
+            bsm3/core/projections/function_set_evaluation_custom_op.py \
+            bsm3/core/projections/function_set_projection_custom_op.py \
+            bsm3/core/projections/orthogonality_projection_numpy.py \
+            bsm3/core/projections/warm_start_candidate_projection_numpy.py \
+            bsm3/core/projections/warm_start_projections.py \
+            bsm3/preprocessing/__init__.py \
+            bsm3/preprocessing/components.py \
+            bsm3/preprocessing/gmsh.py \
+            bsm3/preprocessing/intersections.py \
+            bsm3/preprocessing/mesh_io.py \
+            bsm3/preprocessing/movement.py \
+            bsm3/preprocessing/quad_conversion.py \
+            bsm3/preprocessing/stl.py \
+            bsm3/preprocessing/symmetry.py
+
+      - name: Numpydoc checks for drivers, volume motion, and MPI
+        run: |
+          python -m ruff check --select D \
+            bsm3/__init__.py \
+            bsm3/component_parameters.py \
+            bsm3/core/__init__.py \
+            bsm3/core/boundary_surface_movement/__init__.py \
+            bsm3/core/boundary_surface_movement/cfd_mesh_dafoam_analysis.py \
+            bsm3/core/boundary_surface_movement/cfd_mesh_movement_test.py \
+            bsm3/core/boundary_surface_movement/dafoam_csdl.py \
+            bsm3/core/boundary_surface_movement/e175_derivative_ladder.py \
+            bsm3/core/boundary_surface_movement/forward_only_fd_checker.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_backend.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_mpi.py \
+            bsm3/core/boundary_surface_movement/geometry_volume_operation.py \
+            bsm3/core/boundary_surface_movement/rbf.py \
+            bsm3/core/boundary_surface_movement/run_dafoam_gmsh.py \
+            bsm3/core/boundary_surface_movement/volume_mesh_motion.py \
+            bsm3/core/weighting_functions.py \
+            bsm3/plotting.py
+
+      - name: Documentation build
+        run: |
+          # Docs-only dependencies; the site never imports bsm3, so the
+          # validated geometry stack is deliberately not installed here.
+          python -m pip install -r docs/requirements.txt
+          # Warnings are errors. Build outside the repository so the tree
+          # stays clean.
+          python -m sphinx -W --keep-going -b html docs "${RUNNER_TEMP}/bsm3-docs-html"
+
+      - name: Fast derivative gate
+        run: python -m pytest -q tests/test_derivative_gate.py
+
+      - name: Test suite
+        run: python -m pytest -q tests

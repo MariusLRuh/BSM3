@@ -1,0 +1,24 @@
+# Versions validated in the bsm3_py312_main environment on 2026-09-24, against
+# official upstream mains for CSDL_alpha and lsdo_function_spaces.
+numpy==2.0.2
+scipy==1.13.1
+jax[cpu]==0.4.38
+h5py
+sympy
+rustworkx
+pydot
+joblib
+pandas
+scikit-learn==1.6.1
+pyvista==0.46.5
+meshio==5.3.5
+pytest
+pytest-timeout==2.4.0
+ruff==0.9.10
+
+# CSDL_alpha now tracks official upstream main rather than the HgXe fork.
+# This commit provides the CustomExplicitOperationBeta API GAMMA depends on.
+csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git@73a9efd1033016a835779db10a9b9e81ed2254ce
+
+# lsdo_function_spaces is installed separately with --no-deps in CI so its
+# broad dependency ranges cannot replace the validated versions above.

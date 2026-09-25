@@ -1,42 +1,30 @@
-# .readthedocs.yaml
-# Read the Docs configuration file
-# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+# Read the Docs configuration.
+# https://docs.readthedocs.io/en/stable/config-file/v2.html
+#
+# The GAMMA documentation build is hermetic: it renders hand-written Markdown
+# and never imports the package, so it installs only docs/requirements.txt.
+# The validated geometry stack (CSDL_alpha, lsdo_function_spaces, JAX, gmsh)
+# is deliberately NOT installed here. If a future revision adds autodoc, that
+# installation must pin CSDL_alpha to 73a9efd1033016a835779db10a9b9e81ed2254ce
+# and lsdo_function_spaces to 307ad3aabfff31c6fb44ddf51bc0dcc41a60c420, with
+# --no-deps on lsdo_function_spaces.
 
-# Required
 version: 2
 
-# Set the version of Python and other tools you might need
 build:
   os: ubuntu-22.04
   tools:
-    python: "3.11"
-    # You can also specify other tool versions:
-    # nodejs: "19"
-    # rust: "1.64"
-    # golang: "1.19"
+    # Matches the validated GAMMA stack.
+    python: "3.12"
 
-# Build documentation in the docs/ directory with Sphinx
-# To specify the path to the conf.py file, relative to the root of the project,
 sphinx:
-   configuration: docs/conf.py
-   # Can also specify the builder type for the Sphinx documentation, and turn warnings into errors
-   # builder: html
-   # fail_on_warning: true
+  configuration: docs/conf.py
+  fail_on_warning: true
 
-# If using Sphinx, optionally build your docs in additional formats such as PDF
-formats:
-   - pdf
-   - epub
-   - htmlzip
+# HTML is the only validated format for the first alpha release. PDF and
+# HTMLZIP remain disabled until their toolchains are tested independently.
+formats: []
 
-# Optionally declare the Python requirements required to build your docs
 python:
-   install:
-   - requirements: requirements.txt
-   - method: pip
-     path: .
-
-# If using a conda environment, 
-# add the path to the Conda environment file, relative to the root of the project.
-# conda:
-#   environment: environment.yml
+  install:
+    - requirements: docs/requirements.txt
