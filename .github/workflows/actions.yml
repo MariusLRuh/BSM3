@@ -49,6 +49,7 @@ jobs:
             bsm3/core/boundary_surface_movement/elasticity.py \
             bsm3/core/boundary_surface_movement/forward_only_fd_checker.py \
             bsm3/core/boundary_surface_movement/free_region.py \
+            bsm3/core/boundary_surface_movement/fuel_burn.py \
             bsm3/core/boundary_surface_movement/geometry.py \
             bsm3/core/boundary_surface_movement/geometry_model.py \
             bsm3/core/boundary_surface_movement/geometry_volume_backend.py \
@@ -61,6 +62,7 @@ jobs:
             bsm3/core/boundary_surface_movement/mesh_motion_pipeline.py \
             bsm3/core/boundary_surface_movement/motion.py \
             bsm3/core/boundary_surface_movement/ngon_affine.py \
+            bsm3/core/boundary_surface_movement/panel_aerodynamics.py \
             bsm3/core/boundary_surface_movement/projection.py \
             bsm3/core/boundary_surface_movement/quadratic_distortion.py \
             bsm3/core/boundary_surface_movement/quality.py \
@@ -110,11 +112,13 @@ jobs:
             bsm3/core/boundary_surface_movement/load_stepping.py \
             bsm3/core/boundary_surface_movement/current_graph_solve.py \
             bsm3/core/boundary_surface_movement/ngon_affine.py \
+            bsm3/core/boundary_surface_movement/panel_aerodynamics.py \
             bsm3/core/boundary_surface_movement/quadratic_distortion.py \
             bsm3/core/boundary_surface_movement/projection.py \
             bsm3/core/boundary_surface_movement/quality.py \
             bsm3/core/boundary_surface_movement/graph_distance.py \
             bsm3/core/boundary_surface_movement/free_region.py \
+            bsm3/core/boundary_surface_movement/fuel_burn.py \
             bsm3/core/boundary_surface_movement/constraints.py \
             bsm3/core/boundary_surface_movement/spd_solve_custom_op.py \
             bsm3/core/boundary_surface_movement/geometry.py \
