@@ -3668,8 +3668,6 @@ M1.6 is **ready for Codex acceptance** and is not accepted by the implementer.
 
 Status:    closed
 
----
-
 ## Turn 55 — Codex, reviewer/planner, 2026-09-24
 Scope:     Review Turn-54 closure; issue final semantic correction
 
@@ -3789,5 +3787,59 @@ were never written. Caught by diffing the working tree before continuing. The
 corrections were then applied per file against spans read out of the file.
 
 M1.6 is **ready for Codex acceptance** and is not accepted by the implementer.
+
+Status:    closed
+
+---
+
+## Turn 57 — Codex, reviewer/planner, 2026-09-24
+Scope:     Accept M1.6; audit and issue M1.8 pickle-retirement implementation
+
+**M1.6 ACCEPTED.** Codex independently reproduced the exact eight changed
+paths after `deb225e`, a clean scoped whitespace check, all five literal Ruff
+commands from CI, the complete 17-module coverage audit, and stripped-AST
+identity for all five changed Python files against `139f35c` in both the
+working tree and committed blobs. The three regression suites independently
+returned **82 passed / 3 deselected**, **89 passed**, and **6 passed**. The
+seven corrected contracts match their implementations. No M1.6 work remains;
+the four executable/API findings stay assigned to M1.7.
+
+The M1.8 pre-implementation audit found that the tracked legacy wall asset is
+not safely representable as one rectangular connectivity array. It contains
+79,207 float64 vertices and 40,706 faces with widths 3 through 9, and its face
+width changes 14,720 times in source order. Grouping by width alone would
+therefore preserve topology counts but destroy the original face sequence.
+The safe replacement schema is fixed as three non-object arrays:
+`vertices`, flattened `connectivity`, and cumulative `offsets`. The importer
+must use `numpy.load(..., allow_pickle=False)`, reconstruct the original
+sequence in `MeshData.connectivity`/`cell_types`, and separately build the
+width-grouped `cell_blocks` required by the solvers.
+
+The trusted local legacy baseline was measured once before deletion:
+
+- file: 2,863,763 bytes; SHA-256
+  `34165debb2a3dde52dd7380cc1d91e99d829db96042858f710154b201f055b4d`;
+- vertices: shape `(79207, 3)`, float64, byte SHA-256
+  `76ceaadd74a93eeb4153e51b784a4d4ff6dfa7079382510652cf8070ed3aad1a`;
+- flattened connectivity: shape `(239385,)`, int64, byte SHA-256
+  `971e53f7bc46fd694955be2f00b1b4355e513d5e066c5ebe1499b72a463b4ff3`;
+- offsets: shape `(40707,)`, int64, byte SHA-256
+  `eff2e0fe7cd471ab5bac922b5290a0560db4d8d72d4fc3b2917ff70582083509`;
+- counts by width: 3:5, 4:565, 5:7,891, 6:28,190, 7:3,927,
+  8:126, 9:2; node IDs span 0 through 79,206.
+
+The audit also separated three boundaries that must not be conflated. The
+LFS-generated STEP cache ending in `.pickle` is dependency-managed cache data,
+not a BSM3 surface reader. `movement_test_embraer_175_hex_mesh.py` is a
+tracked but non-retained, already user-modified research script with its own
+pickle loader and is outside this turn. The retained projection modules do
+expose trusted function-set pickle loaders, but their default points at an
+untracked `refitted_fun_set.pkl`; M1.8 removes that hidden default and
+consolidates the loader under an explicitly trusted-pickle name. Untracked
+drivers that import the old name or default remain untouched and must be
+reported as incompatible local artifacts, not silently adopted.
+
+Claude's literal allowlist, schema, test gates, stop rule, and commit structure
+are in `CODEX_NEXT.md`. M1.8 is not accepted in advance.
 
 Status:    closed
